@@ -75,89 +75,7 @@ const defaultSettings = {
 
 /* ---------- Données d'exemple ---------- */
 
-const initialClients = [
-  {
-    id: "c1",
-    nom: "Dupont Marie",
-    adresse: "12 rue des Lilas, 40100 Dax",
-    email: "marie.dupont@email.fr",
-    tel: "06 12 34 56 78",
-    machines: [
-      {
-        type: "PAC air/eau",
-        date: "03/2022",
-        exterieur: { marque: "Daikin", modele: "Altherma 3 R ECH2O", serie: "E3R-22-04471" },
-        interieur: { marque: "Daikin", modele: "EHVX08S23D6V", serie: "EHV-22-08812" },
-      },
-    ],
-  },
-  {
-    id: "c2",
-    nom: "Garcia Bâtiment (Pro)",
-    adresse: "ZA les Pins, 40990 St-Paul-lès-Dax",
-    email: "contact@garcia-batiment.fr",
-    tel: "05 58 45 12 33",
-    machines: [
-      {
-        type: "Clim gainable",
-        date: "09/2023",
-        exterieur: { marque: "Mitsubishi", modele: "PUHZ-ZRP71 (x3)", serie: "MZ-23-1187 à 1189" },
-        interieur: { marque: "Mitsubishi", modele: "SEZ-M71DA (x3)", serie: "MG-23-2201 à 2203" },
-      },
-    ],
-  },
-  {
-    id: "c3",
-    nom: "Lefevre Paul",
-    adresse: "5 allée des Pins, 40180 Narrosse",
-    email: "paul.lefevre@email.fr",
-    tel: "06 98 76 54 32",
-    machines: [
-      {
-        type: "Climatiseur split",
-        date: "06/2021",
-        exterieur: { marque: "Daikin", modele: "RXM35N9", serie: "DK-21-33012" },
-        interieur: { marque: "Daikin", modele: "FTXM35N9", serie: "DK-21-33450" },
-      },
-      {
-        type: "Chauffe-eau thermo.",
-        date: "06/2021",
-        exterieur: { marque: "—", modele: "—", serie: "—" },
-        interieur: { marque: "Atlantic", modele: "Calypso 270L", serie: "AT-21-88213" },
-      },
-    ],
-  },
-  {
-    id: "c4",
-    nom: "Résidence Les Chênes (copro)",
-    adresse: "8 av. de la Résistance, 40100 Dax",
-    email: "syndic@leschenes.fr",
-    tel: "05 58 22 11 09",
-    machines: [
-      {
-        type: "PAC air/air",
-        date: "2020",
-        exterieur: { marque: "Toshiba", modele: "RAV-GP1101AT8 (x6)", serie: "TB-20-5501 à 5506" },
-        interieur: { marque: "Toshiba", modele: "RAV-GM1101 (x6)", serie: "TB-20-6601 à 6606" },
-      },
-    ],
-  },
-  {
-    id: "c5",
-    nom: "Moreau Sophie",
-    adresse: "22 chemin du Gave, 40180 Narrosse",
-    email: "s.moreau@email.fr",
-    tel: "06 45 12 33 90",
-    machines: [
-      {
-        type: "PAC air/eau",
-        date: "11/2023",
-        exterieur: { marque: "Atlantic", modele: "Alfea Excellia AI", serie: "ATE-23-77105" },
-        interieur: { marque: "Atlantic", modele: "Module hydraulique", serie: "ATE-23-77106" },
-      },
-    ],
-  },
-];
+const initialClients = [];
 
 const installTypes = [
   "Climatiseur split",
@@ -167,92 +85,15 @@ const installTypes = [
   "Chauffe-eau thermodynamique",
 ];
 
-const initialReports = [
-  {
-    id: "r1",
-    type: "mise_en_service",
-    client: "Moreau Sophie",
-    date: "15/11/2023",
-    installation: "PAC air/eau",
-    intro: "Installation neuve suite au devis n°2023-114. Client présent lors de la mise en service.",
-    checklist: [
-      { id: "mes1", label: "Tirage au vide effectué", checked: true, detail: "-0.5 bar / 20 min, stable" },
-      { id: "mes2", label: "Charge en fluide frigorigène contrôlée", checked: true, detail: "Charge complémentaire 0.3 kg" },
-      { id: "mes3", label: "Test d'étanchéité réalisé", checked: true, detail: "Aucune fuite détectée" },
-      { id: "mes4", label: "Paramétrage régulation effectué", checked: true, detail: "Consigne départ 45°C" },
-      { id: "mes5", label: "Essai de fonctionnement (froid / chaud)", checked: true, detail: "Mode chaud et froid testés, OK" },
-      { id: "mes6", label: "Explication du fonctionnement au client", checked: true, detail: "" },
-    ],
-    tables: [
-      {
-        id: "t1",
-        afterItemId: "mes4",
-        rows: [
-          ["Grandeur", "Valeur"],
-          ["Pression BP", "4.2 bar"],
-          ["Pression HP", "18 bar"],
-          ["Température départ", "45°C"],
-          ["Température retour", "38°C"],
-          ["Intensité", "12 A"],
-        ],
-      },
-    ],
-    remarques: "Mise en service conforme. Client informé de l'entretien annuel à prévoir.",
-    photos: [],
-  },
-  {
-    id: "r2",
-    type: "entretien",
-    client: "Dupont Marie",
-    date: "10/03/2026",
-    installation: "PAC air/eau",
-    checklist: [
-      { id: "ent1", label: "Filtres nettoyés", checked: true, detail: "" },
-      { id: "ent2", label: "Pression contrôlée", checked: true, detail: "Conforme" },
-      { id: "ent3", label: "Contrôle étanchéité", checked: true, detail: "Aucune fuite" },
-      { id: "ent4", label: "Évacuation des condensats", checked: true, detail: "" },
-      { id: "ent5", label: "Batterie extérieure nettoyée", checked: true, detail: "" },
-    ],
-    remarques: "RAS. Prochain entretien conseillé mars 2027.",
-    photos: [],
-  },
-  {
-    id: "r3",
-    type: "diagnostic",
-    client: "Lefevre Paul",
-    date: "05/08/2026",
-    installation: "Climatiseur split",
-    description:
-      "<p>Le client signale un <strong>bruit anormal</strong> au démarrage et une baisse de puissance de froid. Contrôle effectué : <u>fuite de gaz détectée</u> au niveau du raccord flare unité extérieure.</p>",
-    pieces: "Raccord flare 1/4 pouce",
-    facturable: true,
-    devisAEffectuer: "Remplacement raccord flare + recharge gaz R32 — devis à établir, estimation ~180 €",
-    photos: [],
-  },
-];
+const initialReports = [];
 
-const initialPlanning = [
-  { id: "p1", date: "2026-08-19", heure: "09:00", titre: "Entretien annuel", client: "Résidence Les Chênes", rappel: true, fait: false, categorie: "intervention" },
-  { id: "p2", date: "2026-08-20", heure: "14:00", titre: "Diagnostic panne clim", client: "Garcia Bâtiment", rappel: true, fait: false, categorie: "intervention" },
-  { id: "p3", date: "2026-08-21", heure: "10:30", titre: "Mise en service PAC", client: "Moreau Sophie", rappel: false, fait: false, categorie: "intervention" },
-  { id: "p4", date: "2026-08-25", heure: "—", titre: "Relancer devis en attente", client: "Lefevre Paul", rappel: true, fait: false, categorie: "relance" },
-];
+const initialPlanning = [];
 
-const initialDevisAFaire = [
-  { id: "df1", client: "Garcia Bâtiment", origine: "Diagnostic du 20/08 — remplacement compresseur", date: "20/08/2026" },
-];
+const initialDevisAFaire = [];
 
-const initialDevisEnCours = [
-  { id: "de1", client: "Lefevre Paul", envoye: "28/07/2026", montant: "850 €", statut: "a_relancer" },
-  { id: "de2", client: "Résidence Les Chênes", envoye: "02/08/2026", montant: "4 200 €", statut: "bientot" },
-];
+const initialDevisEnCours = [];
 
-const initialFacturation = [
-  { id: "f1", client: "Dupont Marie", intervention: "Entretien — 10/03/2026", montant: "120 €", facture: false, payee: false, date: "10/03/2026" },
-  { id: "f2", client: "Lefevre Paul", intervention: "Diagnostic / dépannage — 05/08/2026", montant: "À chiffrer", facture: false, payee: false, date: "05/08/2026" },
-  { id: "f3", client: "Résidence Les Chênes", intervention: "Entretien annuel — 12/01/2026", montant: "340 €", facture: true, payee: false, date: "12/01/2026" },
-  { id: "f4", client: "Moreau Sophie", intervention: "Mise en service — 15/11/2023", montant: "1 850 €", facture: true, payee: true, date: "15/11/2023" },
-];
+const initialFacturation = [];
 
 /* ---------- Icônes simples (SVG inline, pas de dépendance) ---------- */
 const Icon = ({ name, size = 18 }) => {
