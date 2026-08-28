@@ -27,7 +27,7 @@ const DEFAULT_ENTRETIEN_CHECKLIST = [
 
 const defaultSettings = {
   technicien: { nom: "" },
-  entreprise: { nom: "", adresse: "", telephone: "", email: "", siret: "", logo: "", clausePied: "" },
+  entreprise: { nom: "", adresse: "", codePostalVille: "", telephone: "", email: "", siret: "", attestationCapacite: "", logo: "", clausePied: "" },
   pennylane: { active: false, tvaParDefaut: "FR_200" },
   tableaux: [
     {
@@ -756,8 +756,11 @@ function Parametres({ settings, setSettings }) {
           <label>Nom de l'entreprise
             <input value={draft.entreprise.nom} onChange={(e) => updateEntreprise({ nom: e.target.value })} placeholder="Ex : TECHNI-PAC SARL" />
           </label>
-          <label className="mt">Adresse
-            <input value={draft.entreprise.adresse} onChange={(e) => updateEntreprise({ adresse: e.target.value })} placeholder="Rue, code postal, ville" />
+          <label className="mt">Adresse (rue)
+            <input value={draft.entreprise.adresse} onChange={(e) => updateEntreprise({ adresse: e.target.value })} placeholder="Ex : 450 Route des Grottes" />
+          </label>
+          <label className="mt">Code postal et ville
+            <input value={draft.entreprise.codePostalVille} onChange={(e) => updateEntreprise({ codePostalVille: e.target.value })} placeholder="Ex : 64800 Lestelle-Bétharram" />
           </label>
           <div className="form-grid">
             <label>Téléphone
@@ -767,6 +770,9 @@ function Parametres({ settings, setSettings }) {
               <input value={draft.entreprise.email} onChange={(e) => updateEntreprise({ email: e.target.value })} placeholder="contact@entreprise.fr" />
             </label>
           </div>
+          <label>N° Attestation de capacité
+            <input value={draft.entreprise.attestationCapacite} onChange={(e) => updateEntreprise({ attestationCapacite: e.target.value })} placeholder="Ex : SQ016665" />
+          </label>
           <label>SIRET / n° TVA
             <input value={draft.entreprise.siret} onChange={(e) => updateEntreprise({ siret: e.target.value })} placeholder="Ex : 123 456 789 00012" />
           </label>
@@ -2719,7 +2725,7 @@ function PdfPreviewModal({ html, onClose }) {
 
 function buildReportHtml(report, settings) {
   const entreprise = settings?.entreprise || {};
-  const hasLetterhead = entreprise.nom || entreprise.adresse || entreprise.telephone || entreprise.email || entreprise.siret || entreprise.logo;
+  const hasLetterhead = entreprise.nom || entreprise.adresse || entreprise.codePostalVille || entreprise.telephone || entreprise.email || entreprise.siret || entreprise.logo;
 
   let body = "";
 
@@ -2729,8 +2735,11 @@ function buildReportHtml(report, settings) {
       <div class="pdf-letterhead-text">
         ${entreprise.nom ? `<div class="pdf-company-name">${escapeHtml(entreprise.nom)}</div>` : ""}
         ${entreprise.adresse ? `<div>${escapeHtml(entreprise.adresse)}</div>` : ""}
-        ${(entreprise.telephone || entreprise.email) ? `<div>${[entreprise.telephone, entreprise.email].filter(Boolean).map(escapeHtml).join(" · ")}</div>` : ""}
+        ${entreprise.codePostalVille ? `<div>${escapeHtml(entreprise.codePostalVille)}</div>` : ""}
+        ${entreprise.telephone ? `<div>${escapeHtml(entreprise.telephone)}</div>` : ""}
+        ${entreprise.email ? `<div>${escapeHtml(entreprise.email)}</div>` : ""}
         ${entreprise.siret ? `<div>SIRET : ${escapeHtml(entreprise.siret)}</div>` : ""}
+        ${entreprise.attestationCapacite ? `<div>Attestation de capacité n° ${escapeHtml(entreprise.attestationCapacite)}</div>` : ""}
       </div>
     </div>`;
   }
