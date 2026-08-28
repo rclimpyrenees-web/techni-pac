@@ -273,6 +273,8 @@ const Icon = ({ name, size = 18 }) => {
     settings: "M12 8a4 4 0 100 8 4 4 0 000-8zM19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.6a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z",
     alert: "M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z",
     sync: "M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15",
+    chevronLeft: "M15 18l-6-6 6-6",
+    chevronRight: "M9 18l6-6-6-6",
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -280,6 +282,40 @@ const Icon = ({ name, size = 18 }) => {
     </svg>
   );
 };
+
+/* ---------- Bouton Supprimer avec confirmation intégrée (pas de window.confirm,
+   qui est bloqué dans certains environnements — clic une fois pour armer, une
+   seconde fois pour confirmer, ou "Annuler" pour revenir en arrière) ---------- */
+function DeleteButton({ onConfirm, label = "Supprimer" }) {
+  const [armed, setArmed] = useState(false);
+
+  if (armed) {
+    return (
+      <span className="delete-confirm-group" onClick={(e) => e.stopPropagation()}>
+        <button
+          type="button"
+          className="btn-small btn-danger-solid"
+          onClick={() => { setArmed(false); onConfirm(); }}
+        >
+          Confirmer
+        </button>
+        <button type="button" className="btn-ghost small" onClick={() => setArmed(false)}>
+          Annuler
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="btn-ghost small btn-danger"
+      onClick={(e) => { e.stopPropagation(); setArmed(true); }}
+    >
+      <Icon name="trash" size={14} /> {label}
+    </button>
+  );
+}
 
 /* ---------- Petit composant Jauge (élément signature) ---------- */
 function Jauge({ value, max, label, onClick }) {
@@ -310,8 +346,8 @@ function Jauge({ value, max, label, onClick }) {
 export default function App() {
   const [tab, setTab] = useState("dashboard");
 
-  const { items: clients, upsert: upsertClient, loading: loadingClients } = useSyncedCollection("clients", initialClients);
-  const { items: reportsRaw, upsert: upsertReport, loading: loadingReports } = useSyncedCollection("reports", initialReports);
+  const { items: clients, upsert: upsertClient, remove: removeClient, loading: loadingClients } = useSyncedCollection("clients", initialClients);
+  const { items: reportsRaw, upsert: upsertReport, remove: removeReport, loading: loadingReports } = useSyncedCollection("reports", initialReports);
   const { items: planningRaw, upsert: upsertPlanning, loading: loadingPlanning } = useSyncedCollection("planning", initialPlanning);
   const { items: devisAFaire, upsert: upsertDevisAFaire, remove: removeDevisAFaire, loading: loadingDevisAFaire } = useSyncedCollection("devis_a_faire", initialDevisAFaire);
   const { items: devisEnCours, upsert: upsertDevisEnCours, remove: removeDevisEnCours, loading: loadingDevisEnCours } = useSyncedCollection("devis_en_cours", initialDevisEnCours);
@@ -421,6 +457,10 @@ export default function App() {
     syncPlanningTaskFromReport(r);
   };
 
+  const handleDeleteReport = (r) => {
+    removeReport(r.id);
+  };
+
   const handlePrint = (r) => {
     setPdfPreviewHtml(buildReportHtml(r, settings));
   };
@@ -438,6 +478,10 @@ export default function App() {
   const goToClient = (clientName) => {
     setTab("clients");
     setFocusClient({ name: clientName, token: Date.now() });
+  };
+
+  const handleDeleteClient = (client) => {
+    removeClient(client.id);
   };
 
   const togglePlanning = (id) => {
@@ -523,6 +567,7 @@ export default function App() {
             onAdd={handleAddReport}
             onUpdate={handleUpdateReport}
             onValidate={handleValidateReport}
+            onDelete={handleDeleteReport}
             onPrint={handlePrint}
             focusReport={focusReport}
             reportPrefill={reportPrefill}
@@ -536,6 +581,7 @@ export default function App() {
             setShowForm={setShowClientForm}
             onAdd={(c) => upsertClient(c)}
             onUpdate={(c) => upsertClient(c)}
+            onDelete={handleDeleteClient}
             reports={reports}
             devisAFaire={devisAFaire}
             devisEnCours={devisEnCours}
@@ -960,7 +1006,7 @@ function TemplateTableEditor({ template, onChange, onRemove }) {
 }
 
 /* ---------- Rapports ---------- */
-function Rapports({ reports, clients, settings, showForm, setShowForm, reportType, setReportType, onAdd, onUpdate, onValidate, onPrint, focusReport, reportPrefill }) {
+function Rapports({ reports, clients, settings, showForm, setShowForm, reportType, setReportType, onAdd, onUpdate, onValidate, onDelete, onPrint, focusReport, reportPrefill }) {
   const [filter, setFilter] = useState("tous");
   const [editingReport, setEditingReport] = useState(null);
   const [activePrefillClient, setActivePrefillClient] = useState(null);
@@ -1030,13 +1076,13 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
       </div>
 
       <div className="report-list">
-        {filtered.map((r) => <ReportCard key={r.id} r={r} onPrint={onPrint} onEdit={openEdit} onValidate={onValidate} focusReport={focusReport} settings={settings} />)}
+        {filtered.map((r) => <ReportCard key={r.id} r={r} onPrint={onPrint} onEdit={openEdit} onValidate={onValidate} onDelete={onDelete} focusReport={focusReport} settings={settings} />)}
       </div>
     </div>
   );
 }
 
-function ReportCard({ r, onPrint, onEdit, onValidate, focusReport, settings }) {
+function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, settings }) {
   const [open, setOpen] = useState(false);
   const cardRef = useRef(null);
 
@@ -1076,6 +1122,7 @@ function ReportCard({ r, onPrint, onEdit, onValidate, focusReport, settings }) {
             <button className="btn-ghost small" onClick={(e) => { e.stopPropagation(); onPrint(r); }}>
               <Icon name="download" size={14} /> Enregistrer en PDF
             </button>
+            <DeleteButton onConfirm={() => onDelete(r)} />
           </div>
 
           {r.type === "mise_en_service" && (
@@ -1116,6 +1163,7 @@ function ReportCard({ r, onPrint, onEdit, onValidate, focusReport, settings }) {
           )}
           {r.type === "diagnostic" && (
             <>
+              {r.intro && <div className="remarque description-view"><strong>Objet</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.intro }} /></div>}
               <div className="remarque rte-render" dangerouslySetInnerHTML={{ __html: r.description }} />
               {r.pieces && <p><strong>Pièces utilisées :</strong> {r.pieces}</p>}
               <p><strong>Facturable :</strong> {r.facturable ? "Oui" : "Non"}</p>
@@ -1209,9 +1257,14 @@ function ChecklistEditor({ items, setItems }) {
       <div className="checklist-edit">
         {items.map((it) => (
           <div key={it.id} className="checklist-row">
-            <button type="button" className={"check-circle small" + (it.checked ? " checked" : "")} onClick={() => updateItem(it.id, { checked: !it.checked })}>
-              {it.checked && <Icon name="check" size={12} />}
-            </button>
+            <select
+              className="checklist-status-select"
+              value={it.checked ? "fait" : "non_fait"}
+              onChange={(e) => updateItem(it.id, { checked: e.target.value === "fait" })}
+            >
+              <option value="fait">Fait</option>
+              <option value="non_fait">Non fait</option>
+            </select>
             <div className="checklist-inputs">
               <input value={it.label} onChange={(e) => updateItem(it.id, { label: e.target.value })} placeholder="Intitulé du contrôle" />
               <textarea rows={2} value={it.detail} onChange={(e) => updateItem(it.id, { detail: e.target.value })} placeholder="Détail (facultatif) — cliquez-glissez le coin pour agrandir" />
@@ -1519,7 +1572,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   const [remarques, setRemarques] = useState(editingReport?.remarques || "");
   const introRef = useRef(editingReport?.intro || "");
   const descriptionLibreRef = useRef(editingReport?.descriptionLibre || "");
-  const [showDescriptionLibre, setShowDescriptionLibre] = useState(!!editingReport?.descriptionLibre);
+  const [showDescriptionLibre, setShowDescriptionLibre] = useState(!!editingReport?.descriptionLibre); // conservé pour compat (non utilisé)
   const [pieces, setPieces] = useState(editingReport?.pieces || "");
   const [facturable, setFacturable] = useState(editingReport?.facturable ?? true);
   const [montant, setMontant] = useState(editingReport?.montant || "");
@@ -1580,11 +1633,11 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
       valide: marquerEffectue,
     };
     if (reportType === "mise_en_service") {
-      return { ...base, intro: introRef.current, checklist: checklist.filter((it) => it.label.trim()), tables, descriptionLibre: showDescriptionLibre ? descriptionLibreRef.current : "", remarques, montant, tva, devisAEffectuer };
+      return { ...base, intro: introRef.current, checklist: checklist.filter((it) => it.label.trim()), tables, descriptionLibre: descriptionLibreRef.current, remarques, montant, tva, devisAEffectuer };
     } else if (reportType === "entretien") {
-      return { ...base, intro: introRef.current, checklist: checklist.filter((it) => it.label.trim()), tables, descriptionLibre: showDescriptionLibre ? descriptionLibreRef.current : "", remarques, montant, tva, devisAEffectuer };
+      return { ...base, intro: introRef.current, checklist: checklist.filter((it) => it.label.trim()), tables, descriptionLibre: descriptionLibreRef.current, remarques, montant, tva, devisAEffectuer };
     } else {
-      return { ...base, description: descriptionRef.current, tables, pieces, facturable, montant, tva, devisAEffectuer };
+      return { ...base, intro: introRef.current, description: descriptionRef.current, tables, pieces, facturable, montant, tva, devisAEffectuer };
     }
   };
 
@@ -1633,9 +1686,14 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
       {reportType === "mise_en_service" && (
         <>
-          <div className="block field-block">
+          <div className="block field-block mb-lg">
             <div className="field-caption">Objet</div>
             <RichTextEditor initialValue={editingReport?.intro || ""} onChange={(html) => { introRef.current = html; }} minHeight={100} />
+          </div>
+
+          <div className="block field-block">
+            <div className="field-caption">Description</div>
+            <RichTextEditor initialValue={editingReport?.descriptionLibre || ""} onChange={(html) => { descriptionLibreRef.current = html; }} minHeight={160} />
           </div>
 
           <div className="checklist-header-row">
@@ -1656,8 +1714,6 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
           <ChecklistEditor items={checklist} setItems={setChecklist} />
 
           <TablesSection tables={tables} checklist={checklist} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
-
-          <DescriptionSection descRef={descriptionLibreRef} initialValue={editingReport?.descriptionLibre || ""} show={showDescriptionLibre} setShow={setShowDescriptionLibre} />
 
           <label className="block mt">Remarques
             <textarea rows={3} value={remarques} onChange={(e) => setRemarques(e.target.value)} placeholder="Observations, recommandations au client..." />
@@ -1687,9 +1743,14 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
       {reportType === "entretien" && (
         <>
-          <div className="block field-block">
+          <div className="block field-block mb-lg">
             <div className="field-caption">Objet</div>
             <RichTextEditor initialValue={editingReport?.intro || ""} onChange={(html) => { introRef.current = html; }} minHeight={100} />
+          </div>
+
+          <div className="block field-block">
+            <div className="field-caption">Description</div>
+            <RichTextEditor initialValue={editingReport?.descriptionLibre || ""} onChange={(html) => { descriptionLibreRef.current = html; }} minHeight={160} />
           </div>
 
           <div className="checklist-header-row">
@@ -1710,8 +1771,6 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
           <ChecklistEditor items={checklist} setItems={setChecklist} />
 
           <TablesSection tables={tables} checklist={checklist} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
-
-          <DescriptionSection descRef={descriptionLibreRef} initialValue={editingReport?.descriptionLibre || ""} show={showDescriptionLibre} setShow={setShowDescriptionLibre} />
 
           <label className="block mt">Remarques
             <textarea rows={3} value={remarques} onChange={(e) => setRemarques(e.target.value)} placeholder="Observations, recommandations au client..." />
@@ -1739,6 +1798,11 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
       {reportType === "diagnostic" && (
         <>
+          <div className="block field-block">
+            <div className="field-caption">Objet</div>
+            <RichTextEditor initialValue={editingReport?.intro || ""} onChange={(html) => { introRef.current = html; }} minHeight={100} />
+          </div>
+
           <div className="block field-block">
             <div className="field-caption">Description</div>
             <RichTextEditor initialValue={editingReport?.description || ""} onChange={(html) => { descriptionRef.current = html; }} minHeight={200} />
@@ -1819,7 +1883,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 }
 
 /* ---------- Clients ---------- */
-function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, focusClient }) {
+function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, focusClient }) {
   const [selected, setSelected] = useState(clients[0]?.id);
   const [editingClient, setEditingClient] = useState(null);
   const [showContract, setShowContract] = useState(false);
@@ -1892,6 +1956,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, reports, dev
                 <button className="btn-ghost small" onClick={() => openEdit(client)}>
                   <Icon name="edit" size={14} /> Modifier
                 </button>
+                <DeleteButton onConfirm={() => onDelete(client)} />
               </div>
             </div>
             <div className="detail-line">{client.adresse}</div>
@@ -2180,10 +2245,10 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
         <div className="contract-templates-group">
           <span className="contract-templates-label">Standard</span>
           <div className="contract-templates">
-            <button type="button" className="btn-ghost small" onClick={() => setBlankContractType("air_air")}>
+            <button type="button" className="btn-ghost small btn-b2b" onClick={() => setBlankContractType("air_air")}>
               <Icon name="report" size={14} /> PAC air/air
             </button>
-            <button type="button" className="btn-ghost small" onClick={() => setBlankContractType("air_eau")}>
+            <button type="button" className="btn-ghost small btn-b2b" onClick={() => setBlankContractType("air_eau")}>
               <Icon name="report" size={14} /> PAC air/eau
             </button>
           </div>
@@ -2275,13 +2340,15 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
     return acc;
   }, {});
   const dates = Object.keys(grouped).sort();
+  const [selectedDate, setSelectedDate] = useState(() => dates[0] || null);
+  const activeDate = selectedDate && grouped[selectedDate] ? selectedDate : (dates[0] || null);
 
   return (
     <div>
       <header className="page-head row-between">
         <div>
           <h1>Planning</h1>
-          <p>Interventions programmées et rappels — cliquez une tâche pour créer son rapport</p>
+          <p>Interventions programmées et rappels — cliquez un jour du calendrier pour voir son détail</p>
         </div>
         <button className="btn-primary" onClick={() => setShowForm(!showForm)}>
           <Icon name="plus" size={16} /> Nouvelle tâche
@@ -2290,11 +2357,15 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
 
       {showForm && <TaskForm clients={clients} onCancel={() => setShowForm(false)} onSubmit={(t) => { onAdd(t); setShowForm(false); }} />}
 
-      {dates.map((date) => (
-        <section key={date} className="card planning-day">
-          <h3>{new Date(date).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</h3>
+      <MiniCalendar datesWithTasks={new Set(dates)} selectedDate={activeDate} onSelectDate={setSelectedDate} />
+
+      {!activeDate && <p className="empty">Aucune intervention programmée pour le moment.</p>}
+
+      {activeDate && grouped[activeDate] && (
+        <section className="card planning-day">
+          <h3>{new Date(activeDate).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</h3>
           <ul className="list">
-            {grouped[date].map((p) => (
+            {grouped[activeDate].map((p) => (
               <li
                 key={p.id}
                 className={"row clickable" + (p.fait ? " done" : "")}
@@ -2315,7 +2386,76 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
             ))}
           </ul>
         </section>
-      ))}
+      )}
+    </div>
+  );
+}
+
+/* ---------- Mini calendrier mensuel interactif (pastilles sur les jours avec intervention) ---------- */
+function MiniCalendar({ datesWithTasks, selectedDate, onSelectDate }) {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const [cursor, setCursor] = useState(() => {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() };
+  });
+
+  const firstOfMonth = new Date(cursor.year, cursor.month, 1);
+  const daysInMonth = new Date(cursor.year, cursor.month + 1, 0).getDate();
+  // Lundi = 0 ... Dimanche = 6
+  const leadingBlanks = (firstOfMonth.getDay() + 6) % 7;
+
+  const cells = [];
+  for (let i = 0; i < leadingBlanks; i++) cells.push(null);
+  for (let day = 1; day <= daysInMonth; day++) cells.push(day);
+
+  const isoFor = (day) => {
+    const mm = String(cursor.month + 1).padStart(2, "0");
+    const dd = String(day).padStart(2, "0");
+    return `${cursor.year}-${mm}-${dd}`;
+  };
+
+  const monthLabel = firstOfMonth.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+
+  const prevMonth = () => setCursor((c) => (c.month === 0 ? { year: c.year - 1, month: 11 } : { year: c.year, month: c.month - 1 }));
+  const nextMonth = () => setCursor((c) => (c.month === 11 ? { year: c.year + 1, month: 0 } : { year: c.year, month: c.month + 1 }));
+
+  return (
+    <div className="card mini-calendar">
+      <div className="mini-calendar-header">
+        <button type="button" className="icon-btn" onClick={prevMonth} title="Mois précédent">
+          <Icon name="chevronLeft" size={16} />
+        </button>
+        <span className="mini-calendar-title">{monthLabel}</span>
+        <button type="button" className="icon-btn" onClick={nextMonth} title="Mois suivant">
+          <Icon name="chevronRight" size={16} />
+        </button>
+      </div>
+      <div className="mini-calendar-grid mini-calendar-weekdays">
+        {["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((d) => (
+          <div key={d} className="mini-calendar-weekday">{d}</div>
+        ))}
+      </div>
+      <div className="mini-calendar-grid">
+        {cells.map((day, i) => {
+          if (day === null) return <div key={"b" + i} className="mini-calendar-cell empty" />;
+          const iso = isoFor(day);
+          const hasTask = datesWithTasks.has(iso);
+          const isToday = iso === todayIso;
+          return (
+            <button
+              type="button"
+              key={iso}
+              className={"mini-calendar-cell" + (hasTask ? " has-task" : "") + (isToday ? " is-today" : "") + (iso === selectedDate ? " is-selected" : "")}
+              onClick={() => hasTask && onSelectDate(iso)}
+              disabled={!hasTask}
+              title={hasTask ? "Voir les interventions de ce jour" : undefined}
+            >
+              {day}
+              {hasTask && <span className="mini-calendar-dot" />}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -2719,7 +2859,8 @@ function buildReportHtml(report, settings) {
   body += `<p><strong>Installation :</strong> ${escapeHtml(report.installation)}</p>`;
 
   if (report.type === "mise_en_service") {
-    if (report.intro) body += `<p><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
+    if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
+    if (report.descriptionLibre) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
     body += tablesAtHtml(report.tables, report.checklist, "__start__");
     body += `<ul class="pdf-checklist">`;
     (report.checklist || []).forEach((it) => {
@@ -2730,11 +2871,11 @@ function buildReportHtml(report, settings) {
     });
     body += `</ul>`;
     body += tablesAtHtml(report.tables, report.checklist, "__end__");
-    if (report.descriptionLibre) body += `<p><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
     if (report.remarques) body += `<p>${escapeHtml(report.remarques)}</p>`;
     if (report.devisAEffectuer) body += `<p><strong>Devis à effectuer :</strong> ${escapeHtml(report.devisAEffectuer)}</p>`;
   } else if (report.type === "entretien") {
-    if (report.intro) body += `<p><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
+    if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
+    if (report.descriptionLibre) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
     body += tablesAtHtml(report.tables, report.checklist, "__start__");
     body += `<ul class="pdf-checklist">`;
     (report.checklist || []).forEach((it) => {
@@ -2745,14 +2886,13 @@ function buildReportHtml(report, settings) {
     });
     body += `</ul>`;
     body += tablesAtHtml(report.tables, report.checklist, "__end__");
-    if (report.descriptionLibre) body += `<p><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
     if (report.remarques) body += `<p>${escapeHtml(report.remarques)}</p>`;
     if (report.devisAEffectuer) body += `<p><strong>Devis à effectuer :</strong> ${escapeHtml(report.devisAEffectuer)}</p>`;
   } else {
     // Le contenu vient de l'éditeur riche interne (gras/italique/souligné), déjà en HTML de confiance.
-    body += `<div class="pdf-description">${report.description || ""}</div>`;
+    if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
+    if (report.description) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.description}</div>`;
     if (report.pieces) body += `<p><strong>Pièces utilisées :</strong> ${escapeHtml(report.pieces)}</p>`;
-    body += `<p><strong>Facturable :</strong> ${report.facturable ? "Oui" : "Non"}</p>`;
     body += tablesAtHtml(report.tables, [], "__end__");
     if (report.devisAEffectuer) body += `<p><strong>Devis à effectuer :</strong> ${escapeHtml(report.devisAEffectuer)}</p>`;
   }
@@ -2787,16 +2927,17 @@ function buildReportHtml(report, settings) {
   .pdf-page { max-width: 760px; margin: 30px auto; background: #fff; padding: 48px; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
   h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 28px; font-weight: 700; margin: 0 0 12px; }
   p { font-size: 14px; line-height: 1.55; margin: 0 0 10px; }
-  .pdf-letterhead { display: flex; align-items: center; gap: 16px; margin-bottom: 22px; padding-bottom: 14px; border-bottom: 2px solid #1B2733; font-size: 12.5px; color: #4A5860; }
-  .pdf-logo { width: 56px; height: 56px; object-fit: contain; border-radius: 8px; flex-shrink: 0; }
+  .pdf-field-label { margin: 10px 0 2px; }
+  .pdf-letterhead { display: flex; align-items: center; gap: 24px; margin-bottom: 30px; padding-bottom: 28px; border-bottom: 2px solid #1B2733; font-size: 12.5px; color: #4A5860; }
+  .pdf-logo { width: 230px; height: 180px; object-fit: contain; object-position: left center; border-radius: 8px; flex-shrink: 0; }
   .pdf-letterhead-text { flex: 1; }
   .pdf-company-name { font-family: 'Barlow Condensed', sans-serif; font-size: 20px; font-weight: 700; color: #1B2733; margin-bottom: 2px; }
   .pdf-checklist { list-style: none; padding: 0; margin: 14px 0; }
   .pdf-checklist li { margin-bottom: 10px; font-size: 14px; }
-  .pdf-checklist strong { text-decoration: underline; }
+  .pdf-checklist strong { }
   .pdf-detail { font-size: 12.5px; color: #6D7A80; white-space: pre-wrap; margin-top: 2px; }
-  .pdf-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
-  .pdf-table td { border-bottom: 1px solid #EEF1F0; padding: 7px 9px; }
+  .pdf-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; border: 1px solid #C7D0CE; }
+  .pdf-table td { border: 1px solid #C7D0CE; padding: 7px 9px; }
   .pdf-description strong { font-weight: 700; }
   .pdf-description u { text-decoration: underline; }
   .pdf-description em { font-style: italic; }
@@ -2940,6 +3081,27 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .btn-valide:hover { background: #357a51; }
 .icon-btn { background: transparent; border: none; color: #B3413A; cursor: pointer; padding: 6px; flex-shrink: 0; }
 
+.mini-calendar { margin-bottom: 20px; max-width: 300px; padding: 14px; }
+.mini-calendar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.mini-calendar-header .icon-btn { color: #2F6FA3; padding: 3px; }
+.mini-calendar-title { font-family: 'Barlow Condensed', sans-serif; font-weight: 600; font-size: 14.5px; color: #1B2733; text-transform: capitalize; }
+.mini-calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.mini-calendar-weekdays { margin-bottom: 2px; }
+.mini-calendar-weekday { text-align: center; font-size: 9.5px; font-weight: 600; color: #8A959A; text-transform: uppercase; padding: 2px 0; }
+.mini-calendar-cell { position: relative; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border: none; background: transparent; border-radius: 6px; font-size: 11.5px; color: #4A5860; cursor: default; }
+.mini-calendar-cell.empty { visibility: hidden; }
+.mini-calendar-cell.is-today { font-weight: 700; color: #1B2733; box-shadow: inset 0 0 0 1.5px #2F6FA3; }
+.mini-calendar-cell.has-task { cursor: pointer; background: #EAF1F7; color: #1B2733; font-weight: 600; }
+.mini-calendar-cell.has-task:hover { background: #D9E6F0; }
+.mini-calendar-cell.is-selected { background: #2F6FA3; color: #fff; }
+.mini-calendar-dot { position: absolute; bottom: 2px; width: 4px; height: 4px; border-radius: 50%; background: #D9762B; }
+.mini-calendar-cell.is-selected .mini-calendar-dot { background: #fff; }
+.planning-day-flash { animation: planningFlash 1.4s ease; }
+@keyframes planningFlash {
+  0% { box-shadow: 0 0 0 3px #2F6FA3; }
+  100% { box-shadow: 0 0 0 0px transparent; }
+}
+
 .filters { display: flex; gap: 8px; margin-bottom: 16px; }
 .filter-btn { background: #fff; border: 1px solid #D7DEDD; padding: 7px 13px; border-radius: 20px; font-size: 13px; cursor: pointer; color: #4A5860; }
 .filter-btn.active { background: #1B2733; color: #fff; border-color: #1B2733; }
@@ -2966,6 +3128,11 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 
 .client-detail-actions { display: flex; gap: 8px; }
 .btn-contrat { border-color: #2F6FA3; color: #2F6FA3; }
+.btn-danger { border-color: #D9776C; color: #B33128; }
+.btn-danger:hover { background: #FBE3E1; }
+.delete-confirm-group { display: inline-flex; gap: 6px; align-items: center; }
+.btn-danger-solid { background: #B33128; color: #fff; border: none; }
+.btn-danger-solid:hover { background: #942920; }
 .contract-box { background: #F6F8F7; border: 1px solid #E1E6E5; border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
 .contract-templates { display: flex; gap: 8px; flex-wrap: wrap; }
 .contract-templates-group { display: flex; flex-direction: column; gap: 6px; }
@@ -2989,7 +3156,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .cl-row { display: flex; align-items: flex-start; gap: 10px; }
 .check-dot { width: 18px; height: 18px; border-radius: 50%; background: #3F8F5F; color: #fff; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
 .cl-row.ko .check-dot { background: #D7DEDD; }
-.cl-label { font-size: 13.5px; font-weight: 700; text-decoration: underline; }
+.cl-label { font-size: 13.5px; font-weight: 700; }
 .cl-detail { font-size: 12.5px; color: #6D7A80; margin-top: 1px; white-space: pre-wrap; }
 .print-detail { white-space: pre-wrap; font-size: 12.5px; margin: 2px 0 4px 0; }
 .table-position { margin-bottom: 10px; }
@@ -2997,6 +3164,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 
 .checklist-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; margin-bottom: 8px; }
 .checklist-row { display: flex; align-items: center; gap: 8px; }
+.checklist-status-select { width: auto; min-width: 100px; flex-shrink: 0; font-weight: 600; font-size: 12.5px; padding: 6px 8px; border-radius: 6px; }
 .checklist-inputs { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .checklist-inputs input { width: 100%; }
 
@@ -3027,6 +3195,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 
 .field-block { display: flex; flex-direction: column; gap: 5px; }
 .field-caption { font-size: 12.5px; font-weight: 600; color: #4A5860; }
+.mb-lg { margin-bottom: 30px; }
 
 .photo-strip { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .photo-strip img { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; border: 1px solid #D7DEDD; }
