@@ -116,6 +116,8 @@ const Icon = ({ name, size = 18 }) => {
     sync: "M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15",
     chevronLeft: "M15 18l-6-6 6-6",
     chevronRight: "M9 18l6-6-6-6",
+    menu: "M3 12h18M3 6h18M3 18h18",
+    close: "M18 6L6 18M6 6l12 12",
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -186,6 +188,7 @@ function Jauge({ value, max, label, onClick }) {
 
 export default function App() {
   const [tab, setTab] = useState("dashboard");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const { items: clients, upsert: upsertClient, remove: removeClient, loading: loadingClients } = useSyncedCollection("clients", initialClients);
   const { items: reportsRaw, upsert: upsertReport, remove: removeReport, loading: loadingReports } = useSyncedCollection("reports", initialReports);
@@ -380,17 +383,32 @@ export default function App() {
     <div className="app">
       <style>{css}</style>
 
-      <aside className="sidebar">
+      <header className="mobile-topbar">
+        <button className="mobile-menu-btn" onClick={() => setMobileNavOpen(true)} aria-label="Ouvrir le menu">
+          <Icon name="menu" size={22} />
+        </button>
+        <div className="brand">
+          <div className="brand-mark">TP</div>
+          <div className="brand-name">TECHNI-PAC</div>
+        </div>
+      </header>
+
+      {mobileNavOpen && <div className="mobile-nav-overlay" onClick={() => setMobileNavOpen(false)} />}
+
+      <aside className={"sidebar" + (mobileNavOpen ? " open" : "")}>
         <div className="brand">
           <div className="brand-mark">TP</div>
           <div>
             <div className="brand-name">TECHNI-PAC</div>
             <div className="brand-sub">Poste de gestion</div>
           </div>
+          <button className="mobile-close-btn" onClick={() => setMobileNavOpen(false)} aria-label="Fermer le menu">
+            <Icon name="close" size={20} />
+          </button>
         </div>
         <nav>
           {nav.map((n) => (
-            <button key={n.id} className={"navbtn" + (tab === n.id ? " active" : "")} onClick={() => setTab(n.id)}>
+            <button key={n.id} className={"navbtn" + (tab === n.id ? " active" : "")} onClick={() => { setTab(n.id); setMobileNavOpen(false); }}>
               <Icon name={n.icon} />
               {n.label}
               {n.id === "rappels" && rappelsActifs.length > 0 && <span className="nav-badge">{rappelsActifs.length}</span>}
@@ -2875,7 +2893,12 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .app-loading-box { display: flex; flex-direction: column; align-items: center; gap: 14px; color: #6D7A80; font-family: 'Inter', sans-serif; font-size: 14px; }
 .app-loading-box .brand-mark { width: 48px; height: 48px; font-size: 18px; }
 
-.main { flex: 1; padding: 32px 40px; max-width: 1100px; }
+.main { flex: 1; padding: 32px 40px; max-width: 1100px; min-width: 0; }
+
+.mobile-topbar { display: none; }
+.mobile-menu-btn, .mobile-close-btn { background: transparent; border: none; color: inherit; cursor: pointer; padding: 4px; display: flex; }
+.mobile-close-btn { margin-left: auto; }
+.mobile-nav-overlay { display: none; }
 
 .page-head { margin-bottom: 22px; }
 .page-head h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 30px; font-weight: 700; margin: 0 0 4px; letter-spacing: 0.2px; }
@@ -3152,5 +3175,58 @@ textarea { resize: vertical; }
   .form-grid, .form-grid.three { grid-template-columns: 1fr; }
   .checklist-inputs { grid-template-columns: 1fr; }
   .gauges { flex-direction: column; }
+}
+
+.mobile-nav-overlay {
+  position: fixed; inset: 0; background: rgba(15, 22, 28, 0.55);
+  z-index: 60;
+}
+
+@media (max-width: 780px) {
+  .mobile-topbar {
+    display: flex; align-items: center; gap: 12px;
+    position: sticky; top: 0; z-index: 30;
+    background: #1B2733; color: #E7ECEB;
+    padding: 12px 16px;
+  }
+  .mobile-topbar .brand { padding: 0; gap: 8px; }
+  .mobile-topbar .brand-mark { width: 30px; height: 30px; font-size: 13px; }
+  .mobile-topbar .brand-name { font-size: 15px; }
+
+  .app { flex-direction: column; min-height: 100vh; }
+
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: 70;
+    width: 78vw; max-width: 300px;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: 2px 0 18px rgba(0,0,0,0.25);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar .mobile-close-btn { display: flex; }
+  .sidebar .brand { position: relative; }
+
+  .main { padding: 18px 14px 90px; max-width: 100%; }
+
+  .page-head { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .page-head.row-between .btn-primary { width: 100%; justify-content: center; }
+
+  .card { padding: 16px; }
+
+  .row { flex-wrap: wrap; row-gap: 8px; }
+  .row-actions, .report-card-actions, .client-detail-actions { flex-wrap: wrap; }
+
+  table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  .form-actions { flex-direction: column-reverse; }
+  .form-actions button { width: 100%; justify-content: center; }
+
+  .mini-calendar { max-width: 100%; }
+
+  input, select, textarea, button { font-size: 16px; }
+}
+
+@media (min-width: 781px) {
+  .mobile-close-btn { display: none; }
 }
 `;
