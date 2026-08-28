@@ -334,6 +334,31 @@ export default function App() {
     upsertReport(updated);
     syncPlanningTaskFromReport(updated);
   };
+
+  const syncPennylaneStatus = async (item) => {
+    if (!item || !item.pennylaneInvoiceId) return;
+    try {
+      const status = await pennylaneCheckStatus(item.pennylaneInvoiceId);
+      if (status.paid && !item.payee) {
+        upsertFacturation({ ...item, payee: true, pennylaneStatus: "payée" });
+      } else if (!status.paid && item.pennylaneStatus !== "envoyée") {
+        upsertFacturation({ ...item, pennylaneStatus: "envoyée" });
+      }
+    } catch (e) {
+      upsertFacturation({ ...item, pennylaneStatus: "erreur", pennylaneError: String(e?.message || e) });
+    }
+  };
+
+  // Vérification automatique du statut payé/impayé des factures Pennylane à
+  // chaque ouverture de l'onglet Facturation, pour éviter de devoir cliquer
+  // manuellement sur 🔄 pour chacune.
+  useEffect(() => {
+    if (tab !== "facturation" || !settings.pennylane?.active) return;
+    const aVerifier = facturation.filter((f) => f.facture && !f.payee && f.pennylaneInvoiceId);
+    aVerifier.forEach((item) => { syncPennylaneStatus(item); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
   const toggleRappel = (id) => {
     const item = planning.find((p) => p.id === id);
     if (item) upsertPlanning({ ...item, rappel: !item.rappel });
@@ -483,15 +508,9 @@ export default function App() {
               const item = facturation.find((f) => f.id === id);
               if (item) upsertFacturation({ ...item, payee: true });
             }}
-            onSyncPennylane={async (id) => {
+            onSyncPennylane={(id) => {
               const item = facturation.find((f) => f.id === id);
-              if (!item || !item.pennylaneInvoiceId) return;
-              try {
-                const status = await pennylaneCheckStatus(item.pennylaneInvoiceId);
-                upsertFacturation({ ...item, payee: !!status.paid, pennylaneStatus: status.paid ? "payée" : "envoyée" });
-              } catch (e) {
-                upsertFacturation({ ...item, pennylaneStatus: "erreur", pennylaneError: String(e?.message || e) });
-              }
+              syncPennylaneStatus(item);
             }}
             onOpenClient={goToClient}
           />
@@ -1777,7 +1796,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
               <li key={c.id} className={"row clickable" + (client?.id === c.id ? " selected" : "")} onClick={() => setSelected(c.id)}>
                 <div>
                   <div className="row-title">{c.nom}</div>
-                  <div className="row-sub">{c.machines.length} matériel(s) installé{c.machines.length > 1 ? "s" : ""}</div>
+                  <div className="row-sub">{c.raisonSociale ? c.raisonSociale + " · " : ""}{c.machines.length} matériel(s) installé{c.machines.length > 1 ? "s" : ""}</div>
                 </div>
               </li>
             ))}
@@ -1787,7 +1806,10 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
         {client && (
           <section className="card">
             <div className="row-between">
-              <h3>{client.nom}</h3>
+              <div>
+                <h3>{client.nom}</h3>
+                {client.raisonSociale && <div className="client-raison-sociale">{client.raisonSociale}</div>}
+              </div>
               <div className="client-detail-actions">
                 {client.contrat && (
                   <button className="btn-ghost small btn-contrat" onClick={() => setShowContract(true)}>
@@ -2018,6 +2040,7 @@ function blankMachine() {
 function ClientForm({ editingClient, onCancel, onSubmit }) {
   const isEditing = !!editingClient;
   const [nom, setNom] = useState(editingClient?.nom || "");
+  const [raisonSociale, setRaisonSociale] = useState(editingClient?.raisonSociale || "");
   const [adresse, setAdresse] = useState(editingClient?.adresse || "");
   const [email, setEmail] = useState(editingClient?.email || "");
   const [tel, setTel] = useState(editingClient?.tel || "");
@@ -2058,7 +2081,7 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
       .map(({ id, ...m }) => m);
     onSubmit({
       id: isEditing ? editingClient.id : "c" + Date.now(),
-      nom, adresse, email, tel,
+      nom, raisonSociale, adresse, email, tel,
       machines: cleanedMachines,
       contrat,
     });
@@ -2067,7 +2090,8 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
   return (
     <div className="card form-card">
       <div className="form-grid">
-        <label>Nom / raison sociale<input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ex : Martin Jean" /></label>
+        <label>Nom et prénom<input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ex : Martin Jean" /></label>
+        <label>Raison sociale (facultatif)<input value={raisonSociale} onChange={(e) => setRaisonSociale(e.target.value)} placeholder="Ex : Garcia Bâtiment SARL" /></label>
         <label>Téléphone<input value={tel} onChange={(e) => setTel(e.target.value)} placeholder="06 00 00 00 00" /></label>
         <label>Adresse<input value={adresse} onChange={(e) => setAdresse(e.target.value)} placeholder="Rue, code postal, ville" /></label>
         <label>Email<input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nom@email.fr" /></label>
@@ -2968,6 +2992,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .machine-editor-card { background: #F9FBFC; border-color: #E1E6E5; margin-bottom: 12px; }
 
 .client-detail-actions { display: flex; gap: 8px; }
+.client-raison-sociale { font-size: 13px; color: #6C7A80; margin-top: 2px; }
 .btn-contrat { border-color: #2F6FA3; color: #2F6FA3; }
 .btn-danger { border-color: #D9776C; color: #B33128; }
 .btn-danger:hover { background: #FBE3E1; }
