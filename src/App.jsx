@@ -1853,9 +1853,14 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
                     {(() => {
                       const statut = getEntretienStatus(c, reports);
                       if (!statut) return null;
-                      const classe = statut.doneThisYear ? "ok" : statut.isUrgent ? "todo" : "neutral";
+                      if (statut.moisNonDefini) {
+                        return <span className="contrat-dot neutral" title="Mois d'entretien contractuel non renseigné" />;
+                      }
+                      const classe = statut.doneThisYear ? "ok" : statut.isOverdue ? "late" : statut.isUrgent ? "todo" : "neutral";
                       const titre = statut.doneThisYear
                         ? `Entretien ${statut.annee} effectué`
+                        : statut.isOverdue
+                        ? `Entretien ${statut.annee} en retard !`
                         : statut.isUrgent
                         ? `Entretien ${statut.annee} à faire`
                         : `Échéance : ${statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })} ${statut.annee}`;
@@ -1891,10 +1896,24 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
             {(() => {
               const statut = getEntretienStatus(client, reports);
               if (!statut) return null;
+              if (statut.moisNonDefini) {
+                return (
+                  <div className="entretien-annuel-badge neutral">
+                    <Icon name="calendar" size={14} /> Mois de l'entretien contractuel non renseigné — à définir dans « Modifier »
+                  </div>
+                );
+              }
               if (statut.doneThisYear) {
                 return (
                   <div className="entretien-annuel-badge ok">
                     <Icon name="check" size={14} /> Entretien {statut.annee} effectué le {statut.rapportAnnee.date}
+                  </div>
+                );
+              }
+              if (statut.isOverdue) {
+                return (
+                  <div className="entretien-annuel-badge late">
+                    <Icon name="alert" size={14} /> Entretien {statut.annee} en retard !{statut.dueDate ? ` (échéance ${statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })})` : ""}
                   </div>
                 );
               }
@@ -2694,36 +2713,52 @@ function getEntretienStatus(client, reports) {
   const anneeEnCours = today.getFullYear();
 
   if (!mois || mois < 1 || mois > 12) {
-    // Pas de mois d'échéance défini : statut simple fait / pas fait sur l'année civile (comportement historique).
+    // Pas de mois d'échéance défini (ex : contrat tout juste ajouté, avant
+    // d'avoir choisi le mois) : on ne signale jamais "à faire" dans ce cas,
+    // pour éviter une fausse alerte immédiate — on invite juste à le renseigner.
     const rapportAnnee = reports.find((r) => {
       if (r.type !== "entretien" || r.client !== client.nom) return false;
       const parts = (r.date || "").split("/");
       return parts.length === 3 && parseInt(parts[2], 10) === anneeEnCours;
     });
-    return { doneThisYear: !!rapportAnnee, rapportAnnee, dueDate: null, isUrgent: !rapportAnnee, annee: anneeEnCours };
+    return { doneThisYear: !!rapportAnnee, rapportAnnee, dueDate: null, isUrgent: false, moisNonDefini: true, annee: anneeEnCours };
   }
 
-  // L'échéance reste toujours celle de l'année en cours — si elle est passée
-  // sans avoir été faite, le statut reste "à faire" (jamais repoussé à l'an
-  // prochain tant que l'entretien n'a pas été réalisé).
-  const dueDate = new Date(anneeEnCours, mois - 1, 1);
-  const dateEcheancePrecedente = new Date(anneeEnCours - 1, mois - 1, 1);
+  // Un client est considéré "nouveau" s'il n'a jamais eu le moindre rapport
+  // d'entretien enregistré dans l'app — dans ce cas, on évite de viser une
+  // échéance déjà dans le mois qui vient (ou déjà passée), pour ne pas
+  // déclencher une alerte immédiate juste après la signature du contrat : on
+  // la reporte alors à l'année suivante. Pour un client déjà suivi, l'échéance
+  // reste toujours celle de l'année en cours, y compris si elle est dépassée
+  // (le statut reste "à faire" tant que l'entretien n'est pas réalisé, il ne
+  // se réinitialise jamais tout seul).
+  const aDejaUnHistorique = reports.some((r) => r.type === "entretien" && r.client === client.nom);
 
-  // Fait pour ce cycle si un entretien a eu lieu depuis l'échéance précédente jusqu'à aujourd'hui.
-  const rapportCycle = reports.find((r) => {
+  let anneeEcheance = anneeEnCours;
+  if (!aDejaUnHistorique) {
+    const dueDateTest = new Date(anneeEnCours, mois - 1, 1);
+    const unMoisAvantTest = new Date(dueDateTest);
+    unMoisAvantTest.setMonth(unMoisAvantTest.getMonth() - 1);
+    if (today >= unMoisAvantTest) {
+      anneeEcheance = anneeEnCours + 1;
+    }
+  }
+
+  const dueDate = new Date(anneeEcheance, mois - 1, 1);
+
+  const rapportAnnee = reports.find((r) => {
     if (r.type !== "entretien" || r.client !== client.nom) return false;
     const parts = (r.date || "").split("/");
-    if (parts.length !== 3) return false;
-    const rDate = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
-    return rDate >= dateEcheancePrecedente && rDate <= today;
+    return parts.length === 3 && parseInt(parts[2], 10) === anneeEcheance;
   });
-  const doneThisYear = !!rapportCycle;
+  const doneThisYear = !!rapportAnnee;
 
   const unMoisAvant = new Date(dueDate);
   unMoisAvant.setMonth(unMoisAvant.getMonth() - 1);
   const isUrgent = !doneThisYear && today >= unMoisAvant;
+  const isOverdue = !doneThisYear && today > dueDate;
 
-  return { doneThisYear, rapportAnnee: rapportCycle, dueDate, isUrgent, annee: anneeEnCours };
+  return { doneThisYear, rapportAnnee, dueDate, isUrgent, isOverdue, annee: anneeEcheance };
 }
 
 // Formate une date en "YYYY-MM-DD" à partir de ses composants LOCAUX (jour,
@@ -3185,6 +3220,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .entretien-annuel-badge.ok { background: #E3F1E8; color: #2E6B45; }
 .entretien-annuel-badge.todo { background: #FBEADB; color: #B45F1D; }
 .entretien-annuel-badge.neutral { background: #EEF1F0; color: #5E7078; }
+.entretien-annuel-badge.late { background: #FBE3E1; color: #B33128; }
+.contrat-dot.late { background: #C0392B; }
 .contrat-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 8px; vertical-align: middle; }
 .contrat-dot.ok { background: #3F8F5F; }
 .contrat-dot.todo { background: #D9762B; }
