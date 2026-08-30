@@ -362,6 +362,35 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
+  // Crée (ou met à jour) automatiquement un rappel dans Planning pour chaque
+  // client sous contrat dont l'échéance d'entretien approche (dans le mois qui
+  // précède) ou est dépassée. L'identifiant est stable (basé sur le client et
+  // l'année) pour ne jamais créer de doublon d'une vérification à l'autre.
+  useEffect(() => {
+    clients.forEach((c) => {
+      const statut = getEntretienStatus(c, reports);
+      if (!statut || !statut.dueDate) return;
+      const rappelId = "echeance-" + c.id + "-" + statut.annee;
+      const existant = planning.find((p) => p.id === rappelId);
+
+      if (statut.isUrgent && !existant) {
+        upsertPlanning({
+          id: rappelId,
+          date: toLocalISODate(statut.dueDate),
+          heure: "—",
+          titre: "Entretien contractuel à programmer",
+          client: c.nom,
+          rappel: true,
+          fait: false,
+          categorie: "relance",
+        });
+      } else if (statut.doneThisYear && existant && !existant.fait) {
+        upsertPlanning({ ...existant, fait: true });
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clients, reports]);
+
   const toggleRappel = (id) => {
     const item = planning.find((p) => p.id === id);
     if (item) upsertPlanning({ ...item, rappel: !item.rappel });
@@ -1564,7 +1593,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
           </select>
         </label>
         <label>Date
-          <input value={date} onChange={(e) => setDate(e.target.value)} />
+          <input type="date" value={frToIso(date)} onChange={(e) => setDate(isoToFr(e.target.value))} />
         </label>
       </div>
 
@@ -1819,7 +1848,20 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
             {clients.map((c) => (
               <li key={c.id} className={"row clickable" + (client?.id === c.id ? " selected" : "")} onClick={() => setSelected(c.id)}>
                 <div>
-                  <div className="row-title">{c.nom}</div>
+                  <div className="row-title">
+                    {c.nom}
+                    {(() => {
+                      const statut = getEntretienStatus(c, reports);
+                      if (!statut) return null;
+                      const classe = statut.doneThisYear ? "ok" : statut.isUrgent ? "todo" : "neutral";
+                      const titre = statut.doneThisYear
+                        ? `Entretien ${statut.annee} effectué`
+                        : statut.isUrgent
+                        ? `Entretien ${statut.annee} à faire`
+                        : `Échéance : ${statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })} ${statut.annee}`;
+                      return <span className={"contrat-dot " + classe} title={titre} />;
+                    })()}
+                  </div>
                   <div className="row-sub">{c.raisonSociale ? c.raisonSociale + " · " : ""}{c.machines.length} matériel(s) installé{c.machines.length > 1 ? "s" : ""}</div>
                 </div>
               </li>
@@ -1846,6 +1888,29 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
                 <DeleteButton onConfirm={() => onDelete(client)} />
               </div>
             </div>
+            {(() => {
+              const statut = getEntretienStatus(client, reports);
+              if (!statut) return null;
+              if (statut.doneThisYear) {
+                return (
+                  <div className="entretien-annuel-badge ok">
+                    <Icon name="check" size={14} /> Entretien {statut.annee} effectué le {statut.rapportAnnee.date}
+                  </div>
+                );
+              }
+              if (statut.isUrgent) {
+                return (
+                  <div className="entretien-annuel-badge todo">
+                    <Icon name="alert" size={14} /> Entretien {statut.annee} à faire{statut.dueDate ? ` (échéance ${statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })})` : ""}
+                  </div>
+                );
+              }
+              return (
+                <div className="entretien-annuel-badge neutral">
+                  <Icon name="calendar" size={14} /> Prochain entretien prévu en {statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })} {statut.annee}
+                </div>
+              );
+            })()}
             <div className="detail-line">{client.adresse}</div>
             <div className="detail-line">{client.email}</div>
             <div className="detail-line">{client.tel}</div>
@@ -2065,6 +2130,7 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
   const isEditing = !!editingClient;
   const [nom, setNom] = useState(editingClient?.nom || "");
   const [raisonSociale, setRaisonSociale] = useState(editingClient?.raisonSociale || "");
+  const [moisEcheance, setMoisEcheance] = useState(editingClient?.moisEcheance || "");
   const [adresse, setAdresse] = useState(editingClient?.adresse || "");
   const [email, setEmail] = useState(editingClient?.email || "");
   const [tel, setTel] = useState(editingClient?.tel || "");
@@ -2105,7 +2171,7 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
       .map(({ id, ...m }) => m);
     onSubmit({
       id: isEditing ? editingClient.id : "c" + Date.now(),
-      nom, raisonSociale, adresse, email, tel,
+      nom, raisonSociale, adresse, email, tel, moisEcheance,
       machines: cleanedMachines,
       contrat,
     });
@@ -2119,6 +2185,24 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
         <label>Téléphone<input value={tel} onChange={(e) => setTel(e.target.value)} placeholder="06 00 00 00 00" /></label>
         <label>Adresse<input value={adresse} onChange={(e) => setAdresse(e.target.value)} placeholder="Rue, code postal, ville" /></label>
         <label>Email<input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nom@email.fr" /></label>
+        <label>Mois de l'entretien contractuel (facultatif)
+          <select value={moisEcheance} onChange={(e) => setMoisEcheance(e.target.value)}>
+            <option value="">Non défini</option>
+            <option value="1">Janvier</option>
+            <option value="2">Février</option>
+            <option value="3">Mars</option>
+            <option value="4">Avril</option>
+            <option value="5">Mai</option>
+            <option value="6">Juin</option>
+            <option value="7">Juillet</option>
+            <option value="8">Août</option>
+            <option value="9">Septembre</option>
+            <option value="10">Octobre</option>
+            <option value="11">Novembre</option>
+            <option value="12">Décembre</option>
+          </select>
+          <span className="hint">Un rappel est créé automatiquement 1 mois avant, si un contrat est rattaché à ce client.</span>
+        </label>
       </div>
 
       <label className="block">Matériel installé</label>
@@ -2282,7 +2366,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
 
 /* ---------- Mini calendrier mensuel interactif (pastilles sur les jours avec intervention) ---------- */
 function MiniCalendar({ datesWithTasks, selectedDate, onSelectDate }) {
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = toLocalISODate(new Date());
   const [cursor, setCursor] = useState(() => {
     const d = new Date();
     return { year: d.getFullYear(), month: d.getMonth() };
@@ -2352,7 +2436,7 @@ function MiniCalendar({ datesWithTasks, selectedDate, onSelectDate }) {
 function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggle, submitLabel }) {
   const [titre, setTitre] = useState("");
   const [client, setClient] = useState(clients[0]?.nom || "");
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(toLocalISODate(new Date()));
   const [heure, setHeure] = useState("09:00");
   const [rappel, setRappel] = useState(true);
 
@@ -2597,6 +2681,78 @@ function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onOpen
 }
 
 /* ---------- Génération du document HTML pour l'aperçu PDF (nouvel onglet) ---------- */
+// Calcule le statut de l'entretien contractuel annuel d'un client :
+// - doneThisYear : un entretien a déjà été fait depuis l'échéance de l'an dernier
+// - dueDate : échéance de CETTE année (même si elle est déjà passée — dans ce
+//   cas, le statut reste "à faire" tant que l'entretien n'est pas réalisé,
+//   il ne se réinitialise jamais tout seul en l'absence d'action)
+// - isUrgent : on est à moins d'un mois de l'échéance (ou après, en retard) et ce n'est pas encore fait
+function getEntretienStatus(client, reports) {
+  if (!client.contrat) return null;
+  const today = new Date();
+  const mois = parseInt(client.moisEcheance, 10);
+  const anneeEnCours = today.getFullYear();
+
+  if (!mois || mois < 1 || mois > 12) {
+    // Pas de mois d'échéance défini : statut simple fait / pas fait sur l'année civile (comportement historique).
+    const rapportAnnee = reports.find((r) => {
+      if (r.type !== "entretien" || r.client !== client.nom) return false;
+      const parts = (r.date || "").split("/");
+      return parts.length === 3 && parseInt(parts[2], 10) === anneeEnCours;
+    });
+    return { doneThisYear: !!rapportAnnee, rapportAnnee, dueDate: null, isUrgent: !rapportAnnee, annee: anneeEnCours };
+  }
+
+  // L'échéance reste toujours celle de l'année en cours — si elle est passée
+  // sans avoir été faite, le statut reste "à faire" (jamais repoussé à l'an
+  // prochain tant que l'entretien n'a pas été réalisé).
+  const dueDate = new Date(anneeEnCours, mois - 1, 1);
+  const dateEcheancePrecedente = new Date(anneeEnCours - 1, mois - 1, 1);
+
+  // Fait pour ce cycle si un entretien a eu lieu depuis l'échéance précédente jusqu'à aujourd'hui.
+  const rapportCycle = reports.find((r) => {
+    if (r.type !== "entretien" || r.client !== client.nom) return false;
+    const parts = (r.date || "").split("/");
+    if (parts.length !== 3) return false;
+    const rDate = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+    return rDate >= dateEcheancePrecedente && rDate <= today;
+  });
+  const doneThisYear = !!rapportCycle;
+
+  const unMoisAvant = new Date(dueDate);
+  unMoisAvant.setMonth(unMoisAvant.getMonth() - 1);
+  const isUrgent = !doneThisYear && today >= unMoisAvant;
+
+  return { doneThisYear, rapportAnnee: rapportCycle, dueDate, isUrgent, annee: anneeEnCours };
+}
+
+// Formate une date en "YYYY-MM-DD" à partir de ses composants LOCAUX (jour,
+// mois, année) — contrairement à toISOString() qui convertit en UTC et peut
+// décaler la date d'un jour selon le fuseau horaire de l'utilisateur.
+function toLocalISODate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+// Les dates de rapport sont stockées au format français "JJ/MM/AAAA" partout
+// dans l'app (facturation, échéances, PDF...). Ces deux fonctions permettent
+// d'utiliser un vrai sélecteur <input type="date"> (qui exige du "AAAA-MM-JJ")
+// sans rien changer au format de stockage existant.
+function frToIso(fr) {
+  const parts = (fr || "").split("/");
+  if (parts.length !== 3) return "";
+  const [j, m, a] = parts;
+  return `${a}-${m.padStart(2, "0")}-${j.padStart(2, "0")}`;
+}
+function isoToFr(iso) {
+  const parts = (iso || "").split("-");
+  if (parts.length !== 3) return "";
+  const [a, m, j] = parts;
+  return `${j}/${m}/${a}`;
+}
+
 function escapeHtml(str) {
   if (str === null || str === undefined) return "";
   return String(str)
@@ -3025,6 +3181,14 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 
 .client-detail-actions { display: flex; gap: 8px; }
 .client-raison-sociale { font-size: 13px; color: #6C7A80; margin-top: 2px; }
+.entretien-annuel-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 8px; margin: 10px 0; }
+.entretien-annuel-badge.ok { background: #E3F1E8; color: #2E6B45; }
+.entretien-annuel-badge.todo { background: #FBEADB; color: #B45F1D; }
+.entretien-annuel-badge.neutral { background: #EEF1F0; color: #5E7078; }
+.contrat-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 8px; vertical-align: middle; }
+.contrat-dot.ok { background: #3F8F5F; }
+.contrat-dot.todo { background: #D9762B; }
+.contrat-dot.neutral { background: #B7C1C3; }
 .btn-contrat { border-color: #2F6FA3; color: #2F6FA3; }
 .btn-danger { border-color: #D9776C; color: #B33128; }
 .btn-danger:hover { background: #FBE3E1; }
