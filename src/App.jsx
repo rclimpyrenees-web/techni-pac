@@ -574,6 +574,21 @@ export default function App() {
 /* ---------- Dashboard ---------- */
 function Dashboard({ upcoming, relances, aFacturer, planning, reports, rappelsActifs, onToggle, onNavigate, onOpenReport }) {
   const next = planning.filter((p) => !p.fait && p.categorie !== "relance").slice(0, 4);
+
+  const now = new Date();
+  const moisEnCours = now.getMonth() + 1;
+  const anneeEnCours = now.getFullYear();
+  const reportsCeMois = reports.filter((r) => {
+    const parts = (r.date || "").split("/");
+    if (parts.length !== 3) return false;
+    return parseInt(parts[1], 10) === moisEnCours && parseInt(parts[2], 10) === anneeEnCours;
+  });
+  const countMES = reportsCeMois.filter((r) => r.type === "mise_en_service").length;
+  const countEntretien = reportsCeMois.filter((r) => r.type === "entretien").length;
+  const countDiagnostic = reportsCeMois.filter((r) => r.type === "diagnostic").length;
+  const moisLabelBrut = now.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+  const moisLabel = moisLabelBrut.charAt(0).toUpperCase() + moisLabelBrut.slice(1);
+
   return (
     <div>
       <header className="page-head">
@@ -587,6 +602,24 @@ function Dashboard({ upcoming, relances, aFacturer, planning, reports, rappelsAc
         <Jauge value={aFacturer} max={5} label="À facturer" onClick={() => onNavigate("facturation")} />
         <Jauge value={rappelsActifs.length} max={5} label="Rappels actifs" onClick={() => onNavigate("rappels")} />
       </div>
+
+      <section className="card">
+        <h3>Récapitulatif de {moisLabel}</h3>
+        <div className="monthly-recap-grid">
+          <div className="monthly-recap-item">
+            <div className="monthly-recap-value">{countMES}</div>
+            <div className="monthly-recap-label">Mise{countMES > 1 ? "s" : ""} en service</div>
+          </div>
+          <div className="monthly-recap-item">
+            <div className="monthly-recap-value">{countEntretien}</div>
+            <div className="monthly-recap-label">Entretien{countEntretien > 1 ? "s" : ""}</div>
+          </div>
+          <div className="monthly-recap-item">
+            <div className="monthly-recap-value">{countDiagnostic}</div>
+            <div className="monthly-recap-label">Dépannage{countDiagnostic > 1 ? "s" : ""}</div>
+          </div>
+        </div>
+      </section>
 
       <div className="grid-2">
         <section className="card">
@@ -2332,6 +2365,8 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
     return acc;
   }, {});
   const dates = Object.keys(grouped).sort();
+  const dateCounts = {};
+  dates.forEach((d) => { dateCounts[d] = grouped[d].length; });
   const [selectedDate, setSelectedDate] = useState(() => dates[0] || null);
   const activeDate = selectedDate && grouped[selectedDate] ? selectedDate : (dates[0] || null);
 
@@ -2349,7 +2384,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
 
       {showForm && <TaskForm clients={clients} onCancel={() => setShowForm(false)} onSubmit={(t) => { onAdd(t); setShowForm(false); }} />}
 
-      <MiniCalendar datesWithTasks={new Set(dates)} selectedDate={activeDate} onSelectDate={setSelectedDate} />
+      <MiniCalendar dateCounts={dateCounts} selectedDate={activeDate} onSelectDate={setSelectedDate} />
 
       {!activeDate && <p className="empty">Aucune intervention programmée pour le moment.</p>}
 
@@ -2369,7 +2404,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
                 </button>
                 <div className="grow">
                   <div className="row-title">{p.titre}</div>
-                  <div className="row-sub">{p.client} {p.heure !== "—" && `· ${p.heure}`}</div>
+                  <div className="row-sub">{p.client} {p.heure !== "—" && `· ${p.heure}`}{p.duree && ` · ${p.duree}`}</div>
                 </div>
                 <button className={"pill pill-clickable " + (p.rappel ? "pill-warm" : "pill-muted")} onClick={(e) => { e.stopPropagation(); onToggleRappel(p.id); }}>
                   <Icon name="bell" size={13} /> {p.rappel ? "Rappel actif" : "Sans rappel"}
@@ -2384,7 +2419,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
 }
 
 /* ---------- Mini calendrier mensuel interactif (pastilles sur les jours avec intervention) ---------- */
-function MiniCalendar({ datesWithTasks, selectedDate, onSelectDate }) {
+function MiniCalendar({ dateCounts, selectedDate, onSelectDate }) {
   const todayIso = toLocalISODate(new Date());
   const [cursor, setCursor] = useState(() => {
     const d = new Date();
@@ -2404,6 +2439,21 @@ function MiniCalendar({ datesWithTasks, selectedDate, onSelectDate }) {
     const mm = String(cursor.month + 1).padStart(2, "0");
     const dd = String(day).padStart(2, "0");
     return `${cursor.year}-${mm}-${dd}`;
+  };
+
+  // Code couleur selon le nombre d'interventions du jour : 1 = bleu,
+  // 2 = vert, 3 = jaune, 4 ou plus = rouge.
+  const colorForCount = (count) => {
+    if (count >= 4) return "red";
+    if (count === 3) return "yellow";
+    if (count === 2) return "green";
+    return "blue";
+  };
+
+  // Tous les mardis et mercredis sont marqués comme journées DAIKIN.
+  const isJourneeDaikin = (day) => {
+    const dow = new Date(cursor.year, cursor.month, day).getDay(); // 0=dim ... 2=mar, 3=mer
+    return dow === 2 || dow === 3;
   };
 
   const monthLabel = firstOfMonth.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
@@ -2431,7 +2481,8 @@ function MiniCalendar({ datesWithTasks, selectedDate, onSelectDate }) {
         {cells.map((day, i) => {
           if (day === null) return <div key={"b" + i} className="mini-calendar-cell empty" />;
           const iso = isoFor(day);
-          const hasTask = datesWithTasks.has(iso);
+          const count = dateCounts[iso] || 0;
+          const hasTask = count > 0;
           const isToday = iso === todayIso;
           return (
             <button
@@ -2440,13 +2491,21 @@ function MiniCalendar({ datesWithTasks, selectedDate, onSelectDate }) {
               className={"mini-calendar-cell" + (hasTask ? " has-task" : "") + (isToday ? " is-today" : "") + (iso === selectedDate ? " is-selected" : "")}
               onClick={() => hasTask && onSelectDate(iso)}
               disabled={!hasTask}
-              title={hasTask ? "Voir les interventions de ce jour" : undefined}
+              title={(isJourneeDaikin(day) ? "Journée DAIKIN — " : "") + (hasTask ? `${count} intervention${count > 1 ? "s" : ""} — voir le détail` : "")}
             >
+              {isJourneeDaikin(day) && <span className="mini-calendar-daikin" />}
               {day}
-              {hasTask && <span className="mini-calendar-dot" />}
+              {hasTask && <span className={"mini-calendar-dot " + colorForCount(count)} />}
             </button>
           );
         })}
+      </div>
+      <div className="mini-calendar-legend">
+        <span><span className="mini-calendar-dot blue" /> 1</span>
+        <span><span className="mini-calendar-dot green" /> 2</span>
+        <span><span className="mini-calendar-dot yellow" /> 3</span>
+        <span><span className="mini-calendar-dot red" /> 4+</span>
+        <span><span className="mini-calendar-daikin static" /> Mar/Mer (DAIKIN)</span>
       </div>
     </div>
   );
@@ -2457,6 +2516,7 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
   const [client, setClient] = useState(clients[0]?.nom || "");
   const [date, setDate] = useState(toLocalISODate(new Date()));
   const [heure, setHeure] = useState("09:00");
+  const [duree, setDuree] = useState("1h");
   const [rappel, setRappel] = useState(true);
 
   const submit = () => {
@@ -2467,6 +2527,7 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
       client,
       date,
       heure,
+      duree,
       rappel: hideRappelToggle ? true : rappel,
       fait: false,
       categorie: forceCategorie || "intervention",
@@ -2484,6 +2545,23 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
         </label>
         <label>Date<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
         <label>Heure<input value={heure} onChange={(e) => setHeure(e.target.value)} placeholder="09:00" /></label>
+        <label>Durée
+          <select value={duree} onChange={(e) => setDuree(e.target.value)}>
+            <option value="30min">30 min</option>
+            <option value="1h">1h</option>
+            <option value="1h30">1h30</option>
+            <option value="2h">2h</option>
+            <option value="2h30">2h30</option>
+            <option value="3h">3h</option>
+            <option value="3h30">3h30</option>
+            <option value="4h">4h</option>
+            <option value="4h30">4h30</option>
+            <option value="5h">5h</option>
+            <option value="6h">6h</option>
+            <option value="7h">7h</option>
+            <option value="8h">Journée complète (8h)</option>
+          </select>
+        </label>
       </div>
       {!hideRappelToggle && (
         <label className="check-inline"><input type="checkbox" checked={rappel} onChange={(e) => setRappel(e.target.checked)} /> Activer un rappel</label>
@@ -3106,6 +3184,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .row-between { display: flex; justify-content: space-between; align-items: flex-end; }
 
 .gauges { display: flex; gap: 20px; margin-bottom: 26px; flex-wrap: wrap; }
+.monthly-recap-grid { display: flex; gap: 16px; flex-wrap: wrap; }
+.monthly-recap-item { flex: 1; min-width: 130px; text-align: center; padding: 16px 10px; background: #F4F6F5; border-radius: 10px; }
+.monthly-recap-value { font-family: 'Barlow Condensed', sans-serif; font-size: 34px; font-weight: 700; color: #1B2733; line-height: 1; }
+.monthly-recap-label { font-size: 12.5px; color: #5E7078; margin-top: 4px; }
 .jauge { background: #fff; border: 1px solid #D7DEDD; border-radius: 12px; padding: 14px 20px 16px; flex: 1; min-width: 140px; text-align: center; }
 .jauge-clickable { cursor: pointer; transition: border-color 0.15s, transform 0.1s; }
 .jauge-clickable:hover { border-color: #2F6FA3; }
@@ -3183,7 +3265,17 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .mini-calendar-cell.has-task:hover { background: #D9E6F0; }
 .mini-calendar-cell.is-selected { background: #2F6FA3; color: #fff; }
 .mini-calendar-dot { position: absolute; bottom: 2px; width: 4px; height: 4px; border-radius: 50%; background: #D9762B; }
+.mini-calendar-dot.blue { background: #2F6FA3; }
+.mini-calendar-dot.green { background: #3F8F5F; }
+.mini-calendar-dot.yellow { background: #D9A62B; }
+.mini-calendar-dot.red { background: #C0392B; }
 .mini-calendar-cell.is-selected .mini-calendar-dot { background: #fff; }
+.mini-calendar-daikin { position: absolute; top: 3px; right: 4px; width: 5px; height: 5px; border-radius: 50%; background: #2F6FA3; }
+.mini-calendar-daikin.static { position: static; }
+.mini-calendar-cell.is-selected .mini-calendar-daikin { background: #fff; }
+.mini-calendar-legend { display: flex; gap: 12px; justify-content: center; margin-top: 10px; font-size: 10.5px; color: #6C7A80; flex-wrap: wrap; }
+.mini-calendar-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.mini-calendar-legend .mini-calendar-dot { position: static; }
 .planning-day-flash { animation: planningFlash 1.4s ease; }
 @keyframes planningFlash {
   0% { box-shadow: 0 0 0 3px #2F6FA3; }
