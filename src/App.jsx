@@ -2394,8 +2394,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
   const dates = Object.keys(grouped).sort();
   const dateCounts = {};
   dates.forEach((d) => { dateCounts[d] = grouped[d].length; });
-  const [selectedDate, setSelectedDate] = useState(() => dates[0] || null);
-  const activeDate = selectedDate && grouped[selectedDate] ? selectedDate : (dates[0] || null);
+  const [selectedDate, setSelectedDate] = useState(() => dates[0] || toLocalISODate(new Date()));
 
   return (
     <div>
@@ -2409,36 +2408,38 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
         </button>
       </header>
 
-      {showForm && <TaskForm clients={clients} onCancel={() => setShowForm(false)} onSubmit={(t) => { onAdd(t); setShowForm(false); }} />}
+      {showForm && <TaskForm clients={clients} initialDate={selectedDate} onCancel={() => setShowForm(false)} onSubmit={(t) => { onAdd(t); setShowForm(false); }} />}
 
-      <MiniCalendar dateCounts={dateCounts} selectedDate={activeDate} onSelectDate={setSelectedDate} />
+      <MiniCalendar dateCounts={dateCounts} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
 
-      {!activeDate && <p className="empty">Aucune intervention programmée pour le moment.</p>}
-
-      {activeDate && grouped[activeDate] && (
+      {selectedDate && (
         <section className="card planning-day">
-          <h3>{new Date(activeDate).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</h3>
-          <ul className="list">
-            {grouped[activeDate].map((p) => (
-              <li
-                key={p.id}
-                className={"row clickable" + (p.fait ? " done" : "")}
-                onClick={() => onCreateReport(p)}
-                title="Créer le rapport pour cette tâche"
-              >
-                <button className={"check-circle" + (p.fait ? " checked" : "")} onClick={(e) => { e.stopPropagation(); onToggle(p.id); }}>
-                  {p.fait && <Icon name="check" size={13} />}
-                </button>
-                <div className="grow">
-                  <div className="row-title">{p.titre}</div>
-                  <div className="row-sub">{p.client} {p.heure !== "—" && `· ${p.heure}`}{p.duree && ` · ${p.duree}`}</div>
-                </div>
-                <button className={"pill pill-clickable " + (p.rappel ? "pill-warm" : "pill-muted")} onClick={(e) => { e.stopPropagation(); onToggleRappel(p.id); }}>
-                  <Icon name="bell" size={13} /> {p.rappel ? "Rappel actif" : "Sans rappel"}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <h3>{new Date(selectedDate).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</h3>
+          {grouped[selectedDate] ? (
+            <ul className="list">
+              {grouped[selectedDate].map((p) => (
+                <li
+                  key={p.id}
+                  className={"row clickable" + (p.fait ? " done" : "")}
+                  onClick={() => onCreateReport(p)}
+                  title="Créer le rapport pour cette tâche"
+                >
+                  <button className={"check-circle" + (p.fait ? " checked" : "")} onClick={(e) => { e.stopPropagation(); onToggle(p.id); }}>
+                    {p.fait && <Icon name="check" size={13} />}
+                  </button>
+                  <div className="grow">
+                    <div className="row-title">{p.titre}</div>
+                    <div className="row-sub">{p.client} {p.heure !== "—" && `· ${p.heure}`}{p.duree && ` · ${p.duree}`}</div>
+                  </div>
+                  <button className={"pill pill-clickable " + (p.rappel ? "pill-warm" : "pill-muted")} onClick={(e) => { e.stopPropagation(); onToggleRappel(p.id); }}>
+                    <Icon name="bell" size={13} /> {p.rappel ? "Rappel actif" : "Sans rappel"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="empty">Aucune intervention prévue ce jour-là.</p>
+          )}
         </section>
       )}
     </div>
@@ -2515,10 +2516,9 @@ function MiniCalendar({ dateCounts, selectedDate, onSelectDate }) {
             <button
               type="button"
               key={iso}
-              className={"mini-calendar-cell" + (hasTask ? " has-task" : "") + (isToday ? " is-today" : "") + (iso === selectedDate ? " is-selected" : "")}
-              onClick={() => hasTask && onSelectDate(iso)}
-              disabled={!hasTask}
-              title={(isJourneeDaikin(day) ? "Journée DAIKIN — " : "") + (hasTask ? `${count} intervention${count > 1 ? "s" : ""} — voir le détail` : "")}
+              className={"mini-calendar-cell clickable-day" + (hasTask ? " has-task" : "") + (isToday ? " is-today" : "") + (iso === selectedDate ? " is-selected" : "")}
+              onClick={() => onSelectDate(iso)}
+              title={(isJourneeDaikin(day) ? "Journée DAIKIN — " : "") + (hasTask ? `${count} intervention${count > 1 ? "s" : ""} — voir le détail` : "Voir ce jour / ajouter une tâche")}
             >
               {isJourneeDaikin(day) && <span className="mini-calendar-daikin" />}
               {day}
@@ -2538,10 +2538,10 @@ function MiniCalendar({ dateCounts, selectedDate, onSelectDate }) {
   );
 }
 
-function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggle, submitLabel }) {
+function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggle, submitLabel, initialDate }) {
   const [titre, setTitre] = useState("");
   const [client, setClient] = useState("");
-  const [date, setDate] = useState(toLocalISODate(new Date()));
+  const [date, setDate] = useState(initialDate || toLocalISODate(new Date()));
   const [heure, setHeure] = useState("09:00");
   const [duree, setDuree] = useState("1h");
   const [rappel, setRappel] = useState(true);
@@ -3319,6 +3319,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .mini-calendar-weekdays { margin-bottom: 2px; }
 .mini-calendar-weekday { text-align: center; font-size: 9.5px; font-weight: 600; color: #8A959A; text-transform: uppercase; padding: 2px 0; }
 .mini-calendar-cell { position: relative; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border: none; background: transparent; border-radius: 6px; font-size: 11.5px; color: #4A5860; cursor: default; }
+.mini-calendar-cell.clickable-day { cursor: pointer; }
+.mini-calendar-cell.clickable-day:hover { background: #EEF1F0; }
 .mini-calendar-cell.empty { visibility: hidden; }
 .mini-calendar-cell.is-today { font-weight: 700; color: #1B2733; box-shadow: inset 0 0 0 1.5px #2F6FA3; }
 .mini-calendar-cell.has-task { cursor: pointer; background: #EAF1F7; color: #1B2733; font-weight: 600; }
