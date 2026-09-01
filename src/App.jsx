@@ -195,7 +195,7 @@ export default function App() {
   const { items: planningRaw, upsert: upsertPlanning, loading: loadingPlanning } = useSyncedCollection("planning", initialPlanning);
   const { items: devisAFaire, upsert: upsertDevisAFaire, remove: removeDevisAFaire, loading: loadingDevisAFaire } = useSyncedCollection("devis_a_faire", initialDevisAFaire);
   const { items: devisEnCours, upsert: upsertDevisEnCours, remove: removeDevisEnCours, loading: loadingDevisEnCours } = useSyncedCollection("devis_en_cours", initialDevisEnCours);
-  const { items: facturation, upsert: upsertFacturation, loading: loadingFacturation } = useSyncedCollection("facturation", initialFacturation);
+  const { items: facturation, upsert: upsertFacturation, remove: removeFacturation, loading: loadingFacturation } = useSyncedCollection("facturation", initialFacturation);
   const { settings, saveSettings, loading: loadingSettings } = useSyncedSettings(defaultSettings);
 
   const dataLoading = loadingClients || loadingReports || loadingPlanning || loadingDevisAFaire || loadingDevisEnCours || loadingFacturation || loadingSettings;
@@ -352,6 +352,26 @@ export default function App() {
     }
   };
 
+  // Relance manuelle : utile si l'envoi automatique n'a jamais abouti (coupure
+  // réseau sur le terrain, etc.) — retrouve le rapport d'origine pour
+  // reconstituer les informations nécessaires (montant, TVA...) et retente.
+  const handleRetryPennylane = (facturationId) => {
+    const item = facturation.find((f) => f.id === facturationId);
+    if (!item) return;
+    const report = reports.find((r) => r.id === item.reportId);
+    if (!report || !report.montant) {
+      upsertFacturation({ ...item, pennylaneStatus: "erreur", pennylaneError: "Impossible de retrouver le montant du rapport d'origine — vérifiez-le sur le rapport concerné." });
+      return;
+    }
+    const itemAvecMontantAJour = { ...item, montant: `${report.montant} €` };
+    upsertFacturation(itemAvecMontantAJour);
+    syncFactureToPennylane(itemAvecMontantAJour, report);
+  };
+
+  const handleDeleteFacturation = (id) => {
+    removeFacturation(id);
+  };
+
   // Vérification automatique du statut payé/impayé des factures Pennylane à
   // chaque ouverture de l'onglet Facturation, pour éviter de devoir cliquer
   // manuellement sur 🔄 pour chacune.
@@ -502,6 +522,7 @@ export default function App() {
             onOpenReport={goToReport}
             onNavigate={setTab}
             focusClient={focusClient}
+            onDeleteFacturation={handleDeleteFacturation}
           />
         )}
 
@@ -559,6 +580,8 @@ export default function App() {
               const item = facturation.find((f) => f.id === id);
               syncPennylaneStatus(item);
             }}
+            onRetryPennylane={handleRetryPennylane}
+            onDeleteFacturation={handleDeleteFacturation}
             onOpenClient={goToClient}
           />
         )}
@@ -1829,7 +1852,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 }
 
 /* ---------- Clients ---------- */
-function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, focusClient }) {
+function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, focusClient, onDeleteFacturation }) {
   const [selected, setSelected] = useState(clients[0]?.id);
   const [editingClient, setEditingClient] = useState(null);
   const [showContract, setShowContract] = useState(false);
@@ -2000,7 +2023,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
       </div>
 
       {client && (
-        <ClientHistory client={client} reports={reports} devisAFaire={devisAFaire} devisEnCours={devisEnCours} facturation={facturation} onOpenReport={onOpenReport} onNavigate={onNavigate} />
+        <ClientHistory client={client} reports={reports} devisAFaire={devisAFaire} devisEnCours={devisEnCours} facturation={facturation} onOpenReport={onOpenReport} onNavigate={onNavigate} onDeleteFacturation={onDeleteFacturation} />
       )}
 
       {showContract && client?.contrat && (
@@ -2015,7 +2038,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
   );
 }
 
-function ClientHistory({ client, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate }) {
+function ClientHistory({ client, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, onDeleteFacturation }) {
   const clientReports = reports.filter((r) => r.client === client.nom);
   const clientDevisAFaire = devisAFaire.filter((d) => d.client === client.nom);
   const clientDevisEnCours = devisEnCours.filter((d) => d.client === client.nom);
@@ -2087,13 +2110,16 @@ function ClientHistory({ client, reports, devisAFaire, devisEnCours, facturation
                   <div className="row-title">{f.intervention}</div>
                   <div className="row-sub">{f.montant}</div>
                 </div>
-                {!f.facture ? (
-                  <span className="pill pill-muted">À facturer</span>
-                ) : f.payee ? (
-                  <span className="pill pill-ok">Payée</span>
-                ) : (
-                  <span className="pill pill-alert">Impayée</span>
-                )}
+                <div className="row-actions">
+                  {!f.facture ? (
+                    <span className="pill pill-muted">À facturer</span>
+                  ) : f.payee ? (
+                    <span className="pill pill-ok">Payée</span>
+                  ) : (
+                    <span className="pill pill-alert">Impayée</span>
+                  )}
+                  <span onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
+                </div>
               </li>
             ))}
           </ul>
@@ -2686,7 +2712,7 @@ function Devis({ devisAFaire, devisEnCours, onCreated, onRelance, onValide, onOp
 }
 
 /* ---------- Facturation ---------- */
-function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onOpenClient }) {
+function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onRetryPennylane, onDeleteFacturation, onOpenClient }) {
   const aFacturer = facturation.filter((f) => !f.facture);
   const impayees = facturation.filter((f) => f.facture && !f.payee);
   const payees = facturation.filter((f) => f.facture && f.payee);
@@ -2717,7 +2743,15 @@ function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onOpen
                   )}
                 </div>
               </div>
-              <button className="btn-small" onClick={(e) => { e.stopPropagation(); onFacturer(f.id); }}>Marquer facturé</button>
+              <div className="row-actions">
+                {!f.pennylaneInvoiceId && (
+                  <button className="btn-ghost small" onClick={(e) => { e.stopPropagation(); onRetryPennylane(f.id); }} title="Retenter l'envoi automatique vers Pennylane">
+                    <Icon name="sync" size={13} /> Réessayer Pennylane
+                  </button>
+                )}
+                <button className="btn-small" onClick={(e) => { e.stopPropagation(); onFacturer(f.id); }}>Marquer facturé</button>
+                <span onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
+              </div>
             </li>
           )}
         />
@@ -2744,7 +2778,13 @@ function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onOpen
                     <Icon name="sync" size={14} />
                   </button>
                 )}
+                {!f.pennylaneInvoiceId && (
+                  <button className="btn-ghost small" onClick={(e) => { e.stopPropagation(); onRetryPennylane(f.id); }} title="Retenter l'envoi automatique vers Pennylane">
+                    <Icon name="sync" size={13} /> Réessayer Pennylane
+                  </button>
+                )}
                 <button className="pill pill-clickable pill-alert" onClick={(e) => { e.stopPropagation(); onPayer(f.id); }}>Marquer payée</button>
+                <span onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
               </div>
             </li>
           )}
@@ -2767,7 +2807,10 @@ function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onOpen
                     {f.pennylaneInvoiceId && <span className="pill pill-pennylane">Pennylane</span>}
                   </div>
                 </div>
-                <span className="pill pill-ok"><Icon name="check" size={13} /> Payée</span>
+                <div className="row-actions">
+                  <span className="pill pill-ok"><Icon name="check" size={13} /> Payée</span>
+                  <span onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
+                </div>
               </li>
             )}
           />
