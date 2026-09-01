@@ -218,7 +218,8 @@ export default function App() {
   const upcoming = planning.filter((p) => !p.fait && p.categorie !== "relance").length;
   const relances = devisEnCours.filter((d) => d.statut === "a_relancer").length;
   const aFacturer = facturation.filter((f) => !f.facture).length;
-  const rappelsActifs = planning.filter((p) => p.rappel && !p.fait);
+  const facturesNonPayees = facturation.filter((f) => !f.payee).length;
+  const rappelsActifs = planning.filter((p) => p.rappel && !p.fait && p.categorie !== "intervention");
 
   const nav = [
     { id: "dashboard", label: "Tableau de bord", icon: "dashboard" },
@@ -462,7 +463,7 @@ export default function App() {
               {n.label}
               {n.id === "rappels" && rappelsActifs.length > 0 && <span className="nav-badge">{rappelsActifs.length}</span>}
               {n.id === "devis" && (devisAFaire.length + devisEnCours.length) > 0 && <span className="nav-badge">{devisAFaire.length + devisEnCours.length}</span>}
-              {n.id === "facturation" && aFacturer > 0 && <span className="nav-badge">{aFacturer}</span>}
+              {n.id === "facturation" && facturesNonPayees > 0 && <span className="nav-badge">{facturesNonPayees}</span>}
             </button>
           ))}
         </nav>
@@ -715,7 +716,7 @@ function typePillClass(t) {
 
 /* ---------- Rappels ---------- */
 function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, onToggleRappel }) {
-  const items = planning.filter((p) => p.rappel);
+  const items = planning.filter((p) => p.rappel && p.categorie !== "intervention");
   const grouped = items.reduce((acc, p) => {
     (acc[p.date] = acc[p.date] || []).push(p);
     return acc;
