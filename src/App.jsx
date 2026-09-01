@@ -2576,7 +2576,15 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
           </datalist>
         </label>
         <label>Date<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
-        <label>Heure<input value={heure} onChange={(e) => setHeure(e.target.value)} placeholder="09:00" /></label>
+        <label>Heure
+          <select value={heure} onChange={(e) => setHeure(e.target.value)}>
+            {["07:00","07:30","08:00","08:30","09:00","09:30","10:00","10:30","11:00","11:30",
+              "12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30",
+              "17:00","17:30","18:00","18:30","19:00","19:30"].map((h) => (
+              <option key={h} value={h}>{h}</option>
+            ))}
+          </select>
+        </label>
         <label>Durée
           <select value={duree} onChange={(e) => setDuree(e.target.value)}>
             <option value="30min">30 min</option>
@@ -3320,10 +3328,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .mini-calendar-dot.green { background: #3F8F5F; }
 .mini-calendar-dot.yellow { background: #D9A62B; }
 .mini-calendar-dot.red { background: #C0392B; }
-.mini-calendar-cell.is-selected .mini-calendar-dot { background: #fff; }
+.mini-calendar-cell.is-selected .mini-calendar-dot { box-shadow: 0 0 0 1.5px #fff; }
 .mini-calendar-daikin { position: absolute; top: 3px; right: 4px; width: 5px; height: 5px; border-radius: 50%; background: #2F6FA3; }
 .mini-calendar-daikin.static { position: static; }
-.mini-calendar-cell.is-selected .mini-calendar-daikin { background: #fff; }
+.mini-calendar-cell.is-selected .mini-calendar-daikin { box-shadow: 0 0 0 1.5px #fff; }
 .mini-calendar-legend { display: flex; gap: 12px; justify-content: center; margin-top: 10px; font-size: 10.5px; color: #6C7A80; flex-wrap: wrap; }
 .mini-calendar-legend span { display: inline-flex; align-items: center; gap: 4px; }
 .mini-calendar-legend .mini-calendar-dot { position: static; }
