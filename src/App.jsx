@@ -1054,6 +1054,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
 
 function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, settings }) {
   const [open, setOpen] = useState(false);
+  const [viewTab, setViewTab] = useState("details");
   const cardRef = useRef(null);
 
   useEffect(() => {
@@ -1095,7 +1096,20 @@ function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, set
             <DeleteButton onConfirm={() => onDelete(r)} />
           </div>
 
-          {r.type === "mise_en_service" && (
+          <div className="report-view-tabs" onClick={(e) => e.stopPropagation()}>
+            <button className={"report-view-tab" + (viewTab === "details" ? " active" : "")} onClick={() => setViewTab("details")}>
+              Détails
+            </button>
+            <button className={"report-view-tab" + (viewTab === "pdf" ? " active" : "")} onClick={() => setViewTab("pdf")}>
+              <Icon name="report" size={13} /> Aperçu PDF
+            </button>
+          </div>
+
+          {viewTab === "pdf" ? (
+            <iframe className="report-pdf-preview" srcDoc={buildReportHtml(r, settings)} title="Aperçu PDF du rapport" />
+          ) : (
+            <>
+              {r.type === "mise_en_service" && (
             <>
               {r.intro && <div className="remarque description-view"><strong>Objet</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.intro }} /></div>}
               <div className="checklist-view">
@@ -1157,6 +1171,8 @@ function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, set
                 {r.signatureClient ? <img src={r.signatureClient} className="sig-img" alt="Signature client" /> : <div className="sig-empty">Non signée</div>}
               </div>
             </div>
+          )}
+            </>
           )}
         </div>
       )}
@@ -3116,10 +3132,6 @@ function buildReportHtml(report, settings) {
     if (report.devisAEffectuer) body += `<p><strong>Devis à effectuer :</strong> ${escapeHtml(report.devisAEffectuer)}</p>`;
   }
 
-  if (report.photos && report.photos.length > 0) {
-    body += `<div class="pdf-photos">${report.photos.map((src) => `<img src="${src}" />`).join("")}</div>`;
-  }
-
   if (report.signatureTech || report.signatureClient) {
     body += `<div class="pdf-signatures">
       <div><strong>Signature technicien</strong><br/>${report.signatureTech ? `<img class="pdf-sig" src="${report.signatureTech}" />` : "Non signée"}</div>
@@ -3129,6 +3141,15 @@ function buildReportHtml(report, settings) {
 
   if (entreprise.clausePied && entreprise.clausePied.trim()) {
     body += `<div class="pdf-footer-clause">${nl2br(entreprise.clausePied.trim())}</div>`;
+  }
+
+  if (report.photos && report.photos.length > 0) {
+    body += `<div class="pdf-photo-annex">
+      <h2 class="pdf-annex-title">Annexe — Photos de l'intervention</h2>
+      <div class="pdf-photos-grid">
+        ${report.photos.map((src) => `<div class="pdf-photo-item"><img src="${src}" /></div>`).join("")}
+      </div>
+    </div>`;
   }
 
   return `<!DOCTYPE html>
@@ -3160,8 +3181,11 @@ function buildReportHtml(report, settings) {
   .pdf-description strong { font-weight: 700; }
   .pdf-description u { text-decoration: underline; }
   .pdf-description em { font-style: italic; }
-  .pdf-photos { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
-  .pdf-photos img { width: 150px; height: 115px; object-fit: cover; border-radius: 8px; border: 1px solid #D7DEDD; }
+  .pdf-photo-annex { page-break-before: always; padding-top: 8px; }
+  .pdf-annex-title { font-family: 'Barlow Condensed', sans-serif; font-size: 22px; font-weight: 700; color: #1B2733; margin-bottom: 18px; }
+  .pdf-photos-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .pdf-photo-item { break-inside: avoid; }
+  .pdf-photo-item img { width: 100%; height: 340px; object-fit: cover; border-radius: 8px; border: 1px solid #D7DEDD; display: block; }
   .pdf-signatures { display: flex; gap: 40px; margin-top: 34px; padding-top: 18px; border-top: 1px solid #EAEDEC; }
   .pdf-sig { max-width: 210px; max-height: 85px; display: block; margin-top: 6px; }
   .pdf-footer-clause { margin-top: 28px; padding-top: 14px; border-top: 1px solid #EAEDEC; font-size: 11px; line-height: 1.5; color: #8A959A; white-space: pre-wrap; }
@@ -3353,6 +3377,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .chevron { font-size: 20px; color: #97A3A7; width: 20px; text-align: center; }
 .report-card-body { margin-top: 16px; padding-top: 16px; border-top: 1px solid #EAEDEC; }
 .report-card-actions { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+.report-view-tabs { display: flex; gap: 4px; border-bottom: 1px solid #E4E9E8; margin-bottom: 16px; }
+.report-view-tab { background: transparent; border: none; border-bottom: 2px solid transparent; padding: 8px 4px; margin-right: 18px; font-size: 13.5px; font-weight: 600; color: #6C7A80; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.report-view-tab.active { color: #2F6FA3; border-bottom-color: #2F6FA3; }
+.report-pdf-preview { width: 100%; height: 720px; border: 1px solid #E4E9E8; border-radius: 8px; background: #fff; }
 .remarque { font-size: 13.5px; color: #3D484D; line-height: 1.5; background: #F6F8F7; padding: 10px 12px; border-radius: 8px; }
 .rte-render strong { font-weight: 700; }
 .rte-render u { text-decoration: underline; }
