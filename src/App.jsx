@@ -2118,7 +2118,7 @@ function ClientHistory({ client, reports, devisAFaire, devisEnCours, facturation
                   ) : (
                     <span className="pill pill-alert">Impayée</span>
                   )}
-                  <span onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
+                  <span className="row-delete-hover" onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
                 </div>
               </li>
             ))}
@@ -2539,7 +2539,7 @@ function MiniCalendar({ dateCounts, selectedDate, onSelectDate }) {
 
 function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggle, submitLabel }) {
   const [titre, setTitre] = useState("");
-  const [client, setClient] = useState(clients[0]?.nom || "");
+  const [client, setClient] = useState("");
   const [date, setDate] = useState(toLocalISODate(new Date()));
   const [heure, setHeure] = useState("09:00");
   const [duree, setDuree] = useState("1h");
@@ -2565,9 +2565,15 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
       <div className="form-grid">
         <label>Intitulé<input value={titre} onChange={(e) => setTitre(e.target.value)} placeholder="Ex : Entretien annuel" /></label>
         <label>Client
-          <select value={client} onChange={(e) => setClient(e.target.value)}>
-            {clients.map((c) => <option key={c.id}>{c.nom}</option>)}
-          </select>
+          <input
+            list="planning-clients-datalist"
+            value={client}
+            onChange={(e) => setClient(e.target.value)}
+            placeholder="Rechercher un client existant, ou en taper un nouveau"
+          />
+          <datalist id="planning-clients-datalist">
+            {clients.map((c) => <option key={c.id} value={c.nom} />)}
+          </datalist>
         </label>
         <label>Date<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
         <label>Heure<input value={heure} onChange={(e) => setHeure(e.target.value)} placeholder="09:00" /></label>
@@ -2750,7 +2756,7 @@ function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onRetr
                   </button>
                 )}
                 <button className="btn-small" onClick={(e) => { e.stopPropagation(); onFacturer(f.id); }}>Marquer facturé</button>
-                <span onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
+                <span className="row-delete-hover" onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
               </div>
             </li>
           )}
@@ -2784,7 +2790,7 @@ function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onRetr
                   </button>
                 )}
                 <button className="pill pill-clickable pill-alert" onClick={(e) => { e.stopPropagation(); onPayer(f.id); }}>Marquer payée</button>
-                <span onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
+                <span className="row-delete-hover" onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
               </div>
             </li>
           )}
@@ -2809,7 +2815,7 @@ function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onRetr
                 </div>
                 <div className="row-actions">
                   <span className="pill pill-ok"><Icon name="check" size={13} /> Payée</span>
-                  <span onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
+                  <span className="row-delete-hover" onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
                 </div>
               </li>
             )}
@@ -3268,6 +3274,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .pill-pennylane { background: #E9F0FB; color: #2F6FA3; font-size: 11px; margin-left: 8px; padding: 2px 8px; }
 .pennylane-error-pill { margin-left: 8px; font-size: 11px; padding: 2px 8px; display: inline-flex; align-items: center; gap: 4px; cursor: help; }
 .row-actions { display: flex; align-items: center; gap: 8px; }
+.row-delete-hover { margin-left: auto; opacity: 0; transition: opacity 0.15s ease; flex-shrink: 0; }
+.row:hover .row-delete-hover { opacity: 1; }
 .pill-muted { background: #EDEFEE; color: #7C878B; }
 .pill-clickable { cursor: pointer; }
 
@@ -3528,6 +3536,7 @@ textarea { resize: vertical; }
 }
 
 @media (max-width: 780px) {
+  .row-delete-hover { opacity: 1; }
   .mobile-topbar {
     display: flex; align-items: center; gap: 12px;
     position: sticky; top: 0; z-index: 30;
