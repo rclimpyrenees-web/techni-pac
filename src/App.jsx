@@ -1939,12 +1939,17 @@ function MachineBlock({ machine }) {
 }
 
 function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, focusClient, onDeleteFacturation, settings }) {
-  const [selected, setSelected] = useState(clients[0]?.id);
+  // Liste triée par ordre alphabétique sur le nom, en ignorant la casse et les
+  // accents — l'ordre d'arrivée réseau n'a ainsi plus d'effet sur l'affichage.
+  const clientsTries = [...clients].sort((a, b) =>
+    (a.nom || "").localeCompare(b.nom || "", "fr", { sensitivity: "base" })
+  );
+  const [selected, setSelected] = useState(clientsTries[0]?.id);
   const [editingClient, setEditingClient] = useState(null);
   const [showContract, setShowContract] = useState(false);
   const [showMap, setShowMap] = useState(false);
   const [showMachines, setShowMachines] = useState(false);
-  const client = clients.find((c) => c.id === selected) || clients[0];
+  const client = clients.find((c) => c.id === selected) || clientsTries[0];
 
   const openNew = () => { setEditingClient(null); setShowForm(true); };
   const openEdit = (c) => { setEditingClient(c); setShowForm(true); };
@@ -1984,19 +1989,10 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
 
       {showMap && <ClientsMap clients={clients} onUpdateClient={onUpdate} onOpenClient={(nom) => { const c = clients.find((cl) => cl.nom === nom); if (c) { setSelected(c.id); setShowMap(false); } }} entrepriseNom={settings?.entreprise?.nom} entrepriseAdresse={[settings?.entreprise?.adresse, settings?.entreprise?.codePostalVille].filter(Boolean).join(", ")} />}
 
-      {showForm && (
-        <ClientForm
-          key={editingClient ? editingClient.id : "new"}
-          editingClient={editingClient}
-          onCancel={closeForm}
-          onSubmit={(c) => { editingClient ? onUpdate(c) : onAdd(c); closeForm(); setSelected(c.id); }}
-        />
-      )}
-
       <div className="grid-2">
         <section className="card">
           <ul className="list">
-            {clients.map((c) => (
+            {clientsTries.map((c) => (
               <li key={c.id} className={"row clickable" + (client?.id === c.id ? " selected" : "")} onClick={() => setSelected(c.id)}>
                 <div>
                   <div className="row-title">
@@ -2092,6 +2088,15 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
           </section>
         )}
       </div>
+
+      {showForm && (
+        <ClientForm
+          key={editingClient ? editingClient.id : "new"}
+          editingClient={editingClient}
+          onCancel={closeForm}
+          onSubmit={(c) => { editingClient ? onUpdate(c) : onAdd(c); closeForm(); setSelected(c.id); }}
+        />
+      )}
 
       {client && (
         <ClientHistory client={client} reports={reports} devisAFaire={devisAFaire} devisEnCours={devisEnCours} facturation={facturation} onOpenReport={onOpenReport} onNavigate={onNavigate} onDeleteFacturation={onDeleteFacturation} />
