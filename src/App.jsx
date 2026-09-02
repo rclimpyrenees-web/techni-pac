@@ -3062,11 +3062,13 @@ function ClientsMap({ clients, onUpdateClient, onOpenClient, entrepriseNom, entr
     const points = [];
 
     if (companyCoords) {
-      const monIcone = window.L.divIcon({
-        className: "map-company-icon",
-        html: '<div class="map-company-dot"></div>',
-        iconSize: [16, 16],
-        iconAnchor: [8, 8],
+      const monIcone = window.L.icon({
+        iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
+        shadowUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-shadow.png",
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41],
       });
       const monMarqueur = window.L.marker([companyCoords.lat, companyCoords.lng], { icon: monIcone, zIndexOffset: 1000 }).addTo(markersLayer.current);
       monMarqueur.bindPopup(`<strong>${escapeHtml(entrepriseNom || "Mon entreprise")}</strong><br/>Votre adresse`);
@@ -3460,7 +3462,6 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .map-geocoding-note { font-size: 12.5px; color: #6C7A80; font-style: italic; }
 .map-warning { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #B45F1D; margin-top: 10px; }
 .map-popup-link { color: #2F6FA3; font-weight: 600; }
-.map-company-dot { width: 16px; height: 16px; background: #C0392B; border: 2.5px solid #fff; border-radius: 50%; box-shadow: 0 0 5px rgba(0,0,0,0.45); }
 .page-head h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 30px; font-weight: 700; margin: 0 0 4px; letter-spacing: 0.2px; }
 .page-head p { margin: 0; color: #5E7078; font-size: 14px; }
 .row-between { display: flex; justify-content: space-between; align-items: flex-end; }
