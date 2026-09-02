@@ -1873,6 +1873,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
   const [selected, setSelected] = useState(clients[0]?.id);
   const [editingClient, setEditingClient] = useState(null);
   const [showContract, setShowContract] = useState(false);
+  const [showMap, setShowMap] = useState(false);
   const client = clients.find((c) => c.id === selected) || clients[0];
 
   const openNew = () => { setEditingClient(null); setShowForm(true); };
@@ -1901,10 +1902,17 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
           <h1>Fichier clients</h1>
           <p>{clients.length} clients enregistrés</p>
         </div>
-        <button className="btn-primary" onClick={() => (showForm ? closeForm() : openNew())}>
-          <Icon name="plus" size={16} /> Nouveau client
-        </button>
+        <div className="header-actions">
+          <button className="btn-ghost" onClick={() => setShowMap(!showMap)}>
+            <Icon name="calendar" size={16} /> {showMap ? "Masquer la carte" : "Voir la carte des secteurs"}
+          </button>
+          <button className="btn-primary" onClick={() => (showForm ? closeForm() : openNew())}>
+            <Icon name="plus" size={16} /> Nouveau client
+          </button>
+        </div>
       </header>
+
+      {showMap && <ClientsMap clients={clients} onUpdateClient={onUpdate} onOpenClient={(nom) => { const c = clients.find((cl) => cl.nom === nom); if (c) setSelected(c.id); }} />}
 
       {showForm && (
         <ClientForm
@@ -2916,6 +2924,106 @@ function getEntretienStatus(client, reports) {
 // Formate une date en "YYYY-MM-DD" à partir de ses composants LOCAUX (jour,
 // mois, année) — contrairement à toISOString() qui convertit en UTC et peut
 // décaler la date d'un jour selon le fuseau horaire de l'utilisateur.
+// Convertit une adresse en coordonnées (latitude/longitude) via l'API Adresse
+// du gouvernement français (gratuite, sans clé, données officielles BAN).
+// Retourne null si l'adresse est vide ou n'a pas pu être localisée.
+async function geocodeAddress(adresse) {
+  if (!adresse || !adresse.trim()) return null;
+  try {
+    const res = await fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(adresse)}&limit=1`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const feature = data?.features?.[0];
+    if (!feature) return null;
+    const [lng, lat] = feature.geometry.coordinates;
+    return { lat, lng };
+  } catch (_e) {
+    return null;
+  }
+}
+
+/* ---------- Carte interactive des secteurs clients (Leaflet, chargé via CDN) ---------- */
+function ClientsMap({ clients, onUpdateClient, onOpenClient }) {
+  const mapRef = useRef(null);
+  const mapInstance = useRef(null);
+  const markersLayer = useRef(null);
+  const [geocoding, setGeocoding] = useState(false);
+  const geocodedOnce = useRef(false);
+
+  // Géocode une fois (au premier affichage de la carte) tous les clients qui
+  // ont une adresse mais pas encore de coordonnées enregistrées — puis les
+  // sauvegarde sur la fiche client pour ne plus refaire cet appel ensuite.
+  useEffect(() => {
+    if (geocodedOnce.current) return;
+    geocodedOnce.current = true;
+    const aGeocoder = clients.filter((c) => c.adresse && c.adresse.trim() && (c.lat === undefined || c.lat === null));
+    if (aGeocoder.length === 0) return;
+
+    (async () => {
+      setGeocoding(true);
+      for (const c of aGeocoder) {
+        const coords = await geocodeAddress(c.adresse);
+        onUpdateClient({ ...c, lat: coords ? coords.lat : null, lng: coords ? coords.lng : null });
+        // Petite pause pour rester respectueux de l'API publique et gratuite.
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      setGeocoding(false);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Initialise la carte une seule fois.
+  useEffect(() => {
+    if (!mapRef.current || mapInstance.current || !window.L) return;
+    mapInstance.current = window.L.map(mapRef.current).setView([46.6, 2.4], 6); // Centre France
+    window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors",
+      maxZoom: 19,
+    }).addTo(mapInstance.current);
+    markersLayer.current = window.L.layerGroup().addTo(mapInstance.current);
+  }, []);
+
+  // Met à jour les marqueurs à chaque changement de la liste des clients géocodés.
+  useEffect(() => {
+    if (!mapInstance.current || !markersLayer.current || !window.L) return;
+    markersLayer.current.clearLayers();
+    const points = [];
+    clients.forEach((c) => {
+      if (typeof c.lat === "number" && typeof c.lng === "number") {
+        const marker = window.L.marker([c.lat, c.lng]).addTo(markersLayer.current);
+        marker.bindPopup(
+          `<strong>${escapeHtml(c.nom)}</strong><br/>${escapeHtml(c.adresse || "")}<br/><a href="#" class="map-popup-link">Ouvrir la fiche</a>`
+        );
+        marker.on("popupopen", () => {
+          const link = document.querySelector(".leaflet-popup .map-popup-link");
+          if (link) link.onclick = (e) => { e.preventDefault(); onOpenClient(c.nom); };
+        });
+        points.push([c.lat, c.lng]);
+      }
+    });
+    if (points.length > 0) {
+      mapInstance.current.fitBounds(points, { padding: [30, 30], maxZoom: 12 });
+    }
+  }, [clients]);
+
+  const nonLocalises = clients.filter((c) => c.adresse && c.adresse.trim() && (c.lat === null));
+
+  return (
+    <section className="card">
+      <div className="row-between">
+        <h3>Carte des secteurs clients</h3>
+        {geocoding && <span className="map-geocoding-note">Localisation des adresses en cours…</span>}
+      </div>
+      <div ref={mapRef} className="clients-map" />
+      {nonLocalises.length > 0 && (
+        <p className="map-warning">
+          <Icon name="alert" size={13} /> {nonLocalises.length} adresse{nonLocalises.length > 1 ? "s" : ""} n'a{nonLocalises.length > 1 ? "ont" : ""} pas pu être localisée{nonLocalises.length > 1 ? "s" : ""} sur la carte (vérifiez leur orthographe dans la fiche client).
+        </p>
+      )}
+    </section>
+  );
+}
+
 function toLocalISODate(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -3183,9 +3291,10 @@ function buildReportHtml(report, settings) {
   .pdf-description em { font-style: italic; }
   .pdf-photo-annex { page-break-before: always; padding-top: 8px; }
   .pdf-annex-title { font-family: 'Barlow Condensed', sans-serif; font-size: 22px; font-weight: 700; color: #1B2733; margin-bottom: 18px; }
-  .pdf-photos-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .pdf-photo-item { break-inside: avoid; }
-  .pdf-photo-item img { width: 100%; height: 340px; object-fit: cover; border-radius: 8px; border: 1px solid #D7DEDD; display: block; }
+  .pdf-photos-grid { display: block; }
+  .pdf-photo-item { break-inside: avoid; margin-bottom: 20px; }
+  .pdf-photo-item:nth-child(2n) { page-break-after: always; margin-bottom: 0; }
+  .pdf-photo-item img { width: 100%; height: 430px; object-fit: contain; background: #F4F6F5; border-radius: 8px; border: 1px solid #D7DEDD; display: block; }
   .pdf-signatures { display: flex; gap: 40px; margin-top: 34px; padding-top: 18px; border-top: 1px solid #EAEDEC; }
   .pdf-sig { max-width: 210px; max-height: 85px; display: block; margin-top: 6px; }
   .pdf-footer-clause { margin-top: 28px; padding-top: 14px; border-top: 1px solid #EAEDEC; font-size: 11px; line-height: 1.5; color: #8A959A; white-space: pre-wrap; }
@@ -3261,6 +3370,11 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .mobile-nav-overlay { display: none; }
 
 .page-head { margin-bottom: 22px; }
+.header-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.clients-map { width: 100%; height: 480px; border-radius: 10px; margin-top: 12px; z-index: 1; }
+.map-geocoding-note { font-size: 12.5px; color: #6C7A80; font-style: italic; }
+.map-warning { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #B45F1D; margin-top: 10px; }
+.map-popup-link { color: #2F6FA3; font-weight: 600; }
 .page-head h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 30px; font-weight: 700; margin: 0 0 4px; letter-spacing: 0.2px; }
 .page-head p { margin: 0; color: #5E7078; font-size: 14px; }
 .row-between { display: flex; justify-content: space-between; align-items: flex-end; }
