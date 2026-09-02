@@ -2226,6 +2226,23 @@ function SinglePhotoField({ label, value, onChange }) {
   );
 }
 
+/* ---------- Carte matériel dépliable (formulaire client) ---------- */
+function CollapsibleMachineCard({ machine, index, defaultOpen, onChange, onRemove, removable }) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  const extFirst = normalizeUnits(machine.exterieur)[0];
+  const resume = [machine.type, extFirst?.marque].filter(Boolean).join(" — ") || `Matériel ${index + 1}`;
+
+  return (
+    <div className="card machine-editor-card">
+      <button type="button" className="machine-section-toggle" onClick={() => setOpen(!open)}>
+        <span>{resume}</span>
+        <Icon name={open ? "chevronDown" : "chevronRight"} size={18} />
+      </button>
+      {open && <MachineEditor machine={machine} onChange={onChange} onRemove={onRemove} removable={removable} />}
+    </div>
+  );
+}
+
 function MachineEditor({ machine, onChange, onRemove, removable }) {
   const extList = normalizeUnits(machine.exterieur);
   const intList = normalizeUnits(machine.interieur);
@@ -2414,9 +2431,15 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
 
       <label className="block">Matériel installé</label>
       {machines.map((m, i) => (
-        <div key={m.id} className="card machine-editor-card">
-          <MachineEditor machine={m} onChange={(next) => updateMachine(m.id, next)} onRemove={() => removeMachine(m.id)} removable={machines.length > 1} />
-        </div>
+        <CollapsibleMachineCard
+          key={m.id}
+          machine={m}
+          index={i}
+          defaultOpen={machines.length === 1}
+          onChange={(next) => updateMachine(m.id, next)}
+          onRemove={() => removeMachine(m.id)}
+          removable={machines.length > 1}
+        />
       ))}
       <button type="button" className="btn-ghost small" onClick={addMachine}><Icon name="plus" size={14} /> Ajouter un matériel</button>
 
@@ -3706,6 +3729,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .machine-title { font-size: 13.5px; font-weight: 600; margin-bottom: 6px; color: #1B2733; }
 .machine-date { font-weight: 400; color: #6D7A80; }
 .machine-editor-card { background: #F9FBFC; border-color: #E1E6E5; margin-bottom: 12px; }
+.machine-editor-card .machine-section-toggle { font-size: 14px; font-weight: 600; }
+.machine-editor-card .machine-editor { margin-top: 14px; }
 .unit-block { padding: 12px; background: #fff; border: 1px solid #E4E9E8; border-radius: 8px; margin-bottom: 10px; }
 
 .client-detail-actions { display: flex; gap: 8px; }
