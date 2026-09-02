@@ -1951,6 +1951,8 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
   const [showMachines, setShowMachines] = useState(false);
   const client = clients.find((c) => c.id === selected) || clientsTries[0];
 
+  const formRef = useRef(null);
+
   const openNew = () => { setEditingClient(null); setShowForm(true); };
   const openEdit = (c) => { setEditingClient(c); setShowForm(true); };
   const closeForm = () => { setShowForm(false); setEditingClient(null); };
@@ -1958,6 +1960,15 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
   useEffect(() => {
     setShowContract(false);
   }, [selected]);
+
+  // Le formulaire s'ouvre sous la liste des clients : on fait descendre la page
+  // automatiquement jusqu'à lui, sinon il apparaît hors de l'écran et donne
+  // l'impression que le clic n'a rien fait.
+  useEffect(() => {
+    if (showForm && formRef.current) {
+      formRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [showForm, editingClient]);
 
   useEffect(() => {
     if (focusClient) {
@@ -1989,113 +2000,58 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
 
       {showMap && <ClientsMap clients={clients} onUpdateClient={onUpdate} onOpenClient={(nom) => { const c = clients.find((cl) => cl.nom === nom); if (c) { setSelected(c.id); setShowMap(false); } }} entrepriseNom={settings?.entreprise?.nom} entrepriseAdresse={[settings?.entreprise?.adresse, settings?.entreprise?.codePostalVille].filter(Boolean).join(", ")} />}
 
-      <div className="grid-2">
-        <section className="card">
-          <ul className="list">
-            {clientsTries.map((c) => (
-              <li key={c.id} className={"row clickable" + (client?.id === c.id ? " selected" : "")} onClick={() => setSelected(c.id)}>
-                <div>
-                  <div className="row-title">
-                    {c.nom}
-                    {(() => {
-                      const statut = getEntretienStatus(c, reports);
-                      if (!statut) return null;
-                      if (statut.moisNonDefini) {
-                        return <span className="contrat-dot neutral" title="Mois d'entretien contractuel non renseigné" />;
-                      }
-                      const classe = statut.doneThisYear ? "ok" : statut.isOverdue ? "late" : statut.isUrgent ? "todo" : "neutral";
-                      const titre = statut.doneThisYear
-                        ? `Entretien ${statut.annee} effectué`
-                        : statut.isOverdue
-                        ? `Entretien ${statut.annee} en retard !`
-                        : statut.isUrgent
-                        ? `Entretien ${statut.annee} à faire`
-                        : `Échéance : ${statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })} ${statut.annee}`;
-                      return <span className={"contrat-dot " + classe} title={titre} />;
-                    })()}
-                  </div>
-                  <div className="row-sub">{c.raisonSociale ? c.raisonSociale + " · " : ""}{c.machines.length} matériel(s) installé{c.machines.length > 1 ? "s" : ""}</div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        {client && (
-          <section className="card">
-            <div className="row-between">
+      <section className="card">
+        <ul className="list">
+          {clientsTries.map((c) => (
+            <li key={c.id} className={"row clickable" + (client?.id === c.id ? " selected" : "")} onClick={() => setSelected(c.id)}>
               <div>
-                <h3>{client.nom}</h3>
-                {client.raisonSociale && <div className="client-raison-sociale">{client.raisonSociale}</div>}
-              </div>
-              <div className="client-detail-actions">
-                {client.contrat && (
-                  <button className="btn-ghost small btn-contrat" onClick={() => setShowContract(true)}>
-                    <Icon name="report" size={14} /> Contrat
-                  </button>
-                )}
-                <button className="btn-ghost small" onClick={() => openEdit(client)}>
-                  <Icon name="edit" size={14} /> Modifier
-                </button>
-                <DeleteButton onConfirm={() => onDelete(client)} />
-              </div>
-            </div>
-            {(() => {
-              const statut = getEntretienStatus(client, reports);
-              if (!statut) return null;
-              if (statut.moisNonDefini) {
-                return (
-                  <div className="entretien-annuel-badge neutral">
-                    <Icon name="calendar" size={14} /> Mois de l'entretien contractuel non renseigné — à définir dans « Modifier »
-                  </div>
-                );
-              }
-              if (statut.doneThisYear) {
-                return (
-                  <div className="entretien-annuel-badge ok">
-                    <Icon name="check" size={14} /> Entretien {statut.annee} effectué le {statut.rapportAnnee.date}
-                  </div>
-                );
-              }
-              if (statut.isOverdue) {
-                return (
-                  <div className="entretien-annuel-badge late">
-                    <Icon name="alert" size={14} /> Entretien {statut.annee} en retard !{statut.dueDate ? ` (échéance ${statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })})` : ""}
-                  </div>
-                );
-              }
-              if (statut.isUrgent) {
-                return (
-                  <div className="entretien-annuel-badge todo">
-                    <Icon name="alert" size={14} /> Entretien {statut.annee} à faire{statut.dueDate ? ` (échéance ${statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })})` : ""}
-                  </div>
-                );
-              }
-              return (
-                <div className="entretien-annuel-badge neutral">
-                  <Icon name="calendar" size={14} /> Prochain entretien prévu en {statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })} {statut.annee}
+                <div className="row-title">
+                  {c.nom}
+                  {(() => {
+                    const statut = getEntretienStatus(c, reports);
+                    if (!statut) return null;
+                    if (statut.moisNonDefini) {
+                      return <span className="contrat-dot neutral" title="Mois d'entretien contractuel non renseigné" />;
+                    }
+                    const classe = statut.doneThisYear ? "ok" : statut.isOverdue ? "late" : statut.isUrgent ? "todo" : "neutral";
+                    const titre = statut.doneThisYear
+                      ? `Entretien ${statut.annee} effectué`
+                      : statut.isOverdue
+                      ? `Entretien ${statut.annee} en retard !`
+                      : statut.isUrgent
+                      ? `Entretien ${statut.annee} à faire`
+                      : `Échéance : ${statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })} ${statut.annee}`;
+                    return <span className={"contrat-dot " + classe} title={titre} />;
+                  })()}
                 </div>
-              );
-            })()}
-            <div className="detail-line">{client.adresse}</div>
-            <div className="detail-line">{client.email}</div>
-            <div className="detail-line">{client.tel}</div>
-            <button type="button" className="machine-section-toggle" onClick={() => setShowMachines(!showMachines)}>
-              <h4 className="mt">Matériel installé ({client.machines.length})</h4>
-              <Icon name={showMachines ? "chevronDown" : "chevronRight"} size={18} />
-            </button>
-            {showMachines && client.machines.map((m, i) => <MachineBlock key={i} machine={m} />)}
-          </section>
-        )}
-      </div>
+                <div className="row-sub">{c.raisonSociale ? c.raisonSociale + " · " : ""}{c.machines.length} matériel(s) installé{c.machines.length > 1 ? "s" : ""}</div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {client && !showForm && (
+        <ClientFiche
+          client={client}
+          reports={reports}
+          showMachines={showMachines}
+          setShowMachines={setShowMachines}
+          onEdit={() => openEdit(client)}
+          onDelete={() => onDelete(client)}
+          onShowContract={() => setShowContract(true)}
+        />
+      )}
 
       {showForm && (
-        <ClientForm
-          key={editingClient ? editingClient.id : "new"}
-          editingClient={editingClient}
-          onCancel={closeForm}
-          onSubmit={(c) => { editingClient ? onUpdate(c) : onAdd(c); closeForm(); setSelected(c.id); }}
-        />
+        <div ref={formRef}>
+          <ClientForm
+            key={editingClient ? editingClient.id : "new"}
+            editingClient={editingClient}
+            onCancel={closeForm}
+            onSubmit={(c) => { editingClient ? onUpdate(c) : onAdd(c); closeForm(); setSelected(c.id); }}
+          />
+        </div>
       )}
 
       {client && (
@@ -2111,6 +2067,112 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
         />
       )}
     </div>
+  );
+}
+
+/* ---------- Fiche client complète, en lecture seule ----------
+   Affiche toutes les informations enregistrées sur le client sans aucun champ
+   modifiable : toute modification passe par le bouton « Modifier », qui ouvre
+   le formulaire, puis par l'enregistrement de celui-ci. */
+
+const NOMS_MOIS = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
+
+function nomDuMois(numero) {
+  const n = parseInt(numero, 10);
+  if (!n || n < 1 || n > 12) return "";
+  return NOMS_MOIS[n - 1];
+}
+
+function FicheLigne({ label, value }) {
+  return (
+    <div className="fiche-item">
+      <div className="fiche-label">{label}</div>
+      <div className={"fiche-value" + (value ? "" : " vide")}>{value || "Non renseigné"}</div>
+    </div>
+  );
+}
+
+function ClientFiche({ client, reports, showMachines, setShowMachines, onEdit, onDelete, onShowContract }) {
+  const estProfessionnel = !!(client.raisonSociale || client.siren || client.tva);
+
+  return (
+    <section className="card">
+      <div className="row-between">
+        <div>
+          <h3>{client.nom}</h3>
+          {client.raisonSociale && <div className="client-raison-sociale">{client.raisonSociale}</div>}
+        </div>
+        <div className="client-detail-actions">
+          {client.contrat && (
+            <button className="btn-ghost small btn-contrat" onClick={onShowContract}>
+              <Icon name="report" size={14} /> Contrat
+            </button>
+          )}
+          <button className="btn-ghost small" onClick={onEdit}>
+            <Icon name="edit" size={14} /> Modifier
+          </button>
+          <DeleteButton onConfirm={onDelete} />
+        </div>
+      </div>
+
+      {(() => {
+        const statut = getEntretienStatus(client, reports);
+        if (!statut) return null;
+        if (statut.moisNonDefini) {
+          return (
+            <div className="entretien-annuel-badge neutral">
+              <Icon name="calendar" size={14} /> Mois de l'entretien contractuel non renseigné — à définir dans « Modifier »
+            </div>
+          );
+        }
+        if (statut.doneThisYear) {
+          return (
+            <div className="entretien-annuel-badge ok">
+              <Icon name="check" size={14} /> Entretien {statut.annee} effectué le {statut.rapportAnnee.date}
+            </div>
+          );
+        }
+        if (statut.isOverdue) {
+          return (
+            <div className="entretien-annuel-badge late">
+              <Icon name="alert" size={14} /> Entretien {statut.annee} en retard !{statut.dueDate ? ` (échéance ${statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })})` : ""}
+            </div>
+          );
+        }
+        if (statut.isUrgent) {
+          return (
+            <div className="entretien-annuel-badge todo">
+              <Icon name="alert" size={14} /> Entretien {statut.annee} à faire{statut.dueDate ? ` (échéance ${statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })})` : ""}
+            </div>
+          );
+        }
+        return (
+          <div className="entretien-annuel-badge neutral">
+            <Icon name="calendar" size={14} /> Prochain entretien prévu en {statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })} {statut.annee}
+          </div>
+        );
+      })()}
+
+      <div className="fiche-grid">
+        <FicheLigne label="Nom et prénom" value={client.nom} />
+        <FicheLigne label="Type de client" value={estProfessionnel ? "Professionnel" : "Particulier"} />
+        {estProfessionnel && <FicheLigne label="Raison sociale" value={client.raisonSociale} />}
+        {estProfessionnel && <FicheLigne label="SIREN" value={client.siren} />}
+        {estProfessionnel && <FicheLigne label="N° de TVA intracommunautaire" value={client.tva} />}
+        <FicheLigne label="Téléphone" value={client.tel} />
+        <FicheLigne label="Email" value={client.email} />
+        <FicheLigne label="Adresse" value={client.adresse} />
+        <FicheLigne label="Mois de l'entretien contractuel" value={nomDuMois(client.moisEcheance)} />
+        <FicheLigne label="Contrat de maintenance" value={client.contrat ? (client.contrat.nom || "Contrat enregistré") : ""} />
+      </div>
+
+      <button type="button" className="machine-section-toggle" onClick={() => setShowMachines(!showMachines)}>
+        <h4 className="mt">Matériel installé ({client.machines.length})</h4>
+        <Icon name={showMachines ? "chevronDown" : "chevronRight"} size={18} />
+      </button>
+      {showMachines && client.machines.length === 0 && <p className="empty">Aucun matériel enregistré pour ce client.</p>}
+      {showMachines && client.machines.map((m, i) => <MachineBlock key={i} machine={m} />)}
+    </section>
   );
 }
 
@@ -3740,6 +3802,11 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .unit-block { padding: 12px; background: #fff; border: 1px solid #E4E9E8; border-radius: 8px; margin-bottom: 10px; }
 
 .client-detail-actions { display: flex; gap: 8px; }
+.fiche-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px 22px; margin: 14px 0 4px; }
+.fiche-item { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; border-bottom: 1px solid #EEF1F0; }
+.fiche-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; color: #8A959A; }
+.fiche-value { font-size: 14px; color: #1B2733; word-break: break-word; }
+.fiche-value.vide { color: #A2ACAF; font-style: italic; }
 .client-raison-sociale { font-size: 13px; color: #6C7A80; margin-top: 2px; }
 .entretien-annuel-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 8px; margin: 10px 0; }
 .entretien-annuel-badge.ok { background: #E3F1E8; color: #2E6B45; }
