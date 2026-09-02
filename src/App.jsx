@@ -1898,47 +1898,39 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 }
 
 /* ---------- Clients ---------- */
-/* ---------- Bloc matériel dépliable (fiche client) ---------- */
+/* ---------- Bloc matériel (affichage, fiche client) ---------- */
 function MachineBlock({ machine }) {
-  const [open, setOpen] = useState(false);
   const extUnits = normalizeUnits(machine.exterieur);
   const intUnits = normalizeUnits(machine.interieur);
 
   return (
     <div className="machine-block">
-      <button type="button" className="machine-block-header" onClick={() => setOpen(!open)}>
-        <Icon name={open ? "chevronDown" : "chevronRight"} size={16} />
-        <span className="machine-title">{machine.type} <span className="machine-date">— installée {machine.date}</span></span>
-      </button>
-      {open && (
-        <div className="machine-block-body">
-          <table className="mini-table">
-            <thead><tr><th></th><th>Marque</th><th>Modèle</th><th>N° série</th></tr></thead>
-            <tbody>
-              {extUnits.map((u, idx) => (
-                <tr key={"e" + idx}><td>Groupe extérieur{extUnits.length > 1 ? ` ${idx + 1}` : ""}</td><td>{u.marque}</td><td>{u.modele}</td><td>{u.serie}</td></tr>
-              ))}
-              {intUnits.map((u, idx) => (
-                <tr key={"i" + idx}><td>Unité intérieure{intUnits.length > 1 ? ` ${idx + 1}` : ""}</td><td>{u.marque}</td><td>{u.modele}</td><td>{u.serie}</td></tr>
-              ))}
-            </tbody>
-          </table>
-          {(extUnits.some((u) => u.photo) || intUnits.some((u) => u.photo)) && (
-            <div className="machine-photos">
-              {extUnits.map((u, idx) => u.photo && (
-                <div key={"pe" + idx} className="machine-photo-item">
-                  <img src={u.photo} alt="Groupe extérieur" />
-                  <span>Groupe extérieur{extUnits.length > 1 ? ` ${idx + 1}` : ""}</span>
-                </div>
-              ))}
-              {intUnits.map((u, idx) => u.photo && (
-                <div key={"pi" + idx} className="machine-photo-item">
-                  <img src={u.photo} alt="Unité intérieure" />
-                  <span>Unité intérieure{intUnits.length > 1 ? ` ${idx + 1}` : ""}</span>
-                </div>
-              ))}
+      <div className="machine-title">{machine.type} <span className="machine-date">— installée {machine.date}</span></div>
+      <table className="mini-table">
+        <thead><tr><th></th><th>Marque</th><th>Modèle</th><th>N° série</th></tr></thead>
+        <tbody>
+          {extUnits.map((u, idx) => (
+            <tr key={"e" + idx}><td>Groupe extérieur{extUnits.length > 1 ? ` ${idx + 1}` : ""}</td><td>{u.marque}</td><td>{u.modele}</td><td>{u.serie}</td></tr>
+          ))}
+          {intUnits.map((u, idx) => (
+            <tr key={"i" + idx}><td>Unité intérieure{intUnits.length > 1 ? ` ${idx + 1}` : ""}</td><td>{u.marque}</td><td>{u.modele}</td><td>{u.serie}</td></tr>
+          ))}
+        </tbody>
+      </table>
+      {(extUnits.some((u) => u.photo) || intUnits.some((u) => u.photo)) && (
+        <div className="machine-photos">
+          {extUnits.map((u, idx) => u.photo && (
+            <div key={"pe" + idx} className="machine-photo-item">
+              <img src={u.photo} alt="Groupe extérieur" />
+              <span>Groupe extérieur{extUnits.length > 1 ? ` ${idx + 1}` : ""}</span>
             </div>
-          )}
+          ))}
+          {intUnits.map((u, idx) => u.photo && (
+            <div key={"pi" + idx} className="machine-photo-item">
+              <img src={u.photo} alt="Unité intérieure" />
+              <span>Unité intérieure{intUnits.length > 1 ? ` ${idx + 1}` : ""}</span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -1950,6 +1942,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
   const [editingClient, setEditingClient] = useState(null);
   const [showContract, setShowContract] = useState(false);
   const [showMap, setShowMap] = useState(false);
+  const [showMachines, setShowMachines] = useState(false);
   const client = clients.find((c) => c.id === selected) || clients[0];
 
   const openNew = () => { setEditingClient(null); setShowForm(true); };
@@ -2090,8 +2083,11 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
             <div className="detail-line">{client.adresse}</div>
             <div className="detail-line">{client.email}</div>
             <div className="detail-line">{client.tel}</div>
-            <h4 className="mt">Matériel installé</h4>
-            {client.machines.map((m, i) => <MachineBlock key={i} machine={m} />)}
+            <button type="button" className="machine-section-toggle" onClick={() => setShowMachines(!showMachines)}>
+              <h4 className="mt">Matériel installé ({client.machines.length})</h4>
+              <Icon name={showMachines ? "chevronDown" : "chevronRight"} size={18} />
+            </button>
+            {showMachines && client.machines.map((m, i) => <MachineBlock key={i} machine={m} />)}
           </section>
         )}
       </div>
@@ -3705,11 +3701,9 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .mini-table td:first-child, .mini-table th:first-child { color: #6D7A80; }
 .mini-table th { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.3px; color: #8A959A; }
 
-.machine-block { margin-bottom: 10px; border: 1px solid #E4E9E8; border-radius: 8px; overflow: hidden; }
-.machine-block-header { display: flex; align-items: center; gap: 8px; width: 100%; background: #F9FBFC; border: none; padding: 10px 12px; cursor: pointer; text-align: left; color: #4A5860; }
-.machine-block-header:hover { background: #F0F3F2; }
-.machine-block-body { padding: 12px; }
-.machine-title { font-size: 13.5px; font-weight: 600; margin-bottom: 0; color: #1B2733; }
+.machine-block { margin-bottom: 16px; padding: 12px; border: 1px solid #E4E9E8; border-radius: 8px; }
+.machine-section-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; background: transparent; border: none; padding: 0; cursor: pointer; color: #1B2733; }
+.machine-title { font-size: 13.5px; font-weight: 600; margin-bottom: 6px; color: #1B2733; }
 .machine-date { font-weight: 400; color: #6D7A80; }
 .machine-editor-card { background: #F9FBFC; border-color: #E1E6E5; margin-bottom: 12px; }
 .unit-block { padding: 12px; background: #fff; border: 1px solid #E4E9E8; border-radius: 8px; margin-bottom: 10px; }
