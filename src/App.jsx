@@ -192,7 +192,7 @@ export default function App() {
 
   const { items: clients, upsert: upsertClient, remove: removeClient, loading: loadingClients } = useSyncedCollection("clients", initialClients);
   const { items: reportsRaw, upsert: upsertReport, remove: removeReport, loading: loadingReports } = useSyncedCollection("reports", initialReports);
-  const { items: planningRaw, upsert: upsertPlanning, loading: loadingPlanning } = useSyncedCollection("planning", initialPlanning);
+  const { items: planningRaw, upsert: upsertPlanning, remove: removePlanning, loading: loadingPlanning } = useSyncedCollection("planning", initialPlanning);
   const { items: devisAFaire, upsert: upsertDevisAFaire, remove: removeDevisAFaire, loading: loadingDevisAFaire } = useSyncedCollection("devis_a_faire", initialDevisAFaire);
   const { items: devisEnCours, upsert: upsertDevisEnCours, remove: removeDevisEnCours, loading: loadingDevisEnCours } = useSyncedCollection("devis_en_cours", initialDevisEnCours);
   const { items: facturation, upsert: upsertFacturation, remove: removeFacturation, loading: loadingFacturation } = useSyncedCollection("facturation", initialFacturation);
@@ -538,6 +538,7 @@ export default function App() {
             onToggle={togglePlanning}
             onToggleRappel={toggleRappel}
             onCreateReport={startReportFromTask}
+            onDelete={removePlanning}
           />
         )}
 
@@ -550,6 +551,7 @@ export default function App() {
             onAdd={(p) => upsertPlanning(p)}
             onToggle={togglePlanning}
             onToggleRappel={toggleRappel}
+            onDelete={removePlanning}
           />
         )}
 
@@ -716,7 +718,7 @@ function typePillClass(t) {
 }
 
 /* ---------- Rappels ---------- */
-function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, onToggleRappel }) {
+function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, onToggleRappel, onDelete }) {
   const items = planning.filter((p) => p.rappel && p.categorie !== "intervention");
   const grouped = items.reduce((acc, p) => {
     (acc[p.date] = acc[p.date] || []).push(p);
@@ -775,6 +777,7 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
                 <button className="icon-btn" onClick={() => openEditForm(p)} title="Modifier ce rappel">
                   <Icon name="edit" size={15} />
                 </button>
+                <DeleteButton onConfirm={() => onDelete(p.id)} label="" />
                 <button className="pill pill-clickable pill-warm" onClick={() => onToggleRappel(p.id)}>
                   <Icon name="bell" size={13} /> Désactiver le rappel
                 </button>
@@ -2480,7 +2483,7 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
 }
 
 /* ---------- Planning ---------- */
-function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, onToggleRappel, onCreateReport }) {
+function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, onToggleRappel, onCreateReport, onDelete }) {
   const interventions = planning.filter((p) => p.categorie !== "relance");
   const grouped = interventions.reduce((acc, p) => {
     (acc[p.date] = acc[p.date] || []).push(p);
@@ -2542,6 +2545,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
                   <button className="icon-btn" onClick={(e) => { e.stopPropagation(); openEditTaskForm(p); }} title="Modifier cette tâche">
                     <Icon name="edit" size={15} />
                   </button>
+                  <span onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDelete(p.id)} label="" /></span>
                   <button className={"pill pill-clickable " + (p.rappel ? "pill-warm" : "pill-muted")} onClick={(e) => { e.stopPropagation(); onToggleRappel(p.id); }}>
                     <Icon name="bell" size={13} /> {p.rappel ? "Rappel actif" : "Sans rappel"}
                   </button>
