@@ -524,6 +524,7 @@ export default function App() {
             onNavigate={setTab}
             focusClient={focusClient}
             onDeleteFacturation={handleDeleteFacturation}
+            settings={settings}
           />
         )}
 
@@ -1869,7 +1870,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 }
 
 /* ---------- Clients ---------- */
-function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, focusClient, onDeleteFacturation }) {
+function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, focusClient, onDeleteFacturation, settings }) {
   const [selected, setSelected] = useState(clients[0]?.id);
   const [editingClient, setEditingClient] = useState(null);
   const [showContract, setShowContract] = useState(false);
@@ -1912,7 +1913,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
         </div>
       </header>
 
-      {showMap && <ClientsMap clients={clients} onUpdateClient={onUpdate} onOpenClient={(nom) => { const c = clients.find((cl) => cl.nom === nom); if (c) setSelected(c.id); }} />}
+      {showMap && <ClientsMap clients={clients} onUpdateClient={onUpdate} onOpenClient={(nom) => { const c = clients.find((cl) => cl.nom === nom); if (c) setSelected(c.id); }} entrepriseNom={settings?.entreprise?.nom} entrepriseAdresse={[settings?.entreprise?.adresse, settings?.entreprise?.codePostalVille].filter(Boolean).join(", ")} />}
 
       {showForm && (
         <ClientForm
@@ -2015,34 +2016,42 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
             <div className="detail-line">{client.email}</div>
             <div className="detail-line">{client.tel}</div>
             <h4 className="mt">Matériel installé</h4>
-            {client.machines.map((m, i) => (
-              <div key={i} className="machine-block">
-                <div className="machine-title">{m.type} <span className="machine-date">— installée {m.date}</span></div>
-                <table className="mini-table">
-                  <thead><tr><th></th><th>Marque</th><th>Modèle</th><th>N° série</th></tr></thead>
-                  <tbody>
-                    <tr><td>Groupe extérieur</td><td>{m.exterieur?.marque}</td><td>{m.exterieur?.modele}</td><td>{m.exterieur?.serie}</td></tr>
-                    <tr><td>Unité intérieure</td><td>{m.interieur?.marque}</td><td>{m.interieur?.modele}</td><td>{m.interieur?.serie}</td></tr>
-                  </tbody>
-                </table>
-                {(m.exterieur?.photo || m.interieur?.photo) && (
-                  <div className="machine-photos">
-                    {m.exterieur?.photo && (
-                      <div className="machine-photo-item">
-                        <img src={m.exterieur.photo} alt="Groupe extérieur" />
-                        <span>Groupe extérieur</span>
-                      </div>
-                    )}
-                    {m.interieur?.photo && (
-                      <div className="machine-photo-item">
-                        <img src={m.interieur.photo} alt="Unité intérieure" />
-                        <span>Unité intérieure</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
+            {client.machines.map((m, i) => {
+              const extUnits = normalizeUnits(m.exterieur);
+              const intUnits = normalizeUnits(m.interieur);
+              return (
+                <div key={i} className="machine-block">
+                  <div className="machine-title">{m.type} <span className="machine-date">— installée {m.date}</span></div>
+                  <table className="mini-table">
+                    <thead><tr><th></th><th>Marque</th><th>Modèle</th><th>N° série</th></tr></thead>
+                    <tbody>
+                      {extUnits.map((u, idx) => (
+                        <tr key={"e" + idx}><td>Groupe extérieur{extUnits.length > 1 ? ` ${idx + 1}` : ""}</td><td>{u.marque}</td><td>{u.modele}</td><td>{u.serie}</td></tr>
+                      ))}
+                      {intUnits.map((u, idx) => (
+                        <tr key={"i" + idx}><td>Unité intérieure{intUnits.length > 1 ? ` ${idx + 1}` : ""}</td><td>{u.marque}</td><td>{u.modele}</td><td>{u.serie}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {(extUnits.some((u) => u.photo) || intUnits.some((u) => u.photo)) && (
+                    <div className="machine-photos">
+                      {extUnits.map((u, idx) => u.photo && (
+                        <div key={"pe" + idx} className="machine-photo-item">
+                          <img src={u.photo} alt="Groupe extérieur" />
+                          <span>Groupe extérieur{extUnits.length > 1 ? ` ${idx + 1}` : ""}</span>
+                        </div>
+                      ))}
+                      {intUnits.map((u, idx) => u.photo && (
+                        <div key={"pi" + idx} className="machine-photo-item">
+                          <img src={u.photo} alt="Unité intérieure" />
+                          <span>Unité intérieure{intUnits.length > 1 ? ` ${idx + 1}` : ""}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </section>
         )}
       </div>
@@ -2182,8 +2191,15 @@ function SinglePhotoField({ label, value, onChange }) {
 }
 
 function MachineEditor({ machine, onChange, onRemove, removable }) {
-  const updateExt = (patch) => onChange({ ...machine, exterieur: { ...machine.exterieur, ...patch } });
-  const updateInt = (patch) => onChange({ ...machine, interieur: { ...machine.interieur, ...patch } });
+  const extList = normalizeUnits(machine.exterieur);
+  const intList = normalizeUnits(machine.interieur);
+
+  const updateExtAt = (idx, patch) => onChange({ ...machine, exterieur: extList.map((u, i) => (i === idx ? { ...u, ...patch } : u)) });
+  const updateIntAt = (idx, patch) => onChange({ ...machine, interieur: intList.map((u, i) => (i === idx ? { ...u, ...patch } : u)) });
+  const addExt = () => onChange({ ...machine, exterieur: [...extList, { marque: "", modele: "", serie: "", photo: "" }] });
+  const addInt = () => onChange({ ...machine, interieur: [...intList, { marque: "", modele: "", serie: "", photo: "" }] });
+  const removeExtAt = (idx) => onChange({ ...machine, exterieur: extList.filter((_, i) => i !== idx) });
+  const removeIntAt = (idx) => onChange({ ...machine, interieur: intList.filter((_, i) => i !== idx) });
 
   return (
     <div className="machine-editor">
@@ -2201,22 +2217,59 @@ function MachineEditor({ machine, onChange, onRemove, removable }) {
       </div>
 
       <h4 className="mt">Groupe extérieur</h4>
-      <div className="form-grid three">
-        <label>Marque<input value={machine.exterieur.marque} onChange={(e) => updateExt({ marque: e.target.value })} placeholder="Ex : Daikin" /></label>
-        <label>Modèle<input value={machine.exterieur.modele} onChange={(e) => updateExt({ modele: e.target.value })} placeholder="Ex : Altherma 3" /></label>
-        <label>N° de série<input value={machine.exterieur.serie} onChange={(e) => updateExt({ serie: e.target.value })} placeholder="N° de série" /></label>
-      </div>
-      <SinglePhotoField label="Photo du groupe extérieur" value={machine.exterieur.photo} onChange={(photo) => updateExt({ photo })} />
+      {extList.map((u, idx) => (
+        <div key={idx} className="unit-block">
+          <div className="form-grid three">
+            <label>Marque<input value={u.marque} onChange={(e) => updateExtAt(idx, { marque: e.target.value })} placeholder="Ex : Daikin" /></label>
+            <label>Modèle<input value={u.modele} onChange={(e) => updateExtAt(idx, { modele: e.target.value })} placeholder="Ex : Altherma 3" /></label>
+            <label>N° de série<input value={u.serie} onChange={(e) => updateExtAt(idx, { serie: e.target.value })} placeholder="N° de série" /></label>
+          </div>
+          <div className="row-between">
+            <SinglePhotoField label="Photo du groupe extérieur" value={u.photo} onChange={(photo) => updateExtAt(idx, { photo })} />
+            {extList.length > 1 && (
+              <button type="button" className="icon-btn" onClick={() => removeExtAt(idx)} title="Retirer ce groupe extérieur">
+                <Icon name="trash" size={15} />
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+      <button type="button" className="btn-ghost small" onClick={addExt}>
+        <Icon name="plus" size={14} /> Ajouter un groupe extérieur
+      </button>
 
       <h4 className="mt">Unité intérieure</h4>
-      <div className="form-grid three">
-        <label>Marque<input value={machine.interieur.marque} onChange={(e) => updateInt({ marque: e.target.value })} placeholder="Ex : Daikin" /></label>
-        <label>Modèle<input value={machine.interieur.modele} onChange={(e) => updateInt({ modele: e.target.value })} placeholder="Ex : EHVX08S23D6V" /></label>
-        <label>N° de série<input value={machine.interieur.serie} onChange={(e) => updateInt({ serie: e.target.value })} placeholder="N° de série" /></label>
-      </div>
-      <SinglePhotoField label="Photo de l'unité intérieure" value={machine.interieur.photo} onChange={(photo) => updateInt({ photo })} />
+      {intList.map((u, idx) => (
+        <div key={idx} className="unit-block">
+          <div className="form-grid three">
+            <label>Marque<input value={u.marque} onChange={(e) => updateIntAt(idx, { marque: e.target.value })} placeholder="Ex : Daikin" /></label>
+            <label>Modèle<input value={u.modele} onChange={(e) => updateIntAt(idx, { modele: e.target.value })} placeholder="Ex : EHVX08S23D6V" /></label>
+            <label>N° de série<input value={u.serie} onChange={(e) => updateIntAt(idx, { serie: e.target.value })} placeholder="N° de série" /></label>
+          </div>
+          <div className="row-between">
+            <SinglePhotoField label="Photo de l'unité intérieure" value={u.photo} onChange={(photo) => updateIntAt(idx, { photo })} />
+            {intList.length > 1 && (
+              <button type="button" className="icon-btn" onClick={() => removeIntAt(idx)} title="Retirer cette unité intérieure">
+                <Icon name="trash" size={15} />
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+      <button type="button" className="btn-ghost small" onClick={addInt}>
+        <Icon name="plus" size={14} /> Ajouter une unité intérieure
+      </button>
     </div>
   );
+}
+
+// Convertit exterieur/interieur en tableau d'unités, quel que soit le format
+// stocké : ancien format (un seul objet) ou nouveau format (tableau) —
+// garantit la compatibilité avec les clients déjà enregistrés.
+function normalizeUnits(u) {
+  if (Array.isArray(u)) return u.length > 0 ? u : [{ marque: "", modele: "", serie: "", photo: "" }];
+  if (u && typeof u === "object") return [u];
+  return [{ marque: "", modele: "", serie: "", photo: "" }];
 }
 
 function blankMachine() {
@@ -2224,8 +2277,8 @@ function blankMachine() {
     id: "m" + Date.now() + Math.random().toString(16).slice(2),
     type: installTypes[0],
     date: new Date().toLocaleDateString("fr-FR"),
-    exterieur: { marque: "", modele: "", serie: "", photo: "" },
-    interieur: { marque: "", modele: "", serie: "", photo: "" },
+    exterieur: [{ marque: "", modele: "", serie: "", photo: "" }],
+    interieur: [{ marque: "", modele: "", serie: "", photo: "" }],
   };
 }
 
@@ -2233,6 +2286,7 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
   const isEditing = !!editingClient;
   const [nom, setNom] = useState(editingClient?.nom || "");
   const [raisonSociale, setRaisonSociale] = useState(editingClient?.raisonSociale || "");
+  const [estProfessionnel, setEstProfessionnel] = useState(!!editingClient?.raisonSociale);
   const [moisEcheance, setMoisEcheance] = useState(editingClient?.moisEcheance || "");
   const [adresse, setAdresse] = useState(editingClient?.adresse || "");
   const [email, setEmail] = useState(editingClient?.email || "");
@@ -2242,8 +2296,8 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
       id: "m" + i + "_" + Date.now(),
       type: m.type || installTypes[0],
       date: m.date || new Date().toLocaleDateString("fr-FR"),
-      exterieur: { marque: "", modele: "", serie: "", photo: "", ...m.exterieur },
-      interieur: { marque: "", modele: "", serie: "", photo: "", ...m.interieur },
+      exterieur: normalizeUnits(m.exterieur).map((u) => ({ marque: "", modele: "", serie: "", photo: "", ...u })),
+      interieur: normalizeUnits(m.interieur).map((u) => ({ marque: "", modele: "", serie: "", photo: "", ...u })),
     }));
     return existing.length > 0 ? existing : [blankMachine()];
   });
@@ -2270,7 +2324,10 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
   const submit = () => {
     if (!nom) return;
     const cleanedMachines = machines
-      .filter((m) => m.exterieur.marque.trim() || m.interieur.marque.trim() || m.exterieur.serie.trim() || m.interieur.serie.trim())
+      .filter((m) =>
+        m.exterieur.some((u) => u.marque.trim() || u.serie.trim()) ||
+        m.interieur.some((u) => u.marque.trim() || u.serie.trim())
+      )
       .map(({ id, ...m }) => m);
     onSubmit({
       id: isEditing ? editingClient.id : "c" + Date.now(),
@@ -2284,7 +2341,12 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
     <div className="card form-card">
       <div className="form-grid">
         <label>Nom et prénom<input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ex : Martin Jean" /></label>
-        <label>Raison sociale (facultatif)<input value={raisonSociale} onChange={(e) => setRaisonSociale(e.target.value)} placeholder="Ex : Garcia Bâtiment SARL" /></label>
+        <label className="check-inline">
+          <input type="checkbox" checked={estProfessionnel} onChange={(e) => { setEstProfessionnel(e.target.checked); if (!e.target.checked) setRaisonSociale(""); }} /> Professionnel
+        </label>
+        {estProfessionnel && (
+          <label>Raison sociale<input value={raisonSociale} onChange={(e) => setRaisonSociale(e.target.value)} placeholder="Ex : Garcia Bâtiment SARL" /></label>
+        )}
         <label>Téléphone<input value={tel} onChange={(e) => setTel(e.target.value)} placeholder="06 00 00 00 00" /></label>
         <label>Adresse<input value={adresse} onChange={(e) => setAdresse(e.target.value)} placeholder="Rue, code postal, ville" /></label>
         <label>Email<input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nom@email.fr" /></label>
@@ -2943,12 +3005,22 @@ async function geocodeAddress(adresse) {
 }
 
 /* ---------- Carte interactive des secteurs clients (Leaflet, chargé via CDN) ---------- */
-function ClientsMap({ clients, onUpdateClient, onOpenClient }) {
+function ClientsMap({ clients, onUpdateClient, onOpenClient, entrepriseNom, entrepriseAdresse }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const markersLayer = useRef(null);
   const [geocoding, setGeocoding] = useState(false);
   const geocodedOnce = useRef(false);
+  const [companyCoords, setCompanyCoords] = useState(null);
+  const companyGeocodedOnce = useRef(false);
+
+  // Géocode une seule fois votre propre adresse d'entreprise, pour l'afficher
+  // en repère rouge distinct sur la carte (repère visuel de distance).
+  useEffect(() => {
+    if (companyGeocodedOnce.current || !entrepriseAdresse || !entrepriseAdresse.trim()) return;
+    companyGeocodedOnce.current = true;
+    geocodeAddress(entrepriseAdresse).then((coords) => { if (coords) setCompanyCoords(coords); });
+  }, [entrepriseAdresse]);
 
   // Géocode une fois (au premier affichage de la carte) tous les clients qui
   // ont une adresse mais pas encore de coordonnées enregistrées — puis les
@@ -2988,6 +3060,19 @@ function ClientsMap({ clients, onUpdateClient, onOpenClient }) {
     if (!mapInstance.current || !markersLayer.current || !window.L) return;
     markersLayer.current.clearLayers();
     const points = [];
+
+    if (companyCoords) {
+      const monIcone = window.L.divIcon({
+        className: "map-company-icon",
+        html: '<div class="map-company-dot"></div>',
+        iconSize: [16, 16],
+        iconAnchor: [8, 8],
+      });
+      const monMarqueur = window.L.marker([companyCoords.lat, companyCoords.lng], { icon: monIcone, zIndexOffset: 1000 }).addTo(markersLayer.current);
+      monMarqueur.bindPopup(`<strong>${escapeHtml(entrepriseNom || "Mon entreprise")}</strong><br/>Votre adresse`);
+      points.push([companyCoords.lat, companyCoords.lng]);
+    }
+
     clients.forEach((c) => {
       if (typeof c.lat === "number" && typeof c.lng === "number") {
         const marker = window.L.marker([c.lat, c.lng]).addTo(markersLayer.current);
@@ -3004,7 +3089,7 @@ function ClientsMap({ clients, onUpdateClient, onOpenClient }) {
     if (points.length > 0) {
       mapInstance.current.fitBounds(points, { padding: [30, 30], maxZoom: 12 });
     }
-  }, [clients]);
+  }, [clients, companyCoords]);
 
   const nonLocalises = clients.filter((c) => c.adresse && c.adresse.trim() && (c.lat === null));
 
@@ -3375,6 +3460,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .map-geocoding-note { font-size: 12.5px; color: #6C7A80; font-style: italic; }
 .map-warning { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #B45F1D; margin-top: 10px; }
 .map-popup-link { color: #2F6FA3; font-weight: 600; }
+.map-company-dot { width: 16px; height: 16px; background: #C0392B; border: 2.5px solid #fff; border-radius: 50%; box-shadow: 0 0 5px rgba(0,0,0,0.45); }
 .page-head h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 30px; font-weight: 700; margin: 0 0 4px; letter-spacing: 0.2px; }
 .page-head p { margin: 0; color: #5E7078; font-size: 14px; }
 .row-between { display: flex; justify-content: space-between; align-items: flex-end; }
@@ -3509,6 +3595,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .machine-title { font-size: 13.5px; font-weight: 600; margin-bottom: 6px; }
 .machine-date { font-weight: 400; color: #6D7A80; }
 .machine-editor-card { background: #F9FBFC; border-color: #E1E6E5; margin-bottom: 12px; }
+.unit-block { padding: 12px; background: #fff; border: 1px solid #E4E9E8; border-radius: 8px; margin-bottom: 10px; }
 
 .client-detail-actions { display: flex; gap: 8px; }
 .client-raison-sociale { font-size: 13px; color: #6C7A80; margin-top: 2px; }
