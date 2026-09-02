@@ -116,6 +116,7 @@ const Icon = ({ name, size = 18 }) => {
     sync: "M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15",
     chevronLeft: "M15 18l-6-6 6-6",
     chevronRight: "M9 18l6-6-6-6",
+    chevronDown: "M6 9l6 6 6-6",
     menu: "M3 12h18M3 6h18M3 18h18",
     close: "M18 6L6 18M6 6l12 12",
   };
@@ -602,7 +603,8 @@ export default function App() {
 
 /* ---------- Dashboard ---------- */
 function Dashboard({ upcoming, relances, aFacturer, planning, reports, rappelsActifs, onToggle, onNavigate, onOpenReport }) {
-  const next = planning.filter((p) => !p.fait && p.categorie !== "relance").slice(0, 4);
+  const todayIso = toLocalISODate(new Date());
+  const next = planning.filter((p) => !p.fait && p.categorie !== "relance" && p.date === todayIso);
 
   const now = new Date();
   const moisEnCours = now.getMonth() + 1;
@@ -652,13 +654,14 @@ function Dashboard({ upcoming, relances, aFacturer, planning, reports, rappelsAc
 
       <div className="grid-2">
         <section className="card">
-          <h3>Prochaines interventions</h3>
+          <h3>Interventions du jour</h3>
+          {next.length === 0 && <p className="empty">Aucune intervention prévue aujourd'hui.</p>}
           <ul className="list">
             {next.map((p) => (
               <li key={p.id} className="row clickable" onClick={() => onNavigate("planning")} title="Voir dans le planning">
                 <div>
                   <div className="row-title">{p.titre}</div>
-                  <div className="row-sub">{p.client} · {p.date.split("-").reverse().join("/")} {p.heure !== "—" ? `à ${p.heure}` : ""}</div>
+                  <div className="row-sub">{p.client} {p.heure !== "—" ? `· à ${p.heure}` : ""}{p.duree && ` · ${p.duree}`}</div>
                 </div>
                 {p.rappel && <span className="pill pill-warm"><Icon name="bell" size={13} /> rappel</span>}
               </li>
@@ -1895,6 +1898,53 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 }
 
 /* ---------- Clients ---------- */
+/* ---------- Bloc matériel dépliable (fiche client) ---------- */
+function MachineBlock({ machine }) {
+  const [open, setOpen] = useState(false);
+  const extUnits = normalizeUnits(machine.exterieur);
+  const intUnits = normalizeUnits(machine.interieur);
+
+  return (
+    <div className="machine-block">
+      <button type="button" className="machine-block-header" onClick={() => setOpen(!open)}>
+        <Icon name={open ? "chevronDown" : "chevronRight"} size={16} />
+        <span className="machine-title">{machine.type} <span className="machine-date">— installée {machine.date}</span></span>
+      </button>
+      {open && (
+        <div className="machine-block-body">
+          <table className="mini-table">
+            <thead><tr><th></th><th>Marque</th><th>Modèle</th><th>N° série</th></tr></thead>
+            <tbody>
+              {extUnits.map((u, idx) => (
+                <tr key={"e" + idx}><td>Groupe extérieur{extUnits.length > 1 ? ` ${idx + 1}` : ""}</td><td>{u.marque}</td><td>{u.modele}</td><td>{u.serie}</td></tr>
+              ))}
+              {intUnits.map((u, idx) => (
+                <tr key={"i" + idx}><td>Unité intérieure{intUnits.length > 1 ? ` ${idx + 1}` : ""}</td><td>{u.marque}</td><td>{u.modele}</td><td>{u.serie}</td></tr>
+              ))}
+            </tbody>
+          </table>
+          {(extUnits.some((u) => u.photo) || intUnits.some((u) => u.photo)) && (
+            <div className="machine-photos">
+              {extUnits.map((u, idx) => u.photo && (
+                <div key={"pe" + idx} className="machine-photo-item">
+                  <img src={u.photo} alt="Groupe extérieur" />
+                  <span>Groupe extérieur{extUnits.length > 1 ? ` ${idx + 1}` : ""}</span>
+                </div>
+              ))}
+              {intUnits.map((u, idx) => u.photo && (
+                <div key={"pi" + idx} className="machine-photo-item">
+                  <img src={u.photo} alt="Unité intérieure" />
+                  <span>Unité intérieure{intUnits.length > 1 ? ` ${idx + 1}` : ""}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, focusClient, onDeleteFacturation, settings }) {
   const [selected, setSelected] = useState(clients[0]?.id);
   const [editingClient, setEditingClient] = useState(null);
@@ -2041,42 +2091,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
             <div className="detail-line">{client.email}</div>
             <div className="detail-line">{client.tel}</div>
             <h4 className="mt">Matériel installé</h4>
-            {client.machines.map((m, i) => {
-              const extUnits = normalizeUnits(m.exterieur);
-              const intUnits = normalizeUnits(m.interieur);
-              return (
-                <div key={i} className="machine-block">
-                  <div className="machine-title">{m.type} <span className="machine-date">— installée {m.date}</span></div>
-                  <table className="mini-table">
-                    <thead><tr><th></th><th>Marque</th><th>Modèle</th><th>N° série</th></tr></thead>
-                    <tbody>
-                      {extUnits.map((u, idx) => (
-                        <tr key={"e" + idx}><td>Groupe extérieur{extUnits.length > 1 ? ` ${idx + 1}` : ""}</td><td>{u.marque}</td><td>{u.modele}</td><td>{u.serie}</td></tr>
-                      ))}
-                      {intUnits.map((u, idx) => (
-                        <tr key={"i" + idx}><td>Unité intérieure{intUnits.length > 1 ? ` ${idx + 1}` : ""}</td><td>{u.marque}</td><td>{u.modele}</td><td>{u.serie}</td></tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {(extUnits.some((u) => u.photo) || intUnits.some((u) => u.photo)) && (
-                    <div className="machine-photos">
-                      {extUnits.map((u, idx) => u.photo && (
-                        <div key={"pe" + idx} className="machine-photo-item">
-                          <img src={u.photo} alt="Groupe extérieur" />
-                          <span>Groupe extérieur{extUnits.length > 1 ? ` ${idx + 1}` : ""}</span>
-                        </div>
-                      ))}
-                      {intUnits.map((u, idx) => u.photo && (
-                        <div key={"pi" + idx} className="machine-photo-item">
-                          <img src={u.photo} alt="Unité intérieure" />
-                          <span>Unité intérieure{intUnits.length > 1 ? ` ${idx + 1}` : ""}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {client.machines.map((m, i) => <MachineBlock key={i} machine={m} />)}
           </section>
         )}
       </div>
@@ -3690,8 +3705,11 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .mini-table td:first-child, .mini-table th:first-child { color: #6D7A80; }
 .mini-table th { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.3px; color: #8A959A; }
 
-.machine-block { margin-bottom: 16px; }
-.machine-title { font-size: 13.5px; font-weight: 600; margin-bottom: 6px; }
+.machine-block { margin-bottom: 10px; border: 1px solid #E4E9E8; border-radius: 8px; overflow: hidden; }
+.machine-block-header { display: flex; align-items: center; gap: 8px; width: 100%; background: #F9FBFC; border: none; padding: 10px 12px; cursor: pointer; text-align: left; color: #4A5860; }
+.machine-block-header:hover { background: #F0F3F2; }
+.machine-block-body { padding: 12px; }
+.machine-title { font-size: 13.5px; font-weight: 600; margin-bottom: 0; color: #1B2733; }
 .machine-date { font-weight: 400; color: #6D7A80; }
 .machine-editor-card { background: #F9FBFC; border-color: #E1E6E5; margin-bottom: 12px; }
 .unit-block { padding: 12px; background: #fff; border: 1px solid #E4E9E8; border-radius: 8px; margin-bottom: 10px; }
