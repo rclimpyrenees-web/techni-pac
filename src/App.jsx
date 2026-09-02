@@ -248,6 +248,8 @@ export default function App() {
           email: client?.email || "",
           adresse: client?.adresse || "",
           tel: client?.tel || "",
+          siren: client?.siren || "",
+          tva: client?.tva || "",
           pennylaneId: client?.pennylaneCustomerId || null,
         },
         montantHT: parseFloat(r.montant),
@@ -2310,6 +2312,8 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
   const [nom, setNom] = useState(editingClient?.nom || "");
   const [raisonSociale, setRaisonSociale] = useState(editingClient?.raisonSociale || "");
   const [estProfessionnel, setEstProfessionnel] = useState(!!editingClient?.raisonSociale);
+  const [siren, setSiren] = useState(editingClient?.siren || "");
+  const [tva, setTva] = useState(editingClient?.tva || "");
   const [moisEcheance, setMoisEcheance] = useState(editingClient?.moisEcheance || "");
   const [adresse, setAdresse] = useState(editingClient?.adresse || "");
   const [email, setEmail] = useState(editingClient?.email || "");
@@ -2354,7 +2358,7 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
       .map(({ id, ...m }) => m);
     onSubmit({
       id: isEditing ? editingClient.id : "c" + Date.now(),
-      nom, raisonSociale, adresse, email, tel, moisEcheance,
+      nom, raisonSociale, siren, tva, adresse, email, tel, moisEcheance,
       machines: cleanedMachines,
       contrat,
     });
@@ -2365,10 +2369,14 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
       <div className="form-grid">
         <label>Nom et prénom<input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ex : Martin Jean" /></label>
         <label className="check-inline">
-          <input type="checkbox" checked={estProfessionnel} onChange={(e) => { setEstProfessionnel(e.target.checked); if (!e.target.checked) setRaisonSociale(""); }} /> Professionnel
+          <input type="checkbox" checked={estProfessionnel} onChange={(e) => { setEstProfessionnel(e.target.checked); if (!e.target.checked) { setRaisonSociale(""); setSiren(""); setTva(""); } }} /> Professionnel
         </label>
         {estProfessionnel && (
-          <label>Raison sociale<input value={raisonSociale} onChange={(e) => setRaisonSociale(e.target.value)} placeholder="Ex : Garcia Bâtiment SARL" /></label>
+          <>
+            <label>Raison sociale<input value={raisonSociale} onChange={(e) => setRaisonSociale(e.target.value)} placeholder="Ex : Garcia Bâtiment SARL" /></label>
+            <label>SIREN<input value={siren} onChange={(e) => setSiren(e.target.value)} placeholder="Ex : 123 456 789" /></label>
+            <label>N° de TVA intracommunautaire<input value={tva} onChange={(e) => setTva(e.target.value)} placeholder="Ex : FR12345678900" /></label>
+          </>
         )}
         <label>Téléphone<input value={tel} onChange={(e) => setTel(e.target.value)} placeholder="06 00 00 00 00" /></label>
         <label>Adresse<input value={adresse} onChange={(e) => setAdresse(e.target.value)} placeholder="Rue, code postal, ville" /></label>
