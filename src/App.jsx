@@ -723,6 +723,11 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
     return acc;
   }, {});
   const dates = Object.keys(grouped).sort();
+  const [editingTask, setEditingTask] = useState(null);
+
+  const openNewForm = () => { setEditingTask(null); setShowForm(!showForm || !!editingTask); };
+  const openEditForm = (task) => { setEditingTask(task); setShowForm(true); };
+  const closeForm = () => { setShowForm(false); setEditingTask(null); };
 
   return (
     <div>
@@ -731,7 +736,7 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
           <h1>Rappels</h1>
           <p>Toutes les tâches avec un rappel actif, jour par jour</p>
         </div>
-        <button className="btn-primary" onClick={() => setShowForm(!showForm)}>
+        <button className="btn-primary" onClick={openNewForm}>
           <Icon name="plus" size={16} /> Nouveau rappel
         </button>
       </header>
@@ -739,11 +744,12 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
       {showForm && (
         <TaskForm
           clients={clients}
-          onCancel={() => setShowForm(false)}
-          onSubmit={(t) => { onAdd(t); setShowForm(false); }}
+          editingTask={editingTask}
+          onCancel={closeForm}
+          onSubmit={(t) => { onAdd(t); closeForm(); }}
           forceCategorie="relance"
           hideRappelToggle
-          submitLabel="Ajouter le rappel"
+          submitLabel={editingTask ? "Enregistrer les modifications" : "Ajouter le rappel"}
         />
       )}
 
@@ -766,6 +772,9 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
                   <div className="row-title">{p.titre}</div>
                   <div className="row-sub">{p.client} {p.heure !== "—" && `· ${p.heure}`}</div>
                 </div>
+                <button className="icon-btn" onClick={() => openEditForm(p)} title="Modifier ce rappel">
+                  <Icon name="edit" size={15} />
+                </button>
                 <button className="pill pill-clickable pill-warm" onClick={() => onToggleRappel(p.id)}>
                   <Icon name="bell" size={13} /> Désactiver le rappel
                 </button>
@@ -2481,6 +2490,11 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
   const dateCounts = {};
   dates.forEach((d) => { dateCounts[d] = grouped[d].length; });
   const [selectedDate, setSelectedDate] = useState(() => dates[0] || toLocalISODate(new Date()));
+  const [editingTask, setEditingTask] = useState(null);
+
+  const openNewTaskForm = () => { setEditingTask(null); setShowForm(!showForm || !!editingTask); };
+  const openEditTaskForm = (task) => { setEditingTask(task); setShowForm(true); };
+  const closeTaskForm = () => { setShowForm(false); setEditingTask(null); };
 
   return (
     <div>
@@ -2489,12 +2503,20 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
           <h1>Planning</h1>
           <p>Interventions programmées et rappels — cliquez un jour du calendrier pour voir son détail</p>
         </div>
-        <button className="btn-primary" onClick={() => setShowForm(!showForm)}>
+        <button className="btn-primary" onClick={openNewTaskForm}>
           <Icon name="plus" size={16} /> Nouvelle tâche
         </button>
       </header>
 
-      {showForm && <TaskForm clients={clients} initialDate={selectedDate} onCancel={() => setShowForm(false)} onSubmit={(t) => { onAdd(t); setShowForm(false); }} />}
+      {showForm && (
+        <TaskForm
+          clients={clients}
+          initialDate={selectedDate}
+          editingTask={editingTask}
+          onCancel={closeTaskForm}
+          onSubmit={(t) => { onAdd(t); closeTaskForm(); }}
+        />
+      )}
 
       <MiniCalendar dateCounts={dateCounts} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
 
@@ -2517,6 +2539,9 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
                     <div className="row-title">{p.titre}</div>
                     <div className="row-sub">{p.client} {p.heure !== "—" && `· ${p.heure}`}{p.duree && ` · ${p.duree}`}</div>
                   </div>
+                  <button className="icon-btn" onClick={(e) => { e.stopPropagation(); openEditTaskForm(p); }} title="Modifier cette tâche">
+                    <Icon name="edit" size={15} />
+                  </button>
                   <button className={"pill pill-clickable " + (p.rappel ? "pill-warm" : "pill-muted")} onClick={(e) => { e.stopPropagation(); onToggleRappel(p.id); }}>
                     <Icon name="bell" size={13} /> {p.rappel ? "Rappel actif" : "Sans rappel"}
                   </button>
@@ -2624,26 +2649,26 @@ function MiniCalendar({ dateCounts, selectedDate, onSelectDate }) {
   );
 }
 
-function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggle, submitLabel, initialDate }) {
-  const [titre, setTitre] = useState("");
-  const [client, setClient] = useState("");
-  const [date, setDate] = useState(initialDate || toLocalISODate(new Date()));
-  const [heure, setHeure] = useState("09:00");
-  const [duree, setDuree] = useState("1h");
-  const [rappel, setRappel] = useState(true);
+function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggle, submitLabel, initialDate, editingTask }) {
+  const [titre, setTitre] = useState(editingTask?.titre || "");
+  const [client, setClient] = useState(editingTask?.client || "");
+  const [date, setDate] = useState(editingTask?.date || initialDate || toLocalISODate(new Date()));
+  const [heure, setHeure] = useState(editingTask?.heure && editingTask.heure !== "—" ? editingTask.heure : "09:00");
+  const [duree, setDuree] = useState(editingTask?.duree || "1h");
+  const [rappel, setRappel] = useState(editingTask ? !!editingTask.rappel : true);
 
   const submit = () => {
     if (!titre) return;
     onSubmit({
-      id: "p" + Date.now(),
+      id: editingTask?.id || ("p" + Date.now()),
       titre,
       client,
       date,
       heure,
       duree,
       rappel: hideRappelToggle ? true : rappel,
-      fait: false,
-      categorie: forceCategorie || "intervention",
+      fait: editingTask?.fait || false,
+      categorie: editingTask?.categorie || forceCategorie || "intervention",
     });
   };
 
@@ -2695,7 +2720,7 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
       )}
       <div className="form-actions">
         <button className="btn-ghost" onClick={onCancel}>Annuler</button>
-        <button className="btn-primary" onClick={submit}>{submitLabel || "Ajouter au planning"}</button>
+        <button className="btn-primary" onClick={submit}>{submitLabel || (editingTask ? "Enregistrer les modifications" : "Ajouter au planning")}</button>
       </div>
     </div>
   );
