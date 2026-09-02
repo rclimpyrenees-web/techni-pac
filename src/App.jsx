@@ -1913,7 +1913,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
         </div>
       </header>
 
-      {showMap && <ClientsMap clients={clients} onUpdateClient={onUpdate} onOpenClient={(nom) => { const c = clients.find((cl) => cl.nom === nom); if (c) setSelected(c.id); }} entrepriseNom={settings?.entreprise?.nom} entrepriseAdresse={[settings?.entreprise?.adresse, settings?.entreprise?.codePostalVille].filter(Boolean).join(", ")} />}
+      {showMap && <ClientsMap clients={clients} onUpdateClient={onUpdate} onOpenClient={(nom) => { const c = clients.find((cl) => cl.nom === nom); if (c) { setSelected(c.id); setShowMap(false); } }} entrepriseNom={settings?.entreprise?.nom} entrepriseAdresse={[settings?.entreprise?.adresse, settings?.entreprise?.codePostalVille].filter(Boolean).join(", ")} />}
 
       {showForm && (
         <ClientForm
@@ -3078,17 +3078,22 @@ function ClientsMap({ clients, onUpdateClient, onOpenClient, entrepriseNom, entr
 
     clients.forEach((c) => {
       if (typeof c.lat === "number" && typeof c.lng === "number") {
+        const nomAffiche = (c.raisonSociale && c.raisonSociale.trim()) ? c.raisonSociale : c.nom;
         const marker = window.L.marker([c.lat, c.lng]).addTo(markersLayer.current);
         marker.bindTooltip(
-          `<div class="map-hover-card"><strong>${escapeHtml(c.nom)}</strong><br/>${escapeHtml(c.adresse || "Adresse non renseignée")}</div>`,
+          `<div class="map-hover-card"><strong>${escapeHtml(nomAffiche)}</strong><br/>${escapeHtml(c.adresse || "Adresse non renseignée")}</div>`,
           { direction: "top", offset: [0, -34] }
         );
         marker.bindPopup(
-          `<strong>${escapeHtml(c.nom)}</strong><br/>${escapeHtml(c.adresse || "")}<br/><a href="#" class="map-popup-link">Ouvrir la fiche</a>`
+          `<strong>${escapeHtml(nomAffiche)}</strong><br/>${escapeHtml(c.adresse || "")}<br/><a href="#" class="map-popup-link">Ouvrir la fiche</a>`
         );
-        marker.on("popupopen", () => {
-          const link = document.querySelector(".leaflet-popup .map-popup-link");
-          if (link) link.onclick = (e) => { e.preventDefault(); onOpenClient(c.nom); };
+        // On cible précisément la bulle de CE marqueur (via e.popup), plutôt
+        // qu'une recherche globale dans la page qui pouvait, à tort, cibler
+        // la bulle d'un autre client si plusieurs avaient déjà été ouvertes.
+        marker.on("popupopen", (e) => {
+          const el = e.popup.getElement();
+          const link = el ? el.querySelector(".map-popup-link") : null;
+          if (link) link.onclick = (ev) => { ev.preventDefault(); onOpenClient(c.nom); };
         });
         points.push([c.lat, c.lng]);
       }
