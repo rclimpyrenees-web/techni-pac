@@ -223,7 +223,7 @@ export default function App() {
 
   const nav = [
     { id: "dashboard", label: "Tableau de bord", icon: "dashboard" },
-    { id: "rapports", label: "Rapports", icon: "report" },
+    { id: "rapports", label: "Interventions", icon: "report" },
     { id: "clients", label: "Clients", icon: "users" },
     { id: "planning", label: "Planning", icon: "calendar" },
     { id: "rappels", label: "Rappels", icon: "bell" },
@@ -1059,7 +1059,18 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
       </div>
 
       <div className="report-list">
-        {filtered.map((r) => <ReportCard key={r.id} r={r} onPrint={onPrint} onEdit={openEdit} onValidate={onValidate} onDelete={onDelete} focusReport={focusReport} settings={settings} />)}
+        {groupByMonthAndDay(filtered, "date").map((mg) => (
+          <div key={mg.key} className="report-month-group">
+            <h2 className="report-month-title">{mg.label}</h2>
+            {mg.days.map((dg) => (
+              <div key={dg.key} className="report-day-group">
+                {dg.label && <h4 className="report-day-title">{dg.label}</h4>}
+                {dg.items.map((r) => <ReportCard key={r.id} r={r} onPrint={onPrint} onEdit={openEdit} onValidate={onValidate} onDelete={onDelete} focusReport={focusReport} settings={settings} />)}
+              </div>
+            ))}
+          </div>
+        ))}
+        {filtered.length === 0 && <p className="empty">Aucun rapport pour ce filtre.</p>}
       </div>
     </div>
   );
@@ -2741,6 +2752,41 @@ function parseFrDate(str) {
   return new Date(y, m - 1, d);
 }
 
+// Comme groupByMonth, mais avec un second niveau de regroupement par jour à
+// l'intérieur de chaque mois (chaque mois "repart de zéro").
+function groupByMonthAndDay(items, dateField) {
+  const monthGroups = {};
+  const sansDate = [];
+  items.forEach((it) => {
+    const d = parseFrDate(it[dateField]);
+    if (!d) { sansDate.push(it); return; }
+    const monthKey = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    const dayKey = monthKey + "-" + String(d.getDate()).padStart(2, "0");
+    if (!monthGroups[monthKey]) monthGroups[monthKey] = { year: d.getFullYear(), month: d.getMonth(), days: {} };
+    if (!monthGroups[monthKey].days[dayKey]) monthGroups[monthKey].days[dayKey] = { date: d, items: [] };
+    monthGroups[monthKey].days[dayKey].items.push(it);
+  });
+  const monthKeys = Object.keys(monthGroups).sort().reverse();
+  const result = monthKeys.map((mk) => {
+    const g = monthGroups[mk];
+    const dayKeys = Object.keys(g.days).sort().reverse();
+    return {
+      key: mk,
+      label: monthLabel(g.year, g.month),
+      days: dayKeys.map((dk) => {
+        const dayLabelRaw = g.days[dk].date.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+        return {
+          key: dk,
+          label: dayLabelRaw.charAt(0).toUpperCase() + dayLabelRaw.slice(1),
+          items: g.days[dk].items,
+        };
+      }),
+    };
+  });
+  if (sansDate.length > 0) result.push({ key: "sans-date", label: "Sans date", days: [{ key: "sans-date-j", label: "", items: sansDate }] });
+  return result;
+}
+
 function monthLabel(year, month) {
   const d = new Date(year, month, 1);
   const label = d.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
@@ -3526,6 +3572,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .month-group { margin-bottom: 18px; }
 .month-group:last-child { margin-bottom: 0; }
 .month-heading { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: #2F6FA3; margin: 0 0 6px; padding-bottom: 4px; border-bottom: 1px solid #EAEDEC; text-transform: none; letter-spacing: 0; }
+.report-month-group { margin-bottom: 28px; }
+.report-month-title { font-family: 'Barlow Condensed', sans-serif; font-size: 24px; font-weight: 700; color: #1B2733; margin: 0 0 14px; padding-bottom: 6px; border-bottom: 2px solid #1B2733; }
+.report-day-group { margin-bottom: 16px; }
+.report-day-title { font-size: 13px; font-weight: 600; color: #5E7078; text-transform: capitalize; margin: 0 0 8px; }
 .mt { margin-top: 18px; }
 
 .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
