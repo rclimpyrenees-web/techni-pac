@@ -78,6 +78,7 @@ const defaultSettings = {
 const initialClients = [];
 
 const installTypes = [
+  "Néant",
   "Climatiseur split",
   "Climatisation gainable",
   "PAC air/eau",
