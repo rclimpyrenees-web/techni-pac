@@ -1743,6 +1743,68 @@ function SignaturePad({ label, value, onChange }) {
   );
 }
 
+/* ---------- Champ « Client » : menu déroulant avec recherche ----------
+   La liste native <datalist> du navigateur se comporte de façon inégale d'un
+   navigateur et d'un appareil à l'autre : on gère donc nous-mêmes l'ouverture,
+   le filtrage (insensible à la casse et aux accents) et la sélection. La saisie
+   libre reste possible, pour les prospects qui ne sont pas encore en fiche. */
+function ClientSearchSelect({ clients, value, onChange, placeholder }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState(value || "");
+  const wrapRef = useRef(null);
+
+  useEffect(() => { setQuery(value || ""); }, [value]);
+
+  useEffect(() => {
+    const fermerSiClicDehors = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", fermerSiClicDehors);
+    document.addEventListener("touchstart", fermerSiClicDehors);
+    return () => {
+      document.removeEventListener("mousedown", fermerSiClicDehors);
+      document.removeEventListener("touchstart", fermerSiClicDehors);
+    };
+  }, []);
+
+  const sansAccent = (t) => (t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const tries = [...clients].sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr", { sensitivity: "base" }));
+  const recherche = sansAccent(query).trim();
+  const filtres = recherche
+    ? tries.filter((c) => sansAccent(c.nom).includes(recherche) || sansAccent(c.raisonSociale).includes(recherche))
+    : tries;
+
+  const choisir = (nom) => { setQuery(nom); onChange(nom); setOpen(false); };
+
+  return (
+    <div className="client-select" ref={wrapRef}>
+      <input
+        value={query}
+        onChange={(e) => { setQuery(e.target.value); onChange(e.target.value); setOpen(true); }}
+        onClick={() => setOpen(true)}
+        placeholder={placeholder}
+        autoComplete="off"
+      />
+      <button type="button" className="client-select-arrow" onClick={() => setOpen(!open)} tabIndex={-1} aria-label="Dérouler la liste des clients">
+        <Icon name="chevronDown" size={16} />
+      </button>
+      {open && (
+        <ul className="client-select-list">
+          {filtres.map((c) => (
+            <li key={c.id} onClick={() => choisir(c.nom)}>
+              <span className="client-select-nom">{c.nom}</span>
+              {c.raisonSociale && <span className="client-select-sub">{c.raisonSociale}</span>}
+            </li>
+          ))}
+          {filtres.length === 0 && (
+            <li className="client-select-empty">Aucun client ne correspond — le nom saisi sera conservé tel quel.</li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function ReportForm({ clients, settings, reportType, setReportType, editingReport, prefillClient, prefillPlanningTaskId, onCancel, onSubmit, onPreview }) {
   const isEditing = !!editingReport;
   // Liste des clients triée alphabétiquement (accents et casse ignorés).
@@ -1896,17 +1958,15 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
       )}
 
       <div className="form-grid">
-        <label>Client
-          <input
-            list="report-clients-datalist"
+        <div className="field-col">
+          Client
+          <ClientSearchSelect
+            clients={clients}
             value={client}
-            onChange={(e) => setClient(e.target.value)}
+            onChange={setClient}
             placeholder="Taper les premières lettres du nom, ou dérouler la liste"
           />
-          <datalist id="report-clients-datalist">
-            {clientsTries.map((c) => <option key={c.id} value={c.nom} />)}
-          </datalist>
-        </label>
+        </div>
         <label>Type d'installation
           <select value={installation} onChange={(e) => setInstallation(e.target.value)}>
             {installTypes.map((t) => <option key={t}>{t}</option>)}
@@ -3067,19 +3127,15 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
     <div className="card form-card">
       <div className="form-grid">
         <label>Intitulé<input value={titre} onChange={(e) => setTitre(e.target.value)} placeholder="Ex : Entretien annuel" /></label>
-        <label>Client
-          <input
-            list="planning-clients-datalist"
+        <div className="field-col">
+          Client
+          <ClientSearchSelect
+            clients={clients}
             value={client}
-            onChange={(e) => setClient(e.target.value)}
+            onChange={setClient}
             placeholder="Rechercher un client existant, ou en taper un nouveau"
           />
-          <datalist id="planning-clients-datalist">
-            {[...clients]
-              .sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr", { sensitivity: "base" }))
-              .map((c) => <option key={c.id} value={c.nom} />)}
-          </datalist>
-        </label>
+        </div>
         <label>Date<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
         <label>Heure
           <select value={heure} onChange={(e) => setHeure(e.target.value)}>
@@ -4241,6 +4297,17 @@ input, select, textarea {
 textarea { resize: vertical; }
 .description-textarea { min-height: 110px; resize: vertical; }
 .description-view p { white-space: pre-wrap; margin: 4px 0 0; }
+.field-col { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; font-weight: 600; color: #4A5860; }
+.client-select { position: relative; display: flex; flex-direction: column; }
+.client-select input { width: 100%; padding-right: 34px; }
+.client-select-arrow { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: #6D7A80; cursor: pointer; padding: 4px; display: flex; }
+.client-select-list { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 50; list-style: none; margin: 0; padding: 4px; background: #fff; border: 1px solid #D7DEDD; border-radius: 8px; box-shadow: 0 6px 20px rgba(27,39,51,0.14); max-height: 260px; overflow-y: auto; }
+.client-select-list li { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border-radius: 6px; cursor: pointer; font-weight: 400; }
+.client-select-list li:hover { background: #EAF1F7; }
+.client-select-nom { font-size: 14px; font-weight: 600; color: #1B2733; }
+.client-select-sub { font-size: 12px; color: #6D7A80; }
+.client-select-empty { font-size: 12.5px; color: #8A959A; font-style: italic; cursor: default; }
+.client-select-empty:hover { background: transparent; }
 .check-inline { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 14px; }
 .check-inline input { width: auto; }
 .hint { font-size: 11.5px; font-weight: 400; color: #8A959A; margin-top: 2px; }
