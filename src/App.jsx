@@ -119,6 +119,7 @@ const Icon = ({ name, size = 18 }) => {
     chevronRight: "M9 18l6-6-6-6",
     chevronDown: "M6 9l6 6 6-6",
     menu: "M3 12h18M3 6h18M3 18h18",
+    pin: "M12 21s7-6.5 7-11a7 7 0 10-14 0c0 4.5 7 11 7 11zM12 11.5a2 2 0 100-4 2 2 0 000 4z",
     close: "M18 6L6 18M6 6l12 12",
   };
   return (
@@ -159,6 +160,34 @@ function DeleteButton({ onConfirm, label = "Supprimer" }) {
     >
       <Icon name="trash" size={14} /> {label}
     </button>
+  );
+}
+
+/* ---------- Adresse cliquable : ouvre l'application de navigation ----------
+   Sur iPhone/iPad on passe par maps.apple.com, qui ouvre directement Plans ;
+   ailleurs (Android, ordinateur) par Google Maps, qui propose l'application
+   installée — Waze compris — ou bascule dans le navigateur. */
+function lienNavigation(adresse) {
+  const q = encodeURIComponent(adresse || "");
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+  const estApple = /iPad|iPhone|iPod/.test(ua) || (typeof navigator !== "undefined" && navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  return estApple ? `https://maps.apple.com/?q=${q}` : `https://www.google.com/maps/search/?api=1&query=${q}`;
+}
+
+function AdresseLien({ adresse, className }) {
+  if (!adresse || !adresse.trim()) return null;
+  return (
+    <a
+      className={"adresse-lien" + (className ? " " + className : "")}
+      href={lienNavigation(adresse)}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      title="Ouvrir dans votre application de navigation"
+    >
+      <Icon name="pin" size={13} />
+      <span>{adresse}</span>
+    </a>
   );
 }
 
@@ -2486,7 +2515,12 @@ function ClientFiche({ client, reports, showMachines, setShowMachines, onEdit, o
         {estProfessionnel && <FicheLigne label="N° de TVA intracommunautaire" value={client.tva} />}
         <FicheLigne label="Téléphone" value={client.tel} />
         <FicheLigne label="Email" value={client.email} />
-        <FicheLigne label="Adresse" value={client.adresse} />
+        <div className="fiche-item">
+          <div className="fiche-label">Adresse</div>
+          {client.adresse
+            ? <AdresseLien adresse={client.adresse} className="fiche-value" />
+            : <div className="fiche-value vide">Non renseigné</div>}
+        </div>
         <FicheLigne label="Mois de l'entretien contractuel" value={nomDuMois(client.moisEcheance)} />
         <FicheLigne label="Contrat de maintenance" value={client.contrat ? (client.contrat.nom || "Contrat enregistré") : ""} />
       </div>
@@ -3010,6 +3044,11 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
                   <div className="grow">
                     <div className="row-title">{p.titre}</div>
                     <div className="row-sub">{p.client} {p.heure !== "—" && `· ${p.heure}`}{p.duree && ` · ${p.duree}`}</div>
+                    {(() => {
+                      const fiche = clients.find((c) => c.nom === p.client);
+                      const adresseTache = (fiche && fiche.adresse) || p.adresse;
+                      return adresseTache ? <AdresseLien adresse={adresseTache} /> : null;
+                    })()}
                   </div>
                   <button className="icon-btn" onClick={(e) => { e.stopPropagation(); openEditTaskForm(p); }} title="Modifier cette tâche">
                     <Icon name="edit" size={15} />
@@ -3138,6 +3177,12 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
   const [heure, setHeure] = useState(editingTask?.heure && editingTask.heure !== "—" ? editingTask.heure : "09:00");
   const [duree, setDuree] = useState(editingTask?.duree || "1h");
   const [rappel, setRappel] = useState(editingTask ? !!editingTask.rappel : true);
+  // Adresse saisie à la main, utilisée uniquement pour les clients qui ne sont
+  // pas encore dans le fichier (prospects) : pour les autres, on affiche
+  // directement celle de leur fiche.
+  const [adresse, setAdresse] = useState(editingTask?.adresse || "");
+
+  const clientConnu = clients.find((c) => c.nom === client);
 
   const submit = () => {
     if (!titre) return;
@@ -3148,6 +3193,7 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
       date,
       heure,
       duree,
+      adresse: clientConnu ? "" : adresse,
       rappel: hideRappelToggle ? true : rappel,
       fait: editingTask?.fait || false,
       categorie: editingTask?.categorie || forceCategorie || "intervention",
@@ -3166,6 +3212,16 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
             onChange={setClient}
             placeholder="Rechercher un client existant, ou en taper un nouveau"
           />
+          {clientConnu && (clientConnu.adresse
+            ? <AdresseLien adresse={clientConnu.adresse} />
+            : <span className="hint">Aucune adresse dans la fiche de ce client.</span>
+          )}
+          {!clientConnu && client.trim() && (
+            <>
+              <input value={adresse} onChange={(e) => setAdresse(e.target.value)} placeholder="Adresse de l'intervention" />
+              <span className="hint">Ce client n'est pas encore dans le fichier : indiquez l'adresse ici.</span>
+            </>
+          )}
         </div>
         <label>Date<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
         <label>Heure
@@ -4327,6 +4383,11 @@ textarea { resize: vertical; }
 .description-textarea { min-height: 110px; resize: vertical; }
 .description-view p { white-space: pre-wrap; margin: 4px 0 0; }
 .field-col { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; font-weight: 600; color: #4A5860; }
+.adresse-lien { display: inline-flex; align-items: flex-start; gap: 5px; font-size: 12.5px; font-weight: 500; color: #2F6FA3; text-decoration: none; margin-top: 2px; }
+.adresse-lien span { text-decoration: underline; text-underline-offset: 2px; }
+.adresse-lien:hover { color: #1B4E77; }
+.adresse-lien svg { flex-shrink: 0; margin-top: 1px; }
+.fiche-value.adresse-lien { font-size: 14px; }
 .client-select { position: relative; display: flex; flex-direction: column; }
 .client-select input { width: 100%; padding-right: 34px; }
 .client-select-arrow { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: #6D7A80; cursor: pointer; padding: 4px; display: flex; }
