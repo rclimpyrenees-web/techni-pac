@@ -1481,7 +1481,7 @@ function ChecklistEditor({ items, setItems }) {
               <option value="non_fait">Non fait</option>
             </select>
             <div className="checklist-inputs">
-              <input value={it.label} onChange={(e) => updateItem(it.id, { label: e.target.value })} placeholder="Intitulé du contrôle" />
+              <textarea className="checklist-label-input" rows={2} value={it.label} onChange={(e) => updateItem(it.id, { label: e.target.value })} placeholder="Intitulé du contrôle" />
               <textarea rows={2} value={it.detail} onChange={(e) => updateItem(it.id, { detail: e.target.value })} placeholder="Détail (facultatif) — cliquez-glissez le coin pour agrandir" />
             </div>
             <button type="button" className="icon-btn" onClick={() => removeItem(it.id)}><Icon name="trash" size={15} /></button>
@@ -4313,7 +4313,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .checklist-row { display: flex; align-items: center; gap: 8px; }
 .checklist-status-select { width: auto; min-width: 100px; flex-shrink: 0; font-weight: 600; font-size: 12.5px; padding: 6px 8px; border-radius: 6px; }
 .checklist-inputs { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.checklist-inputs input { width: 100%; }
+.checklist-inputs input, .checklist-inputs textarea { width: 100%; }
+.checklist-label-input { font-weight: 600; line-height: 1.4; min-height: 46px; }
 
 .table-editor { margin-bottom: 14px; padding: 12px; background: #F6F8F7; border-radius: 8px; }
 .table-insert-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -4458,6 +4459,14 @@ textarea { resize: vertical; }
 
 @media (max-width: 780px) {
   .row-delete-hover { opacity: 1; }
+
+  /* Checklists : sur un écran étroit, l'intitulé et le détail prennent toute
+     la largeur, sous la ligne « Fait / Non fait », pour rester lisibles. */
+  .checklist-row { flex-wrap: wrap; align-items: center; }
+  .checklist-status-select { order: 1; }
+  .checklist-row > .icon-btn { order: 2; margin-left: auto; }
+  .checklist-inputs { order: 3; flex-basis: 100%; width: 100%; }
+  .checklist-label-input { min-height: 62px; }
   .mobile-topbar {
     display: flex; align-items: center; gap: 12px;
     position: sticky; top: 0; z-index: 30;
