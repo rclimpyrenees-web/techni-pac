@@ -3923,8 +3923,8 @@ function buildReportHtml(report, settings) {
   .pdf-checklist strong { }
   .pdf-detail { font-size: 12.5px; color: #6D7A80; white-space: pre-wrap; margin-top: 2px; }
   .pdf-machine-type { font-size: 13.5px; margin: 12px 0 -6px; }
-  .pdf-section-title { font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 18px 0 4px; text-decoration: underline; text-underline-offset: 3px; }
-  .pdf-texte-libre { white-space: pre-wrap; }
+  .pdf-section-title { font-family: 'Inter', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 18px 0 4px; text-decoration: underline; text-underline-offset: 3px; }
+  .pdf-texte-libre { font-size: 16px; line-height: 1.55; white-space: pre-wrap; }
   .pdf-table-title { font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 16px 0 -4px; text-decoration: underline; text-underline-offset: 3px; }
   .pdf-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; border: 1px solid #C7D0CE; }
   .pdf-table td { border: 1px solid #C7D0CE; padding: 7px 9px; }
@@ -4148,7 +4148,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .rte-render u { text-decoration: underline; }
 .rte-render em { font-style: italic; }
 
-.section-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: #2F6FA3; margin: 14px 0 4px; text-decoration: underline; text-underline-offset: 3px; }
+.section-title { font-size: 13.5px; font-weight: 700; color: #1B2733; margin: 14px 0 4px; text-decoration: underline; text-underline-offset: 3px; }
 .texte-libre { white-space: pre-wrap; }
 .mini-table-block { margin-bottom: 12px; }
 .mini-table-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: #2F6FA3; margin-bottom: 3px; text-decoration: underline; text-underline-offset: 3px; }
