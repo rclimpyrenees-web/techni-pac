@@ -1282,13 +1282,16 @@ function tablesAt(tables, checklist, anchor) {
   return (tables || [])
     .filter((t) => resolve(t) === anchor)
     .map((t) => (
-      <table key={t.id} className="mini-table">
-        <tbody>
-          {t.rows.map((row, ri) => (
-            <tr key={ri}>{row.map((cell, ci) => <td key={ci}>{cell}</td>)}</tr>
-          ))}
-        </tbody>
-      </table>
+      <div key={t.id} className="mini-table-block">
+        {t.nom && <div className="mini-table-title">{t.nom}</div>}
+        <table className="mini-table">
+          <tbody>
+            {t.rows.map((row, ri) => (
+              <tr key={ri}>{row.map((cell, ci) => <td key={ci}>{cell}</td>)}</tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     ));
 }
 
@@ -1419,6 +1422,10 @@ function TableEditor({ table, checklist, onChange, onRemove }) {
 
   return (
     <div className="table-editor">
+      <label className="table-position">
+        Titre du tableau (facultatif)
+        <input value={table.nom || ""} onChange={(e) => onChange({ ...table, nom: e.target.value })} placeholder="Ex : Relevés électriques" />
+      </label>
       {checklist && checklist.length > 0 && (
         <label className="table-position">
           Position du tableau
@@ -1734,13 +1741,13 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
     });
   };
 
-  const addTable = () => setTables((t) => [...t, { id: "tbl" + Date.now(), rows: [["", ""], ["", ""]], afterItemId: "__end__" }]);
+  const addTable = () => setTables((t) => [...t, { id: "tbl" + Date.now(), nom: "", rows: [["", ""], ["", ""]], afterItemId: "__end__" }]);
   const updateTable = (id, next) => setTables((list) => list.map((t) => (t.id === id ? next : t)));
   const removeTable = (id) => setTables((list) => list.filter((t) => t.id !== id));
   const insertTemplateTable = (templateId) => {
     const tpl = (settings.tableaux || []).find((t) => t.id === templateId);
     if (!tpl) return;
-    setTables((list) => [...list, { id: "tbl" + Date.now(), rows: tpl.rows.map((row) => [...row]), afterItemId: "__end__" }]);
+    setTables((list) => [...list, { id: "tbl" + Date.now(), nom: tpl.nom || "", rows: tpl.rows.map((row) => [...row]), afterItemId: "__end__" }]);
   };
 
   // On retire les lignes vides et les checklists devenues vides avant l'enregistrement.
@@ -3421,7 +3428,8 @@ function nl2br(str) {
 }
 
 function tableRowsToHtml(t) {
-  return `<table class="pdf-table"><tbody>${t.rows
+  const titre = t.nom ? `<h3 class="pdf-table-title">${escapeHtml(t.nom)}</h3>` : "";
+  return `${titre}<table class="pdf-table"><tbody>${t.rows
     .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`)
     .join("")}</tbody></table>`;
 }
@@ -3648,6 +3656,7 @@ function buildReportHtml(report, settings) {
   .pdf-checklist li { margin-bottom: 10px; font-size: 14px; }
   .pdf-checklist strong { }
   .pdf-detail { font-size: 12.5px; color: #6D7A80; white-space: pre-wrap; margin-top: 2px; }
+  .pdf-table-title { font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 16px 0 -4px; }
   .pdf-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; border: 1px solid #C7D0CE; }
   .pdf-table td { border: 1px solid #C7D0CE; padding: 7px 9px; }
   .pdf-description strong { font-weight: 700; }
@@ -3869,6 +3878,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .rte-render u { text-decoration: underline; }
 .rte-render em { font-style: italic; }
 
+.mini-table-block { margin-bottom: 12px; }
+.mini-table-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: #2F6FA3; margin-bottom: 3px; }
 .mini-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 12px; }
 .mini-table td, .mini-table th { padding: 6px 8px; border-bottom: 1px solid #EEF1F0; text-align: left; }
 .mini-table td:first-child, .mini-table th:first-child { color: #6D7A80; }
