@@ -3889,14 +3889,12 @@ function buildReportHtml(report, settings) {
     body += checklistsToHtml(report);
     if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
     if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
-    if (report.devisAEffectuer) body += `<p><strong>Devis à effectuer :</strong> ${escapeHtml(report.devisAEffectuer)}</p>`;
   } else if (report.type === "entretien") {
     if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
     if (report.descriptionLibre) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
     body += checklistsToHtml(report);
     if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
     if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
-    if (report.devisAEffectuer) body += `<p><strong>Devis à effectuer :</strong> ${escapeHtml(report.devisAEffectuer)}</p>`;
   } else {
     // Le contenu vient de l'éditeur riche interne (gras/italique/souligné), déjà en HTML de confiance.
     if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
@@ -3906,7 +3904,6 @@ function buildReportHtml(report, settings) {
     body += tablesAtHtml(report.tables, [], "__end__");
     if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
     if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
-    if (report.devisAEffectuer) body += `<p><strong>Devis à effectuer :</strong> ${escapeHtml(report.devisAEffectuer)}</p>`;
   }
 
   if (report.signatureTech || report.signatureClient) {
