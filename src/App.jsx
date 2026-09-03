@@ -2366,7 +2366,11 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
       <section className="card">
         <ul className="list">
           {clientsTries.map((c) => (
-            <li key={c.id} className={"row clickable" + (client?.id === c.id ? " selected" : "")} onClick={() => setSelected(c.id)}>
+            <li
+              key={c.id}
+              className={"row clickable" + (client?.id === c.id ? " selected" : "")}
+              onClick={() => { setSelected(c.id); closeForm(); }}
+            >
               <div>
                 <div className="row-title">
                   {c.nom}
