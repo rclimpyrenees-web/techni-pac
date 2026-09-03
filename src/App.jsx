@@ -4462,7 +4462,9 @@ textarea { resize: vertical; }
     display: flex; align-items: center; gap: 12px;
     position: sticky; top: 0; z-index: 30;
     background: #1B2733; color: #E7ECEB;
-    padding: 12px 16px;
+    /* Marges de sécurité : sur iPhone (encoche / Dynamic Island) et en mode
+       application installée, la barre de statut recouvre sinon le bouton menu. */
+    padding: calc(12px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) 12px calc(16px + env(safe-area-inset-left, 0px));
   }
   .mobile-topbar .brand { padding: 0; gap: 8px; }
   .mobile-topbar .brand-mark { width: 30px; height: 30px; font-size: 13px; }
@@ -4476,12 +4478,19 @@ textarea { resize: vertical; }
     transform: translateX(-100%);
     transition: transform 0.22s ease;
     box-shadow: 2px 0 18px rgba(0,0,0,0.25);
+    padding-top: calc(20px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+    padding-left: calc(14px + env(safe-area-inset-left, 0px));
+    overflow-y: auto;
   }
   .sidebar.open { transform: translateX(0); }
   .sidebar .mobile-close-btn { display: flex; }
   .sidebar .brand { position: relative; }
 
-  .main { padding: 18px 14px 90px; max-width: 100%; }
+  .main {
+    max-width: 100%;
+    padding: 18px calc(14px + env(safe-area-inset-right, 0px)) calc(90px + env(safe-area-inset-bottom, 0px)) calc(14px + env(safe-area-inset-left, 0px));
+  }
 
   .page-head { flex-direction: column; align-items: flex-start; gap: 12px; }
   .page-head.row-between .btn-primary { width: 100%; justify-content: center; }
