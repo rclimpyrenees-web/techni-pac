@@ -1788,7 +1788,16 @@ function ClientSearchSelect({ clients, value, onChange, placeholder }) {
   const [query, setQuery] = useState(value || "");
   const wrapRef = useRef(null);
 
-  useEffect(() => { setQuery(value || ""); }, [value]);
+  // Pour un client professionnel, on affiche sa raison sociale plutôt que le
+  // nom du contact. La valeur réellement enregistrée reste le nom de la fiche,
+  // qui sert de lien avec les rapports, les devis et les factures.
+  const libelle = (c) => (c.raisonSociale && c.raisonSociale.trim() ? c.raisonSociale : c.nom);
+  const libellePourValeur = (v) => {
+    const c = clients.find((cl) => cl.nom === v);
+    return c ? libelle(c) : (v || "");
+  };
+
+  useEffect(() => { setQuery(libellePourValeur(value)); }, [value, clients]);
 
   useEffect(() => {
     const fermerSiClicDehors = (e) => {
@@ -1809,7 +1818,7 @@ function ClientSearchSelect({ clients, value, onChange, placeholder }) {
     ? tries.filter((c) => sansAccent(c.nom).includes(recherche) || sansAccent(c.raisonSociale).includes(recherche))
     : tries;
 
-  const choisir = (nom) => { setQuery(nom); onChange(nom); setOpen(false); };
+  const choisir = (c) => { setQuery(libelle(c)); onChange(c.nom); setOpen(false); };
 
   return (
     <div className="client-select" ref={wrapRef}>
@@ -1826,9 +1835,9 @@ function ClientSearchSelect({ clients, value, onChange, placeholder }) {
       {open && (
         <ul className="client-select-list">
           {filtres.map((c) => (
-            <li key={c.id} onClick={() => choisir(c.nom)}>
-              <span className="client-select-nom">{c.nom}</span>
-              {c.raisonSociale && <span className="client-select-sub">{c.raisonSociale}</span>}
+            <li key={c.id} onClick={() => choisir(c)}>
+              <span className="client-select-nom">{libelle(c)}</span>
+              {libelle(c) !== c.nom && <span className="client-select-sub">{c.nom}</span>}
             </li>
           ))}
           {filtres.length === 0 && (
