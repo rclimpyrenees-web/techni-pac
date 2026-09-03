@@ -1157,6 +1157,15 @@ function ReportCard({ r, open, onToggle, onPrint, onEdit, onValidate, onDelete, 
   const [viewTab, setViewTab] = useState("details");
   const cardRef = useRef(null);
 
+  // Quand une carte s'ouvre, on la ramène en haut de l'écran : la fermeture de
+  // la carte précédente décale la page, et le rapport ouvert se retrouverait
+  // sinon hors de vue.
+  useEffect(() => {
+    if (open && cardRef.current) {
+      cardRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [open]);
+
   useEffect(() => {
     if (focusReport && focusReport.id === r.id) {
       cardRef.current && cardRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -4272,6 +4281,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .filter-btn { background: #fff; border: 1px solid #D7DEDD; padding: 7px 13px; border-radius: 20px; font-size: 13px; cursor: pointer; color: #4A5860; }
 .filter-btn.active { background: #1B2733; color: #fff; border-color: #1B2733; }
 
+.report-card { scroll-margin-top: 14px; }
 .report-card-head { display: flex; align-items: center; gap: 12px; cursor: pointer; }
 .report-card-title { flex: 1; }
 .chevron { font-size: 20px; color: #97A3A7; width: 20px; text-align: center; }
@@ -4513,6 +4523,9 @@ textarea { resize: vertical; }
 
 @media (max-width: 780px) {
   .row-delete-hover { opacity: 1; }
+  /* La barre du haut étant fixe sur mobile, on laisse la place nécessaire
+     au-dessus de la carte que l'on fait remonter. */
+  .report-card { scroll-margin-top: calc(70px + env(safe-area-inset-top, 0px)); }
 
   /* Checklists : sur un écran étroit, l'intitulé et le détail prennent toute
      la largeur, sous la ligne « Fait / Non fait », pour rester lisibles. */
