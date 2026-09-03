@@ -1035,6 +1035,19 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
         </button>
       </header>
 
+      <div className="filters">
+        {[
+          ["tous", "Tous"],
+          ["mise_en_service", "Mise en service"],
+          ["entretien", "Entretien"],
+          ["diagnostic", "Diagnostic / dépannage"],
+        ].map(([id, label]) => (
+          <button key={id} className={"filter-btn" + (filter === id ? " active" : "")} onClick={() => setFilter(id)}>
+            {label}
+          </button>
+        ))}
+      </div>
+
       {showForm && (
         <ReportForm
           key={editingReport ? editingReport.id : "new-" + (reportPrefill ? reportPrefill.token : "0")}
@@ -1050,19 +1063,6 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
           onPreview={onPrint}
         />
       )}
-
-      <div className="filters">
-        {[
-          ["tous", "Tous"],
-          ["mise_en_service", "Mise en service"],
-          ["entretien", "Entretien"],
-          ["diagnostic", "Diagnostic / dépannage"],
-        ].map(([id, label]) => (
-          <button key={id} className={"filter-btn" + (filter === id ? " active" : "")} onClick={() => setFilter(id)}>
-            {label}
-          </button>
-        ))}
-      </div>
 
       <div className="report-list">
         {groupByMonthAndDay(filtered, "date").map((mg) => (
@@ -1728,7 +1728,13 @@ function SignaturePad({ label, value, onChange }) {
 
 function ReportForm({ clients, settings, reportType, setReportType, editingReport, prefillClient, prefillPlanningTaskId, onCancel, onSubmit, onPreview }) {
   const isEditing = !!editingReport;
-  const initialClient = editingReport?.client || prefillClient || clients[0]?.nom || "";
+  // Liste des clients triée alphabétiquement (accents et casse ignorés).
+  const clientsTries = [...clients].sort((a, b) =>
+    (a.nom || "").localeCompare(b.nom || "", "fr", { sensitivity: "base" })
+  );
+  // Aucun client présélectionné sur un nouveau rapport : le champ reste vide
+  // tant que l'utilisateur n'a pas choisi (ou tapé) un nom.
+  const initialClient = editingReport?.client || prefillClient || "";
   const [client, setClient] = useState(initialClient);
   const [installation, setInstallation] = useState(() => {
     if (editingReport?.installation) return editingReport.installation;
@@ -1758,6 +1764,18 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   const [signatureClient, setSignatureClient] = useState(editingReport?.signatureClient || "");
   const descriptionRef = useRef(editingReport?.description || "");
   const fileRef = useRef();
+
+  // Quand on choisit un client déjà enregistré, on reprend automatiquement le
+  // type de son premier matériel installé — sans écraser la valeur d'un rapport
+  // ouvert en modification (d'où le saut du tout premier rendu).
+  const premierRendu = useRef(true);
+  useEffect(() => {
+    if (premierRendu.current) { premierRendu.current = false; return; }
+    const c = clients.find((cl) => cl.nom === client);
+    const type = c?.machines?.[0]?.type;
+    if (type) setInstallation(type);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client]);
 
   useEffect(() => {
     if (isEditing) return;
@@ -1836,9 +1854,15 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
       <div className="form-grid">
         <label>Client
-          <select value={client} onChange={(e) => setClient(e.target.value)}>
-            {clients.map((c) => <option key={c.id}>{c.nom}</option>)}
-          </select>
+          <input
+            list="report-clients-datalist"
+            value={client}
+            onChange={(e) => setClient(e.target.value)}
+            placeholder="Taper les premières lettres du nom, ou dérouler la liste"
+          />
+          <datalist id="report-clients-datalist">
+            {clientsTries.map((c) => <option key={c.id} value={c.nom} />)}
+          </datalist>
         </label>
         <label>Type d'installation
           <select value={installation} onChange={(e) => setInstallation(e.target.value)}>
@@ -2034,7 +2058,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
       <div className="form-actions">
         <button className="btn-ghost" onClick={onCancel}>Annuler</button>
         <button className="btn-ghost" onClick={preview}><Icon name="download" size={14} /> Aperçu PDF</button>
-        <button className="btn-primary" onClick={submit}>{isEditing ? "Enregistrer les modifications" : "Enregistrer le rapport"}</button>
+        <button className="btn-primary" onClick={submit} disabled={!client.trim()} title={!client.trim() ? "Choisissez d'abord un client" : ""}>{isEditing ? "Enregistrer les modifications" : "Enregistrer le rapport"}</button>
       </div>
     </div>
   );
@@ -2951,7 +2975,9 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
             placeholder="Rechercher un client existant, ou en taper un nouveau"
           />
           <datalist id="planning-clients-datalist">
-            {clients.map((c) => <option key={c.id} value={c.nom} />)}
+            {[...clients]
+              .sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr", { sensitivity: "base" }))
+              .map((c) => <option key={c.id} value={c.nom} />)}
           </datalist>
         </label>
         <label>Date<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
@@ -3880,6 +3906,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
   border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
 }
 .btn-primary:hover { background: #285f8c; }
+.btn-primary:disabled { background: #A9BCCB; cursor: not-allowed; }
 .btn-primary.small { padding: 6px 12px; font-size: 12.5px; margin-top: 8px; margin-right: 8px; }
 .report-card-valide { border-left: 3px solid #3F8F5F; }
 .btn-ghost { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1px solid #D7DEDD; padding: 9px 15px; border-radius: 8px; font-size: 14px; cursor: pointer; color: #4A5860; }
