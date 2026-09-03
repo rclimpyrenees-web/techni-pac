@@ -1153,6 +1153,12 @@ function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, set
               {r.type === "mise_en_service" && (
             <>
               {r.intro && <div className="remarque description-view"><strong>Objet</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.intro }} /></div>}
+              {r.machines && r.machines.length > 0 && (
+                <>
+                  <div className="section-title">Matériel installé</div>
+                  {r.machines.map((m, i) => <MachineBlock key={i} machine={m} />)}
+                </>
+              )}
               <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
               {r.descriptionLibre && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.descriptionLibre }} /></div>}
               {r.conclusion && (
@@ -1771,6 +1777,19 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
     return [defaultChecklistFor(reportType)];
   });
   const [tables, setTables] = useState(editingReport?.tables || []);
+  // Matériel installé (rapports de mise en service) — même fonctionnement que
+  // dans la fiche client : plusieurs matériels, chacun avec ses groupes
+  // extérieurs et unités intérieures.
+  const [machines, setMachines] = useState(() => {
+    const existantes = (editingReport?.machines || []).map((m, i) => ({
+      id: "m" + i + "_" + Date.now(),
+      type: m.type || installTypes[0],
+      date: m.date || new Date().toLocaleDateString("fr-FR"),
+      exterieur: normalizeUnits(m.exterieur).map((u) => ({ marque: "", modele: "", serie: "", photo: "", ...u })),
+      interieur: normalizeUnits(m.interieur).map((u) => ({ marque: "", modele: "", serie: "", photo: "", ...u })),
+    }));
+    return existantes.length > 0 ? existantes : [blankMachine()];
+  });
   const [signatureTech, setSignatureTech] = useState(editingReport?.signatureTech || "");
   const [signatureClient, setSignatureClient] = useState(editingReport?.signatureClient || "");
   const descriptionRef = useRef(editingReport?.description || "");
@@ -1805,6 +1824,18 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
     });
   };
 
+  const addMachine = () => setMachines((list) => [...list, blankMachine()]);
+  const updateMachine = (id, next) => setMachines((list) => list.map((m) => (m.id === id ? next : m)));
+  const removeMachine = (id) => setMachines((list) => list.filter((m) => m.id !== id));
+  // On ne conserve que les matériels réellement renseignés.
+  const cleanMachines = () =>
+    machines
+      .filter((m) =>
+        m.exterieur.some((u) => u.marque.trim() || u.serie.trim()) ||
+        m.interieur.some((u) => u.marque.trim() || u.serie.trim())
+      )
+      .map(({ id, ...m }) => m);
+
   const addTable = () => setTables((t) => [...t, { id: "tbl" + Date.now(), nom: "", rows: [["", ""], ["", ""]], afterItemId: "__end__" }]);
   const updateTable = (id, next) => setTables((list) => list.map((t) => (t.id === id ? next : t)));
   const removeTable = (id) => setTables((list) => list.filter((t) => t.id !== id));
@@ -1828,7 +1859,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
       valide: marquerEffectue,
     };
     if (reportType === "mise_en_service") {
-      return { ...base, intro: introRef.current, checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
+      return { ...base, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
     } else if (reportType === "entretien") {
       return { ...base, intro: introRef.current, checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
     } else {
@@ -1891,6 +1922,22 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
             <div className="field-caption">Objet</div>
             <RichTextEditor initialValue={editingReport?.intro || ""} onChange={(html) => { introRef.current = html; }} minHeight={100} />
           </div>
+
+          <label className="block mt">Matériel installé</label>
+          {machines.map((m, i) => (
+            <CollapsibleMachineCard
+              key={m.id}
+              machine={m}
+              index={i}
+              defaultOpen={machines.length === 1}
+              onChange={(next) => updateMachine(m.id, next)}
+              onRemove={() => removeMachine(m.id)}
+              removable={machines.length > 1}
+            />
+          ))}
+          <button type="button" className="btn-ghost small mb-lg" onClick={addMachine}>
+            <Icon name="plus" size={14} /> Ajouter un matériel
+          </button>
 
           <div className="block field-block">
             <div className="field-caption">Description</div>
@@ -3538,6 +3585,28 @@ function tablesAtHtml(tables, checklist, anchor) {
   return (tables || []).filter((t) => resolve(t) === anchor).map(tableRowsToHtml).join("");
 }
 
+// Rend le matériel installé renseigné dans un rapport de mise en service :
+// un tableau de références par matériel (marque, modèle, numéro de série).
+function machinesToHtml(machines) {
+  if (!machines || machines.length === 0) return "";
+  const ligne = (label, u) => {
+    if (!u.marque && !u.modele && !u.serie) return "";
+    return `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(u.marque)}</td><td>${escapeHtml(u.modele)}</td><td>${escapeHtml(u.serie)}</td></tr>`;
+  };
+  let html = `<h3 class="pdf-section-title">Matériel installé</h3>`;
+  machines.forEach((m) => {
+    const ext = normalizeUnits(m.exterieur);
+    const int = normalizeUnits(m.interieur);
+    html += `<p class="pdf-machine-type"><strong>${escapeHtml(m.type || "")}</strong>${m.date ? ` — installé le ${escapeHtml(m.date)}` : ""}</p>`;
+    html += `<table class="pdf-table"><tbody>`;
+    html += `<tr><td></td><td><strong>Marque</strong></td><td><strong>Modèle</strong></td><td><strong>N° de série</strong></td></tr>`;
+    ext.forEach((u, i) => { html += ligne("Groupe extérieur" + (ext.length > 1 ? " " + (i + 1) : ""), u); });
+    int.forEach((u, i) => { html += ligne("Unité intérieure" + (int.length > 1 ? " " + (i + 1) : ""), u); });
+    html += `</tbody></table>`;
+  });
+  return html;
+}
+
 // Rend toutes les checklists du rapport (titre + lignes) avec les tableaux
 // ancrés au bon endroit, quel que soit le format de stockage du rapport.
 function checklistsToHtml(report) {
@@ -3686,6 +3755,7 @@ function buildReportHtml(report, settings) {
 
   if (report.type === "mise_en_service") {
     if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
+    body += machinesToHtml(report.machines);
     if (report.descriptionLibre) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
     body += checklistsToHtml(report);
     if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
@@ -3754,6 +3824,7 @@ function buildReportHtml(report, settings) {
   .pdf-checklist li { margin-bottom: 10px; font-size: 14px; }
   .pdf-checklist strong { }
   .pdf-detail { font-size: 12.5px; color: #6D7A80; white-space: pre-wrap; margin-top: 2px; }
+  .pdf-machine-type { font-size: 13.5px; margin: 12px 0 -6px; }
   .pdf-section-title { font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 18px 0 4px; text-decoration: underline; text-underline-offset: 3px; }
   .pdf-texte-libre { white-space: pre-wrap; }
   .pdf-table-title { font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 16px 0 -4px; text-decoration: underline; text-underline-offset: 3px; }
