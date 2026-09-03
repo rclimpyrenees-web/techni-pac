@@ -1144,7 +1144,18 @@ function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, set
               {r.intro && <div className="remarque description-view"><strong>Objet</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.intro }} /></div>}
               <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
               {r.descriptionLibre && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.descriptionLibre }} /></div>}
-              {r.remarques && <p className="remarque">{r.remarques}</p>}
+              {r.conclusion && (
+                <>
+                  <div className="section-title">Conclusion</div>
+                  <p className="remarque texte-libre">{r.conclusion}</p>
+                </>
+              )}
+              {r.remarques && (
+                <>
+                  <div className="section-title">Remarques</div>
+                  <p className="remarque texte-libre">{r.remarques}</p>
+                </>
+              )}
               <DevisNote text={r.devisAEffectuer} />
             </>
           )}
@@ -1153,7 +1164,18 @@ function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, set
               {r.intro && <div className="remarque description-view"><strong>Objet</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.intro }} /></div>}
               <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
               {r.descriptionLibre && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.descriptionLibre }} /></div>}
-              {r.remarques && <p className="remarque">{r.remarques}</p>}
+              {r.conclusion && (
+                <>
+                  <div className="section-title">Conclusion</div>
+                  <p className="remarque texte-libre">{r.conclusion}</p>
+                </>
+              )}
+              {r.remarques && (
+                <>
+                  <div className="section-title">Remarques</div>
+                  <p className="remarque texte-libre">{r.remarques}</p>
+                </>
+              )}
               <DevisNote text={r.devisAEffectuer} />
             </>
           )}
@@ -1164,6 +1186,18 @@ function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, set
               {r.pieces && <p><strong>Pièces utilisées :</strong> {r.pieces}</p>}
               <p><strong>Facturable :</strong> {r.facturable ? "Oui" : "Non"}</p>
               {tablesAt(r.tables, [], "__end__")}
+              {r.conclusion && (
+                <>
+                  <div className="section-title">Conclusion</div>
+                  <p className="remarque texte-libre">{r.conclusion}</p>
+                </>
+              )}
+              {r.remarques && (
+                <>
+                  <div className="section-title">Remarques</div>
+                  <p className="remarque texte-libre">{r.remarques}</p>
+                </>
+              )}
               <DevisNote text={r.devisAEffectuer} />
             </>
           )}
@@ -1703,6 +1737,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   });
   const [date, setDate] = useState(editingReport?.date || new Date().toLocaleDateString("fr-FR"));
   const [remarques, setRemarques] = useState(editingReport?.remarques || "");
+  const [conclusion, setConclusion] = useState(editingReport?.conclusion || "");
   const introRef = useRef(editingReport?.intro || "");
   const descriptionLibreRef = useRef(editingReport?.descriptionLibre || "");
   const [showDescriptionLibre, setShowDescriptionLibre] = useState(!!editingReport?.descriptionLibre); // conservé pour compat (non utilisé)
@@ -1764,11 +1799,11 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
       valide: marquerEffectue,
     };
     if (reportType === "mise_en_service") {
-      return { ...base, intro: introRef.current, checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, remarques, montant, tva, devisAEffectuer };
+      return { ...base, intro: introRef.current, checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
     } else if (reportType === "entretien") {
-      return { ...base, intro: introRef.current, checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, remarques, montant, tva, devisAEffectuer };
+      return { ...base, intro: introRef.current, checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
     } else {
-      return { ...base, intro: introRef.current, description: descriptionRef.current, tables, pieces, facturable, montant, tva, devisAEffectuer };
+      return { ...base, intro: introRef.current, description: descriptionRef.current, tables, pieces, facturable, conclusion, remarques, montant, tva, devisAEffectuer };
     }
   };
 
@@ -1831,8 +1866,14 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
 
+          <label className="block mt">Conclusion
+            <textarea rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} placeholder="Ex : bon fonctionnement général de l'installation, intervention terminée." />
+            <span className="hint">Le titre « Conclusion » n'apparaît dans le rapport que si ce champ est rempli.</span>
+          </label>
+
           <label className="block mt">Remarques
             <textarea rows={3} value={remarques} onChange={(e) => setRemarques(e.target.value)} placeholder="Observations, recommandations au client..." />
+            <span className="hint">Le titre « Remarques » n'apparaît dans le rapport que si ce champ est rempli.</span>
           </label>
 
           <div className="form-grid">
@@ -1873,8 +1914,14 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
 
+          <label className="block mt">Conclusion
+            <textarea rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} placeholder="Ex : bon fonctionnement général de l'installation, intervention terminée." />
+            <span className="hint">Le titre « Conclusion » n'apparaît dans le rapport que si ce champ est rempli.</span>
+          </label>
+
           <label className="block mt">Remarques
             <textarea rows={3} value={remarques} onChange={(e) => setRemarques(e.target.value)} placeholder="Observations, recommandations au client..." />
+            <span className="hint">Le titre « Remarques » n'apparaît dans le rapport que si ce champ est rempli.</span>
           </label>
           <div className="form-grid">
             <label>Montant HT de l'intervention (€, facultatif)
@@ -1934,6 +1981,16 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
           )}
 
           <TablesSection tables={tables} checklist={[]} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
+
+          <label className="block mt">Conclusion
+            <textarea rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} placeholder="Ex : panne résolue, installation remise en service." />
+            <span className="hint">Le titre « Conclusion » n'apparaît dans le rapport que si ce champ est rempli.</span>
+          </label>
+
+          <label className="block mt">Remarques
+            <textarea rows={3} value={remarques} onChange={(e) => setRemarques(e.target.value)} placeholder="Observations, recommandations au client..." />
+            <span className="hint">Le titre « Remarques » n'apparaît dans le rapport que si ce champ est rempli.</span>
+          </label>
 
           <label className="block">Devis à effectuer pour la réparation
             <textarea rows={2} value={devisAEffectuer} onChange={(e) => setDevisAEffectuer(e.target.value)} placeholder="Ex : remplacement compresseur, prévoir devis ~450 €" />
@@ -3594,13 +3651,15 @@ function buildReportHtml(report, settings) {
     if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
     if (report.descriptionLibre) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
     body += checklistsToHtml(report);
-    if (report.remarques) body += `<p>${escapeHtml(report.remarques)}</p>`;
+    if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
+    if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
     if (report.devisAEffectuer) body += `<p><strong>Devis à effectuer :</strong> ${escapeHtml(report.devisAEffectuer)}</p>`;
   } else if (report.type === "entretien") {
     if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
     if (report.descriptionLibre) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
     body += checklistsToHtml(report);
-    if (report.remarques) body += `<p>${escapeHtml(report.remarques)}</p>`;
+    if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
+    if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
     if (report.devisAEffectuer) body += `<p><strong>Devis à effectuer :</strong> ${escapeHtml(report.devisAEffectuer)}</p>`;
   } else {
     // Le contenu vient de l'éditeur riche interne (gras/italique/souligné), déjà en HTML de confiance.
@@ -3608,6 +3667,8 @@ function buildReportHtml(report, settings) {
     if (report.description) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.description}</div>`;
     if (report.pieces) body += `<p><strong>Pièces utilisées :</strong> ${escapeHtml(report.pieces)}</p>`;
     body += tablesAtHtml(report.tables, [], "__end__");
+    if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
+    if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
     if (report.devisAEffectuer) body += `<p><strong>Devis à effectuer :</strong> ${escapeHtml(report.devisAEffectuer)}</p>`;
   }
 
@@ -3651,12 +3712,14 @@ function buildReportHtml(report, settings) {
   .pdf-logo { width: 230px; height: 180px; object-fit: contain; object-position: left center; border-radius: 8px; flex-shrink: 0; }
   .pdf-letterhead-text { flex: 1; }
   .pdf-company-name { font-family: 'Barlow Condensed', sans-serif; font-size: 20px; font-weight: 700; color: #1B2733; margin-bottom: 2px; }
-  .pdf-checklist-title { font-family: 'Barlow Condensed', sans-serif; font-size: 17px; font-weight: 700; color: #1B2733; margin: 18px 0 2px; }
+  .pdf-checklist-title { font-family: 'Barlow Condensed', sans-serif; font-size: 17px; font-weight: 700; color: #1B2733; margin: 18px 0 2px; text-decoration: underline; text-underline-offset: 3px; }
   .pdf-checklist { list-style: none; padding: 0; margin: 14px 0; }
   .pdf-checklist li { margin-bottom: 10px; font-size: 14px; }
   .pdf-checklist strong { }
   .pdf-detail { font-size: 12.5px; color: #6D7A80; white-space: pre-wrap; margin-top: 2px; }
-  .pdf-table-title { font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 16px 0 -4px; }
+  .pdf-section-title { font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 18px 0 4px; text-decoration: underline; text-underline-offset: 3px; }
+  .pdf-texte-libre { white-space: pre-wrap; }
+  .pdf-table-title { font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 16px 0 -4px; text-decoration: underline; text-underline-offset: 3px; }
   .pdf-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; border: 1px solid #C7D0CE; }
   .pdf-table td { border: 1px solid #C7D0CE; padding: 7px 9px; }
   .pdf-description strong { font-weight: 700; }
@@ -3878,8 +3941,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .rte-render u { text-decoration: underline; }
 .rte-render em { font-style: italic; }
 
+.section-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: #2F6FA3; margin: 14px 0 4px; text-decoration: underline; text-underline-offset: 3px; }
+.texte-libre { white-space: pre-wrap; }
 .mini-table-block { margin-bottom: 12px; }
-.mini-table-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: #2F6FA3; margin-bottom: 3px; }
+.mini-table-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: #2F6FA3; margin-bottom: 3px; text-decoration: underline; text-underline-offset: 3px; }
 .mini-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 12px; }
 .mini-table td, .mini-table th { padding: 6px 8px; border-bottom: 1px solid #EEF1F0; text-align: left; }
 .mini-table td:first-child, .mini-table th:first-child { color: #6D7A80; }
@@ -3946,7 +4011,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .table-position { margin-bottom: 10px; }
 .table-position select { width: auto; min-width: 220px; }
 
-.checklist-group-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: #2F6FA3; margin: 6px 0 2px; }
+.checklist-group-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: #2F6FA3; margin: 6px 0 2px; text-decoration: underline; text-underline-offset: 3px; }
 .checklist-block { background: #F6F8F7; border: 1px solid #E1E6E5; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
 .checklist-block-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .checklist-block-title { flex: 1; font-weight: 600; font-size: 13.5px; }
