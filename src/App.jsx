@@ -999,11 +999,20 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
   const [filter, setFilter] = useState("tous");
   const [editingReport, setEditingReport] = useState(null);
   const [activePrefillClient, setActivePrefillClient] = useState(null);
+  const formRef = useRef(null);
   const filtered = filter === "tous" ? reports : reports.filter((r) => r.type === filter);
 
   const openNew = () => { setEditingReport(null); setActivePrefillClient(null); setShowForm(true); };
   const openEdit = (r) => { setEditingReport(r); setActivePrefillClient(null); setReportType(r.type); setShowForm(true); };
   const closeForm = () => { setShowForm(false); setEditingReport(null); };
+
+  // Le formulaire s'ouvre sous la liste des rapports : on descend
+  // automatiquement jusqu'à lui pour qu'il ne passe pas inaperçu.
+  useEffect(() => {
+    if (showForm && formRef.current) {
+      formRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [showForm, editingReport, reportPrefill]);
 
   useEffect(() => {
     if (focusReport) {
@@ -1048,22 +1057,6 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
         ))}
       </div>
 
-      {showForm && (
-        <ReportForm
-          key={editingReport ? editingReport.id : "new-" + (reportPrefill ? reportPrefill.token : "0")}
-          clients={clients}
-          settings={settings}
-          reportType={reportType}
-          setReportType={setReportType}
-          editingReport={editingReport}
-          prefillClient={!editingReport ? activePrefillClient : undefined}
-          prefillPlanningTaskId={!editingReport ? reportPrefill?.planningTaskId : undefined}
-          onCancel={closeForm}
-          onSubmit={(r) => { editingReport ? onUpdate(r) : onAdd(r); closeForm(); }}
-          onPreview={onPrint}
-        />
-      )}
-
       <div className="report-list">
         {groupByMonthAndDay(filtered, "date").map((mg) => (
           <div key={mg.key} className="report-month-group">
@@ -1078,6 +1071,24 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
         ))}
         {filtered.length === 0 && <p className="empty">Aucun rapport pour ce filtre.</p>}
       </div>
+
+      {showForm && (
+        <div ref={formRef}>
+          <ReportForm
+            key={editingReport ? editingReport.id : "new-" + (reportPrefill ? reportPrefill.token : "0")}
+            clients={clients}
+            settings={settings}
+            reportType={reportType}
+            setReportType={setReportType}
+            editingReport={editingReport}
+            prefillClient={!editingReport ? activePrefillClient : undefined}
+            prefillPlanningTaskId={!editingReport ? reportPrefill?.planningTaskId : undefined}
+            onCancel={closeForm}
+            onSubmit={(r) => { editingReport ? onUpdate(r) : onAdd(r); closeForm(); }}
+            onPreview={onPrint}
+          />
+        </div>
+      )}
     </div>
   );
 }
