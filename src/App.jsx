@@ -1199,6 +1199,12 @@ function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, set
           {r.type === "diagnostic" && (
             <>
               {r.intro && <div className="remarque description-view"><strong>Objet</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.intro }} /></div>}
+              {r.machines && r.machines.length > 0 && (
+                <>
+                  <div className="section-title">Matériel installé</div>
+                  {r.machines.map((m, i) => <MachineBlock key={i} machine={m} />)}
+                </>
+              )}
               <div className="remarque rte-render" dangerouslySetInnerHTML={{ __html: r.description }} />
               {r.pieces && <p><strong>Pièces utilisées :</strong> {r.pieces}</p>}
               <p><strong>Facturable :</strong> {r.facturable ? "Oui" : "Non"}</p>
@@ -1926,7 +1932,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
     } else if (reportType === "entretien") {
       return { ...base, intro: introRef.current, checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
     } else {
-      return { ...base, intro: introRef.current, description: descriptionRef.current, tables, pieces, facturable, conclusion, remarques, montant, tva, devisAEffectuer };
+      return { ...base, intro: introRef.current, machines: cleanMachines(), description: descriptionRef.current, tables, pieces, facturable, conclusion, remarques, montant, tva, devisAEffectuer };
     }
   };
 
@@ -2101,6 +2107,31 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
           <div className="block field-block">
             <div className="field-caption">Objet</div>
             <RichTextEditor initialValue={editingReport?.intro || ""} onChange={(html) => { introRef.current = html; }} minHeight={100} />
+          </div>
+
+          <div className="block mt">
+            <button type="button" className="machine-section-toggle section-toggle-bar" onClick={() => setShowMachinesSection(!showMachinesSection)}>
+              <span>Matériel installé ({machines.length})</span>
+              <Icon name={showMachinesSection ? "chevronDown" : "chevronRight"} size={18} />
+            </button>
+            {showMachinesSection && (
+              <div className="mt">
+                {machines.map((m, i) => (
+                  <CollapsibleMachineCard
+                    key={m.id}
+                    machine={m}
+                    index={i}
+                    defaultOpen={machines.length === 1}
+                    onChange={(next) => updateMachine(m.id, next)}
+                    onRemove={() => removeMachine(m.id)}
+                    removable={machines.length > 1}
+                  />
+                ))}
+                <button type="button" className="btn-ghost small" onClick={addMachine}>
+                  <Icon name="plus" size={14} /> Ajouter un matériel
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="block field-block">
@@ -3869,6 +3900,7 @@ function buildReportHtml(report, settings) {
   } else {
     // Le contenu vient de l'éditeur riche interne (gras/italique/souligné), déjà en HTML de confiance.
     if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
+    body += machinesToHtml(report.machines);
     if (report.description) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.description}</div>`;
     if (report.pieces) body += `<p><strong>Pièces utilisées :</strong> ${escapeHtml(report.pieces)}</p>`;
     body += tablesAtHtml(report.tables, [], "__end__");
