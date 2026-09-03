@@ -1142,16 +1142,7 @@ function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, set
               {r.type === "mise_en_service" && (
             <>
               {r.intro && <div className="remarque description-view"><strong>Objet</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.intro }} /></div>}
-              <div className="checklist-view">
-                {tablesAt(r.tables, r.checklist, "__start__")}
-                {r.checklist.map((it) => (
-                  <React.Fragment key={it.id}>
-                    <ChecklistItemView it={it} />
-                    {tablesAt(r.tables, r.checklist, it.id)}
-                  </React.Fragment>
-                ))}
-                {tablesAt(r.tables, r.checklist, "__end__")}
-              </div>
+              <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
               {r.descriptionLibre && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.descriptionLibre }} /></div>}
               {r.remarques && <p className="remarque">{r.remarques}</p>}
               <DevisNote text={r.devisAEffectuer} />
@@ -1160,16 +1151,7 @@ function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, set
           {r.type === "entretien" && (
             <>
               {r.intro && <div className="remarque description-view"><strong>Objet</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.intro }} /></div>}
-              <div className="checklist-view">
-                {tablesAt(r.tables, r.checklist, "__start__")}
-                {r.checklist.map((it) => (
-                  <React.Fragment key={it.id}>
-                    <ChecklistItemView it={it} />
-                    {tablesAt(r.tables, r.checklist, it.id)}
-                  </React.Fragment>
-                ))}
-                {tablesAt(r.tables, r.checklist, "__end__")}
-              </div>
+              <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
               {r.descriptionLibre && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.descriptionLibre }} /></div>}
               {r.remarques && <p className="remarque">{r.remarques}</p>}
               <DevisNote text={r.devisAEffectuer} />
@@ -1241,6 +1223,54 @@ function ChecklistView({ items }) {
   );
 }
 
+/* Un rapport peut contenir plusieurs checklists successives, chacune avec son
+   propre titre. Les rapports plus anciens n'en avaient qu'une seule, stockée
+   dans "checklist" : cette fonction rend les deux formats interchangeables et
+   garantit que les anciens rapports restent lisibles. */
+function normalizeChecklists(report) {
+  if (Array.isArray(report?.checklists)) return report.checklists;
+  if (Array.isArray(report?.checklist)) return [{ id: "cl-legacy", nom: "", items: report.checklist }];
+  return [];
+}
+
+/* Liste à plat de tous les points de contrôle, toutes checklists confondues —
+   utilisée pour ancrer les tableaux, dont la position se réfère à l'id d'une
+   ligne quelle que soit la checklist à laquelle elle appartient. */
+function allChecklistItems(checklists) {
+  return (checklists || []).reduce((acc, cl) => acc.concat(cl.items || []), []);
+}
+
+function defaultChecklistFor(reportType) {
+  const tpl = reportType === "entretien" ? DEFAULT_ENTRETIEN_CHECKLIST : DEFAULT_MES_CHECKLIST;
+  return {
+    id: "cl" + Date.now(),
+    nom: reportType === "entretien" ? "Checklist d'entretien" : "Checklist de mise en service",
+    items: tpl.map((t) => ({ id: t.id, label: t.label, checked: true, detail: "" })),
+  };
+}
+
+/* Affichage (rapport) de l'ensemble des checklists, avec les tableaux ancrés au bon endroit */
+function ChecklistsView({ checklists, tables }) {
+  const flatItems = allChecklistItems(checklists);
+  return (
+    <div className="checklist-view">
+      {tablesAt(tables, flatItems, "__start__")}
+      {checklists.map((cl) => (
+        <React.Fragment key={cl.id}>
+          {cl.nom && <div className="checklist-group-title">{cl.nom}</div>}
+          {(cl.items || []).map((it) => (
+            <React.Fragment key={it.id}>
+              <ChecklistItemView it={it} />
+              {tablesAt(tables, flatItems, it.id)}
+            </React.Fragment>
+          ))}
+        </React.Fragment>
+      ))}
+      {tablesAt(tables, flatItems, "__end__")}
+    </div>
+  );
+}
+
 /* Rend les tableaux ancrés à un point donné (id de ligne de checklist, "__start__" ou "__end__") */
 function tablesAt(tables, checklist, anchor) {
   const validIds = new Set((checklist || []).map((it) => it.id));
@@ -1260,6 +1290,86 @@ function tablesAt(tables, checklist, anchor) {
         </tbody>
       </table>
     ));
+}
+
+/* ---------- Section « Checklists » du formulaire : plusieurs checklists à la
+   suite, chacune avec son titre, sur le même principe que les tableaux ---------- */
+function ChecklistsSection({ checklists, setChecklists, settings, reportType }) {
+  const modeles = (settings.checklists || []).filter((t) => t.type === reportType);
+
+  // On fournit à chaque ChecklistEditor un setter qui ne touche qu'à ses
+  // propres lignes, pour pouvoir réutiliser l'éditeur existant tel quel.
+  const setItemsFor = (clId) => (updater) => {
+    setChecklists((list) =>
+      list.map((cl) => (cl.id === clId ? { ...cl, items: typeof updater === "function" ? updater(cl.items || []) : updater } : cl))
+    );
+  };
+
+  const updateNom = (clId, nom) => setChecklists((list) => list.map((cl) => (cl.id === clId ? { ...cl, nom } : cl)));
+  const removeChecklist = (clId) => setChecklists((list) => list.filter((cl) => cl.id !== clId));
+
+  const uid = () => Date.now() + "_" + Math.random().toString(16).slice(2, 8);
+
+  const addEmpty = () => {
+    const stamp = uid();
+    setChecklists((list) => [...list, { id: "cl" + stamp, nom: "", items: [{ id: "chk" + stamp, label: "", checked: true, detail: "" }] }]);
+  };
+
+  const insertTemplate = (templateId) => {
+    const tpl = modeles.find((t) => t.id === templateId);
+    if (!tpl) return;
+    const stamp = uid();
+    setChecklists((list) => [
+      ...list,
+      {
+        id: "cl" + stamp,
+        nom: tpl.nom || "",
+        items: (tpl.items || [])
+          .filter((it) => it.label.trim())
+          .map((it, i) => ({ id: "ck" + stamp + "_" + i, label: it.label, checked: true, detail: "" })),
+      },
+    ]);
+  };
+
+  return (
+    <div className="block">
+      <label className="block">Checklists</label>
+      {checklists.map((cl, idx) => (
+        <div key={cl.id} className="checklist-block">
+          <div className="checklist-block-head">
+            <input
+              className="checklist-block-title"
+              value={cl.nom || ""}
+              onChange={(e) => updateNom(cl.id, e.target.value)}
+              placeholder={`Titre de la checklist ${idx + 1} (facultatif)`}
+            />
+            <button type="button" className="icon-btn" onClick={() => removeChecklist(cl.id)} title="Supprimer cette checklist">
+              <Icon name="trash" size={15} />
+            </button>
+          </div>
+          <ChecklistEditor items={cl.items || []} setItems={setItemsFor(cl.id)} />
+        </div>
+      ))}
+      {checklists.length === 0 && <p className="empty">Aucune checklist dans ce rapport.</p>}
+      <div className="table-insert-row">
+        <button type="button" className="btn-ghost small" onClick={addEmpty}>
+          <Icon name="plus" size={14} /> Ajouter une checklist
+        </button>
+        {modeles.length > 0 && (
+          <select
+            className="table-template-select"
+            value=""
+            onChange={(e) => { if (e.target.value) insertTemplate(e.target.value); }}
+          >
+            <option value="">Insérer un modèle de checklist...</option>
+            {modeles.map((t) => (
+              <option key={t.id} value={t.id}>{t.nom || "Modèle sans nom"}</option>
+            ))}
+          </select>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /* ---------- Éditeur de checklist (formulaire) ---------- */
@@ -1596,10 +1706,10 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   const [marquerEffectue, setMarquerEffectue] = useState(editingReport?.valide ?? true);
   const [devisAEffectuer, setDevisAEffectuer] = useState(editingReport?.devisAEffectuer || "");
   const [photos, setPhotos] = useState(editingReport?.photos || []);
-  const [checklist, setChecklist] = useState(() => {
-    if (editingReport?.checklist) return editingReport.checklist;
-    const tpl = reportType === "entretien" ? DEFAULT_ENTRETIEN_CHECKLIST : DEFAULT_MES_CHECKLIST;
-    return tpl.map((t) => ({ id: t.id, label: t.label, checked: true, detail: "" }));
+  const [checklists, setChecklists] = useState(() => {
+    const existantes = normalizeChecklists(editingReport);
+    if (existantes.length > 0) return existantes;
+    return [defaultChecklistFor(reportType)];
   });
   const [tables, setTables] = useState(editingReport?.tables || []);
   const [signatureTech, setSignatureTech] = useState(editingReport?.signatureTech || "");
@@ -1609,10 +1719,8 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
   useEffect(() => {
     if (isEditing) return;
-    if (reportType === "mise_en_service") {
-      setChecklist(DEFAULT_MES_CHECKLIST.map((t) => ({ id: t.id, label: t.label, checked: true, detail: "" })));
-    } else if (reportType === "entretien") {
-      setChecklist(DEFAULT_ENTRETIEN_CHECKLIST.map((t) => ({ id: t.id, label: t.label, checked: true, detail: "" })));
+    if (reportType === "mise_en_service" || reportType === "entretien") {
+      setChecklists([defaultChecklistFor(reportType)]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportType]);
@@ -1635,11 +1743,11 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
     setTables((list) => [...list, { id: "tbl" + Date.now(), rows: tpl.rows.map((row) => [...row]), afterItemId: "__end__" }]);
   };
 
-  const insertTemplateChecklist = (templateId) => {
-    const tpl = (settings.checklists || []).find((t) => t.id === templateId);
-    if (!tpl) return;
-    setChecklist(tpl.items.filter((it) => it.label.trim()).map((it, i) => ({ id: "ck" + Date.now() + "_" + i, label: it.label, checked: true, detail: "" })));
-  };
+  // On retire les lignes vides et les checklists devenues vides avant l'enregistrement.
+  const cleanChecklists = () =>
+    checklists
+      .map((cl) => ({ ...cl, items: (cl.items || []).filter((it) => it.label.trim()) }))
+      .filter((cl) => cl.items.length > 0);
 
   const buildReport = () => {
     const base = {
@@ -1649,9 +1757,9 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
       valide: marquerEffectue,
     };
     if (reportType === "mise_en_service") {
-      return { ...base, intro: introRef.current, checklist: checklist.filter((it) => it.label.trim()), tables, descriptionLibre: descriptionLibreRef.current, remarques, montant, tva, devisAEffectuer };
+      return { ...base, intro: introRef.current, checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, remarques, montant, tva, devisAEffectuer };
     } else if (reportType === "entretien") {
-      return { ...base, intro: introRef.current, checklist: checklist.filter((it) => it.label.trim()), tables, descriptionLibre: descriptionLibreRef.current, remarques, montant, tva, devisAEffectuer };
+      return { ...base, intro: introRef.current, checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, remarques, montant, tva, devisAEffectuer };
     } else {
       return { ...base, intro: introRef.current, description: descriptionRef.current, tables, pieces, facturable, montant, tva, devisAEffectuer };
     }
@@ -1712,24 +1820,9 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
             <RichTextEditor initialValue={editingReport?.descriptionLibre || ""} onChange={(html) => { descriptionLibreRef.current = html; }} minHeight={160} />
           </div>
 
-          <div className="checklist-header-row">
-            <label className="block">Checklist de mise en service</label>
-            {(settings.checklists || []).filter((t) => t.type === "mise_en_service").length > 0 && (
-              <select
-                className="table-template-select"
-                value=""
-                onChange={(e) => { if (e.target.value) insertTemplateChecklist(e.target.value); }}
-              >
-                <option value="">Choisir un modèle de checklist...</option>
-                {settings.checklists.filter((t) => t.type === "mise_en_service").map((t) => (
-                  <option key={t.id} value={t.id}>{t.nom || "Modèle sans nom"}</option>
-                ))}
-              </select>
-            )}
-          </div>
-          <ChecklistEditor items={checklist} setItems={setChecklist} />
+          <ChecklistsSection checklists={checklists} setChecklists={setChecklists} settings={settings} reportType="mise_en_service" />
 
-          <TablesSection tables={tables} checklist={checklist} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
+          <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
 
           <label className="block mt">Remarques
             <textarea rows={3} value={remarques} onChange={(e) => setRemarques(e.target.value)} placeholder="Observations, recommandations au client..." />
@@ -1769,24 +1862,9 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
             <RichTextEditor initialValue={editingReport?.descriptionLibre || ""} onChange={(html) => { descriptionLibreRef.current = html; }} minHeight={160} />
           </div>
 
-          <div className="checklist-header-row">
-            <label className="block">Checklist d'entretien</label>
-            {(settings.checklists || []).filter((t) => t.type === "entretien").length > 0 && (
-              <select
-                className="table-template-select"
-                value=""
-                onChange={(e) => { if (e.target.value) insertTemplateChecklist(e.target.value); }}
-              >
-                <option value="">Choisir un modèle de checklist...</option>
-                {settings.checklists.filter((t) => t.type === "entretien").map((t) => (
-                  <option key={t.id} value={t.id}>{t.nom || "Modèle sans nom"}</option>
-                ))}
-              </select>
-            )}
-          </div>
-          <ChecklistEditor items={checklist} setItems={setChecklist} />
+          <ChecklistsSection checklists={checklists} setChecklists={setChecklists} settings={settings} reportType="entretien" />
 
-          <TablesSection tables={tables} checklist={checklist} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
+          <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
 
           <label className="block mt">Remarques
             <textarea rows={3} value={remarques} onChange={(e) => setRemarques(e.target.value)} placeholder="Observations, recommandations au client..." />
@@ -3358,6 +3436,27 @@ function tablesAtHtml(tables, checklist, anchor) {
   return (tables || []).filter((t) => resolve(t) === anchor).map(tableRowsToHtml).join("");
 }
 
+// Rend toutes les checklists du rapport (titre + lignes) avec les tableaux
+// ancrés au bon endroit, quel que soit le format de stockage du rapport.
+function checklistsToHtml(report) {
+  const listes = normalizeChecklists(report);
+  const flat = allChecklistItems(listes);
+  let html = tablesAtHtml(report.tables, flat, "__start__");
+  listes.forEach((cl) => {
+    if (cl.nom) html += `<h3 class="pdf-checklist-title">${escapeHtml(cl.nom)}</h3>`;
+    html += `<ul class="pdf-checklist">`;
+    (cl.items || []).forEach((it) => {
+      html += `<li><strong>${escapeHtml(it.label)}</strong> — ${it.checked ? "fait" : "non fait"}`;
+      if (it.detail) html += `<div class="pdf-detail">${nl2br(it.detail)}</div>`;
+      html += `</li>`;
+      html += tablesAtHtml(report.tables, flat, it.id);
+    });
+    html += `</ul>`;
+  });
+  html += tablesAtHtml(report.tables, flat, "__end__");
+  return html;
+}
+
 function checklistToHtml(items) {
   if (!items || items.length === 0) return "";
   return `<ul class="pdf-checklist">${items
@@ -3486,31 +3585,13 @@ function buildReportHtml(report, settings) {
   if (report.type === "mise_en_service") {
     if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
     if (report.descriptionLibre) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
-    body += tablesAtHtml(report.tables, report.checklist, "__start__");
-    body += `<ul class="pdf-checklist">`;
-    (report.checklist || []).forEach((it) => {
-      body += `<li><strong>${escapeHtml(it.label)}</strong> — ${it.checked ? "fait" : "non fait"}`;
-      if (it.detail) body += `<div class="pdf-detail">${nl2br(it.detail)}</div>`;
-      body += `</li>`;
-      body += tablesAtHtml(report.tables, report.checklist, it.id);
-    });
-    body += `</ul>`;
-    body += tablesAtHtml(report.tables, report.checklist, "__end__");
+    body += checklistsToHtml(report);
     if (report.remarques) body += `<p>${escapeHtml(report.remarques)}</p>`;
     if (report.devisAEffectuer) body += `<p><strong>Devis à effectuer :</strong> ${escapeHtml(report.devisAEffectuer)}</p>`;
   } else if (report.type === "entretien") {
     if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
     if (report.descriptionLibre) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
-    body += tablesAtHtml(report.tables, report.checklist, "__start__");
-    body += `<ul class="pdf-checklist">`;
-    (report.checklist || []).forEach((it) => {
-      body += `<li><strong>${escapeHtml(it.label)}</strong> — ${it.checked ? "fait" : "non fait"}`;
-      if (it.detail) body += `<div class="pdf-detail">${nl2br(it.detail)}</div>`;
-      body += `</li>`;
-      body += tablesAtHtml(report.tables, report.checklist, it.id);
-    });
-    body += `</ul>`;
-    body += tablesAtHtml(report.tables, report.checklist, "__end__");
+    body += checklistsToHtml(report);
     if (report.remarques) body += `<p>${escapeHtml(report.remarques)}</p>`;
     if (report.devisAEffectuer) body += `<p><strong>Devis à effectuer :</strong> ${escapeHtml(report.devisAEffectuer)}</p>`;
   } else {
@@ -3562,6 +3643,7 @@ function buildReportHtml(report, settings) {
   .pdf-logo { width: 230px; height: 180px; object-fit: contain; object-position: left center; border-radius: 8px; flex-shrink: 0; }
   .pdf-letterhead-text { flex: 1; }
   .pdf-company-name { font-family: 'Barlow Condensed', sans-serif; font-size: 20px; font-weight: 700; color: #1B2733; margin-bottom: 2px; }
+  .pdf-checklist-title { font-family: 'Barlow Condensed', sans-serif; font-size: 17px; font-weight: 700; color: #1B2733; margin: 18px 0 2px; }
   .pdf-checklist { list-style: none; padding: 0; margin: 14px 0; }
   .pdf-checklist li { margin-bottom: 10px; font-size: 14px; }
   .pdf-checklist strong { }
@@ -3853,6 +3935,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .table-position { margin-bottom: 10px; }
 .table-position select { width: auto; min-width: 220px; }
 
+.checklist-group-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: #2F6FA3; margin: 6px 0 2px; }
+.checklist-block { background: #F6F8F7; border: 1px solid #E1E6E5; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.checklist-block-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.checklist-block-title { flex: 1; font-weight: 600; font-size: 13.5px; }
 .checklist-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; margin-bottom: 8px; }
 .checklist-row { display: flex; align-items: center; gap: 8px; }
 .checklist-status-select { width: auto; min-width: 100px; flex-shrink: 0; font-weight: 600; font-size: 12.5px; padding: 6px 8px; border-radius: 6px; }
