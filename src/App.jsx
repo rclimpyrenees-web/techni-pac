@@ -194,7 +194,9 @@ function AdresseLien({ adresse, className }) {
 /* ---------- Petit composant Jauge (élément signature) ---------- */
 function Jauge({ value, max, label, onClick }) {
   const pct = Math.min(1, value / max);
-  const angle = -90 + pct * 180;
+  // L'arc part de la gauche (180°) et tourne jusqu'à la droite (360°) : l'aiguille
+  // doit suivre exactement le même repère, sinon elle est décalée d'un quart de tour.
+  const angle = 180 + pct * 180;
   return (
     <div className={"jauge" + (onClick ? " jauge-clickable" : "")} onClick={onClick} role={onClick ? "button" : undefined}>
       <svg viewBox="0 0 120 70" width="120" height="70">
@@ -246,7 +248,17 @@ export default function App() {
   const [showRappelForm, setShowRappelForm] = useState(false);
   const [reportType, setReportType] = useState("mise_en_service");
 
-  const upcoming = planning.filter((p) => !p.fait && p.categorie !== "relance").length;
+  // Interventions de la semaine en cours (du lundi au dimanche) restant à faire,
+  // plutôt que l'ensemble des interventions non effectuées.
+  const debutSemaine = new Date();
+  debutSemaine.setDate(debutSemaine.getDate() - ((debutSemaine.getDay() + 6) % 7));
+  const finSemaine = new Date(debutSemaine);
+  finSemaine.setDate(finSemaine.getDate() + 6);
+  const isoDebutSemaine = toLocalISODate(debutSemaine);
+  const isoFinSemaine = toLocalISODate(finSemaine);
+  const upcoming = planning.filter(
+    (p) => !p.fait && p.categorie !== "relance" && p.date >= isoDebutSemaine && p.date <= isoFinSemaine
+  ).length;
   const relances = devisEnCours.filter((d) => d.statut === "a_relancer").length;
   const aFacturer = facturation.filter((f) => !f.facture).length;
   const facturesNonPayees = facturation.filter((f) => !f.payee).length;
@@ -658,7 +670,7 @@ function Dashboard({ upcoming, relances, aFacturer, planning, reports, rappelsAc
       </header>
 
       <div className="gauges">
-        <Jauge value={upcoming} max={10} label="Interventions à venir" onClick={() => onNavigate("planning")} />
+        <Jauge value={upcoming} max={10} label="Interventions cette semaine" onClick={() => onNavigate("planning")} />
         <Jauge value={relances} max={5} label="Devis à relancer" onClick={() => onNavigate("devis")} />
         <Jauge value={aFacturer} max={5} label="À facturer" onClick={() => onNavigate("facturation")} />
         <Jauge value={rappelsActifs.length} max={5} label="Rappels actifs" onClick={() => onNavigate("rappels")} />
@@ -1029,6 +1041,8 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
   const [editingReport, setEditingReport] = useState(null);
   const [activePrefillClient, setActivePrefillClient] = useState(null);
   const formRef = useRef(null);
+  // Un seul rapport déplié à la fois : en ouvrir un referme le précédent.
+  const [openReportId, setOpenReportId] = useState(null);
   const filtered = filter === "tous" ? reports : reports.filter((r) => r.type === filter);
 
   const openNew = () => { setEditingReport(null); setActivePrefillClient(null); setShowForm(true); };
@@ -1047,6 +1061,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
     if (focusReport) {
       setFilter("tous");
       setShowForm(false);
+      setOpenReportId(focusReport.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusReport]);
@@ -1093,7 +1108,23 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
             {mg.days.map((dg) => (
               <div key={dg.key} className="report-day-group">
                 {dg.label && <h4 className="report-day-title">{dg.label}</h4>}
-                {dg.items.map((r) => <ReportCard key={r.id} r={r} onPrint={onPrint} onEdit={openEdit} onValidate={onValidate} onDelete={onDelete} onOpenCard={closeForm} focusReport={focusReport} settings={settings} />)}
+                {dg.items.map((r) => (
+                  <ReportCard
+                    key={r.id}
+                    r={r}
+                    open={openReportId === r.id}
+                    onToggle={() => {
+                      if (openReportId !== r.id) closeForm();
+                      setOpenReportId(openReportId === r.id ? null : r.id);
+                    }}
+                    onPrint={onPrint}
+                    onEdit={openEdit}
+                    onValidate={onValidate}
+                    onDelete={onDelete}
+                    focusReport={focusReport}
+                    settings={settings}
+                  />
+                ))}
               </div>
             ))}
           </div>
@@ -1122,14 +1153,12 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
   );
 }
 
-function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, onOpenCard, focusReport, settings }) {
-  const [open, setOpen] = useState(false);
+function ReportCard({ r, open, onToggle, onPrint, onEdit, onValidate, onDelete, focusReport, settings }) {
   const [viewTab, setViewTab] = useState("details");
   const cardRef = useRef(null);
 
   useEffect(() => {
     if (focusReport && focusReport.id === r.id) {
-      setOpen(true);
       cardRef.current && cardRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1137,15 +1166,7 @@ function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, onOpenCard, focu
 
   return (
     <div className={"card report-card" + (r.valide ? " report-card-valide" : "")} ref={cardRef}>
-      <div
-        className="report-card-head"
-        onClick={() => {
-          // Ouvrir un rapport referme le formulaire de saisie, qui ne doit
-          // apparaître que sur « Nouveau rapport » ou « Modifier ».
-          if (!open && onOpenCard) onOpenCard();
-          setOpen(!open);
-        }}
-      >
+      <div className="report-card-head" onClick={onToggle}>
         <span className={"pill " + typePillClass(r.type)}>{shortType(r.type)}</span>
         <div className="report-card-title">
           {settings?.technicien?.nom && <div className="report-tech">Technicien : {settings.technicien.nom}</div>}
@@ -2320,11 +2341,13 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
   const [showContract, setShowContract] = useState(false);
   const [showMap, setShowMap] = useState(false);
   const [showMachines, setShowMachines] = useState(false);
-  const client = clients.find((c) => c.id === selected) || clientsTries[0];
+  // Aucun client affiché tant qu'aucun n'est sélectionné (cas d'une création
+  // en cours) : on ne retombe donc plus systématiquement sur le premier.
+  const client = selected ? clients.find((c) => c.id === selected) : null;
 
   const formRef = useRef(null);
 
-  const openNew = () => { setEditingClient(null); setShowForm(true); };
+  const openNew = () => { setEditingClient(null); setSelected(null); setShowForm(true); };
   const openEdit = (c) => { setEditingClient(c); setShowForm(true); };
   const closeForm = () => { setShowForm(false); setEditingClient(null); };
 
