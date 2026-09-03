@@ -1777,6 +1777,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
     return [defaultChecklistFor(reportType)];
   });
   const [tables, setTables] = useState(editingReport?.tables || []);
+  const [showMachinesSection, setShowMachinesSection] = useState(false);
   // Matériel installé (rapports de mise en service) — même fonctionnement que
   // dans la fiche client : plusieurs matériels, chacun avec ses groupes
   // extérieurs et unités intérieures.
@@ -1923,21 +1924,30 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
             <RichTextEditor initialValue={editingReport?.intro || ""} onChange={(html) => { introRef.current = html; }} minHeight={100} />
           </div>
 
-          <label className="block mt">Matériel installé</label>
-          {machines.map((m, i) => (
-            <CollapsibleMachineCard
-              key={m.id}
-              machine={m}
-              index={i}
-              defaultOpen={machines.length === 1}
-              onChange={(next) => updateMachine(m.id, next)}
-              onRemove={() => removeMachine(m.id)}
-              removable={machines.length > 1}
-            />
-          ))}
-          <button type="button" className="btn-ghost small mb-lg" onClick={addMachine}>
-            <Icon name="plus" size={14} /> Ajouter un matériel
-          </button>
+          <div className="block mt">
+            <button type="button" className="machine-section-toggle section-toggle-bar" onClick={() => setShowMachinesSection(!showMachinesSection)}>
+              <span>Matériel installé ({machines.length})</span>
+              <Icon name={showMachinesSection ? "chevronDown" : "chevronRight"} size={18} />
+            </button>
+            {showMachinesSection && (
+              <div className="mt">
+                {machines.map((m, i) => (
+                  <CollapsibleMachineCard
+                    key={m.id}
+                    machine={m}
+                    index={i}
+                    defaultOpen={machines.length === 1}
+                    onChange={(next) => updateMachine(m.id, next)}
+                    onRemove={() => removeMachine(m.id)}
+                    removable={machines.length > 1}
+                  />
+                ))}
+                <button type="button" className="btn-ghost small" onClick={addMachine}>
+                  <Icon name="plus" size={14} /> Ajouter un matériel
+                </button>
+              </div>
+            )}
+          </div>
 
           <div className="block field-block">
             <div className="field-caption">Description</div>
@@ -2837,7 +2847,30 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
   const dates = Object.keys(grouped).sort();
   const dateCounts = {};
   dates.forEach((d) => { dateCounts[d] = grouped[d].length; });
-  const [selectedDate, setSelectedDate] = useState(() => dates[0] || toLocalISODate(new Date()));
+  // On ouvre toujours le planning sur la journée en cours (et non sur la plus
+  // ancienne date programmée). Si l'application reste ouverte au passage de
+  // minuit, ou revient au premier plan un autre jour, la sélection bascule
+  // automatiquement sur le nouveau jour.
+  const [selectedDate, setSelectedDate] = useState(() => toLocalISODate(new Date()));
+  const jourAffiche = useRef(toLocalISODate(new Date()));
+
+  useEffect(() => {
+    const verifierJour = () => {
+      const aujourdhui = toLocalISODate(new Date());
+      if (aujourdhui !== jourAffiche.current) {
+        jourAffiche.current = aujourdhui;
+        setSelectedDate(aujourdhui);
+      }
+    };
+    const timer = setInterval(verifierJour, 60000);
+    document.addEventListener("visibilitychange", verifierJour);
+    window.addEventListener("focus", verifierJour);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", verifierJour);
+      window.removeEventListener("focus", verifierJour);
+    };
+  }, []);
   const [editingTask, setEditingTask] = useState(null);
 
   const openNewTaskForm = () => { setEditingTask(null); setShowForm(!showForm || !!editingTask); };
@@ -2913,6 +2946,15 @@ function MiniCalendar({ dateCounts, selectedDate, onSelectDate }) {
     const d = new Date();
     return { year: d.getFullYear(), month: d.getMonth() };
   });
+
+  // Si le jour sélectionné se trouve dans un autre mois (changement de date
+  // automatique, notamment au passage d'un mois à l'autre), on affiche ce mois.
+  useEffect(() => {
+    if (!selectedDate) return;
+    const [a, m] = selectedDate.split("-").map(Number);
+    if (!a || !m) return;
+    setCursor((c) => (c.year === a && c.month === m - 1 ? c : { year: a, month: m - 1 }));
+  }, [selectedDate]);
 
   const firstOfMonth = new Date(cursor.year, cursor.month, 1);
   const daysInMonth = new Date(cursor.year, cursor.month + 1, 0).getDate();
@@ -4060,6 +4102,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .mini-table th { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.3px; color: #8A959A; }
 
 .machine-block { margin-bottom: 16px; padding: 12px; border: 1px solid #E4E9E8; border-radius: 8px; }
+.section-toggle-bar { background: #F6F8F7; border: 1px solid #E1E6E5; border-radius: 8px; padding: 11px 14px; font-size: 13.5px; font-weight: 600; }
+.section-toggle-bar:hover { border-color: #2F6FA3; color: #2F6FA3; }
 .machine-section-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; background: transparent; border: none; padding: 0; cursor: pointer; color: #1B2733; }
 .machine-title { font-size: 13.5px; font-weight: 600; margin-bottom: 6px; color: #1B2733; }
 .machine-date { font-weight: 400; color: #6D7A80; }
