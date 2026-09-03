@@ -4467,6 +4467,19 @@ textarea { resize: vertical; }
   .checklist-row > .icon-btn { order: 2; margin-left: auto; }
   .checklist-inputs { order: 3; flex-basis: 100%; width: 100%; }
   .checklist-label-input { min-height: 62px; }
+
+  /* Tableaux : en saisie, chaque cellule passe sur toute la largeur de l'écran
+     (une ligne du tableau = un petit bloc), au lieu de colonnes écrasées. */
+  .editable-table, .editable-table tbody, .editable-table tr, .editable-table td { display: block; width: 100%; }
+  .editable-table { overflow: visible; }
+  .editable-table tr { background: #fff; border: 1px solid #E1E6E5; border-radius: 8px; padding: 6px; margin-bottom: 8px; }
+  .editable-table td { padding: 3px; }
+  .editable-table .table-row-actions { width: 100%; text-align: right; }
+
+  /* À l'affichage du rapport, le texte des tableaux revient à la ligne au lieu
+     d'obliger à faire défiler horizontalement. */
+  .mini-table-block .mini-table { display: table; width: 100%; table-layout: fixed; overflow: visible; }
+  .mini-table-block .mini-table td { word-break: break-word; white-space: normal; }
   .mobile-topbar {
     display: flex; align-items: center; gap: 12px;
     position: sticky; top: 0; z-index: 30;
