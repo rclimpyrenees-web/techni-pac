@@ -2871,7 +2871,7 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
           key={m.id}
           machine={m}
           index={i}
-          defaultOpen={machines.length === 1}
+          defaultOpen={false}
           onChange={(next) => updateMachine(m.id, next)}
           onRemove={() => removeMachine(m.id)}
           removable={machines.length > 1}
