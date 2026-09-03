@@ -1093,7 +1093,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
             {mg.days.map((dg) => (
               <div key={dg.key} className="report-day-group">
                 {dg.label && <h4 className="report-day-title">{dg.label}</h4>}
-                {dg.items.map((r) => <ReportCard key={r.id} r={r} onPrint={onPrint} onEdit={openEdit} onValidate={onValidate} onDelete={onDelete} focusReport={focusReport} settings={settings} />)}
+                {dg.items.map((r) => <ReportCard key={r.id} r={r} onPrint={onPrint} onEdit={openEdit} onValidate={onValidate} onDelete={onDelete} onOpenCard={closeForm} focusReport={focusReport} settings={settings} />)}
               </div>
             ))}
           </div>
@@ -1122,7 +1122,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
   );
 }
 
-function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, settings }) {
+function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, onOpenCard, focusReport, settings }) {
   const [open, setOpen] = useState(false);
   const [viewTab, setViewTab] = useState("details");
   const cardRef = useRef(null);
@@ -1137,7 +1137,15 @@ function ReportCard({ r, onPrint, onEdit, onValidate, onDelete, focusReport, set
 
   return (
     <div className={"card report-card" + (r.valide ? " report-card-valide" : "")} ref={cardRef}>
-      <div className="report-card-head" onClick={() => setOpen(!open)}>
+      <div
+        className="report-card-head"
+        onClick={() => {
+          // Ouvrir un rapport referme le formulaire de saisie, qui ne doit
+          // apparaître que sur « Nouveau rapport » ou « Modifier ».
+          if (!open && onOpenCard) onOpenCard();
+          setOpen(!open);
+        }}
+      >
         <span className={"pill " + typePillClass(r.type)}>{shortType(r.type)}</span>
         <div className="report-card-title">
           {settings?.technicien?.nom && <div className="report-tech">Technicien : {settings.technicien.nom}</div>}
@@ -2410,6 +2418,10 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
         />
       )}
 
+      {client && (
+        <ClientHistory client={client} reports={reports} devisAFaire={devisAFaire} devisEnCours={devisEnCours} facturation={facturation} onOpenReport={onOpenReport} onNavigate={onNavigate} onDeleteFacturation={onDeleteFacturation} />
+      )}
+
       {showForm && (
         <div ref={formRef}>
           <ClientForm
@@ -2419,10 +2431,6 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
             onSubmit={(c) => { editingClient ? onUpdate(c) : onAdd(c); closeForm(); setSelected(c.id); }}
           />
         </div>
-      )}
-
-      {client && (
-        <ClientHistory client={client} reports={reports} devisAFaire={devisAFaire} devisEnCours={devisEnCours} facturation={facturation} onOpenReport={onOpenReport} onNavigate={onNavigate} onDeleteFacturation={onDeleteFacturation} />
       )}
 
       {showContract && client?.contrat && (
