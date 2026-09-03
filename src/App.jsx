@@ -3046,7 +3046,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
                     <div className="row-sub">{p.client} {p.heure !== "—" && `· ${p.heure}`}{p.duree && ` · ${p.duree}`}</div>
                     {(() => {
                       const fiche = clients.find((c) => c.nom === p.client);
-                      const adresseTache = (fiche && fiche.adresse) || p.adresse;
+                      const adresseTache = (p.adresse && p.adresse.trim()) || (fiche && fiche.adresse);
                       return adresseTache ? <AdresseLien adresse={adresseTache} /> : null;
                     })()}
                   </div>
@@ -3183,6 +3183,9 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
   const [adresse, setAdresse] = useState(editingTask?.adresse || "");
 
   const clientConnu = clients.find((c) => c.nom === client);
+  // L'adresse du site l'emporte toujours ; à défaut, on retombe sur celle de la
+  // fiche client.
+  const adresseNavigation = (adresse && adresse.trim()) || (clientConnu && clientConnu.adresse) || "";
 
   const submit = () => {
     if (!titre) return;
@@ -3193,7 +3196,7 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
       date,
       heure,
       duree,
-      adresse: clientConnu ? "" : adresse,
+      adresse,
       rappel: hideRappelToggle ? true : rappel,
       fait: editingTask?.fait || false,
       categorie: editingTask?.categorie || forceCategorie || "intervention",
@@ -3212,17 +3215,23 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
             onChange={setClient}
             placeholder="Rechercher un client existant, ou en taper un nouveau"
           />
-          {clientConnu && (clientConnu.adresse
-            ? <AdresseLien adresse={clientConnu.adresse} />
-            : <span className="hint">Aucune adresse dans la fiche de ce client.</span>
-          )}
-          {!clientConnu && client.trim() && (
-            <>
-              <input value={adresse} onChange={(e) => setAdresse(e.target.value)} placeholder="Adresse de l'intervention" />
-              <span className="hint">Ce client n'est pas encore dans le fichier : indiquez l'adresse ici.</span>
-            </>
+          {clientConnu && (
+            <span className="hint">
+              {clientConnu.adresse ? `Adresse de la fiche : ${clientConnu.adresse}` : "Aucune adresse dans la fiche de ce client."}
+            </span>
           )}
         </div>
+        <label className="grid-full">Adresse du site
+          <input
+            value={adresse}
+            onChange={(e) => setAdresse(e.target.value)}
+            placeholder={clientConnu && clientConnu.adresse ? "Laisser vide pour utiliser l'adresse de la fiche client" : "Adresse où se déroule l'intervention"}
+          />
+          <span className="hint">
+            Utile pour un client professionnel chez qui vous intervenez sur le site de son propre client. C'est cette adresse qui sera ouverte dans votre application de navigation.
+          </span>
+          {adresseNavigation && <AdresseLien adresse={adresseNavigation} />}
+        </label>
         <label>Date<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
         <label>Heure
           <select value={heure} onChange={(e) => setHeure(e.target.value)}>
@@ -4383,6 +4392,7 @@ input, select, textarea {
 textarea { resize: vertical; }
 .description-textarea { min-height: 110px; resize: vertical; }
 .description-view p { white-space: pre-wrap; margin: 4px 0 0; }
+.grid-full { grid-column: 1 / -1; }
 .field-col { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; font-weight: 600; color: #4A5860; }
 .adresse-lien { display: inline-flex; align-items: flex-start; gap: 5px; font-size: 12.5px; font-weight: 500; color: #2F6FA3; text-decoration: none; margin-top: 2px; }
 .adresse-lien span { text-decoration: underline; text-underline-offset: 2px; }
