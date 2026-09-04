@@ -1543,15 +1543,6 @@ function allChecklistItems(checklists) {
   return (checklists || []).reduce((acc, cl) => acc.concat(cl.items || []), []);
 }
 
-function defaultChecklistFor(reportType) {
-  const tpl = reportType === "entretien" ? DEFAULT_ENTRETIEN_CHECKLIST : DEFAULT_MES_CHECKLIST;
-  return {
-    id: "cl" + Date.now(),
-    nom: reportType === "entretien" ? "Checklist d'entretien" : "Checklist de mise en service",
-    items: tpl.map((t) => ({ id: t.id, label: t.label, checked: true, detail: "" })),
-  };
-}
-
 /* Affichage (rapport) de l'ensemble des checklists, avec les tableaux ancrés au bon endroit */
 function ChecklistsView({ checklists, tables }) {
   const flatItems = allChecklistItems(checklists);
@@ -1654,6 +1645,11 @@ function ChecklistsSection({ checklists, setChecklists, settings, reportType }) 
             </button>
           </div>
           <ChecklistEditor items={cl.items || []} setItems={setItemsFor(cl.id)} />
+          <div className="table-actions">
+            <button type="button" className="btn-ghost small" onClick={() => removeChecklist(cl.id)}>
+              Supprimer la checklist
+            </button>
+          </div>
         </div>
       ))}
       {checklists.length === 0 && <p className="empty">Aucune checklist dans ce rapport.</p>}
@@ -2094,11 +2090,9 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   const [marquerEffectue, setMarquerEffectue] = useState(editingReport?.valide ?? true);
   const [devisAEffectuer, setDevisAEffectuer] = useState(editingReport?.devisAEffectuer || "");
   const [photos, setPhotos] = useState(editingReport?.photos || []);
-  const [checklists, setChecklists] = useState(() => {
-    const existantes = normalizeChecklists(editingReport);
-    if (existantes.length > 0) return existantes;
-    return [defaultChecklistFor(reportType)];
-  });
+  // Aucune checklist n'est pré-remplie : sur un nouveau rapport, on choisit
+  // soi-même le ou les modèles à insérer.
+  const [checklists, setChecklists] = useState(() => normalizeChecklists(editingReport));
   const [tables, setTables] = useState(editingReport?.tables || []);
   const [showMachinesSection, setShowMachinesSection] = useState(false);
   // Matériel installé (rapports de mise en service) — même fonctionnement que
@@ -2133,9 +2127,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
   useEffect(() => {
     if (isEditing) return;
-    if (reportType === "mise_en_service" || reportType === "entretien") {
-      setChecklists([defaultChecklistFor(reportType)]);
-    }
+    setChecklists([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportType]);
 
