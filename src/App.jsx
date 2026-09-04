@@ -3649,10 +3649,26 @@ function Devis({ clients, devisAFaire, devisEnCours, onCreated, onRelance, onVal
   );
 }
 
+// Les montants sont stockés sous forme de texte ("120 €", "1 200,50 €" ou
+// "À chiffrer" quand le rapport n'en comportait pas) : on en extrait la valeur
+// numérique, et on ignore ce qui n'en contient aucune.
+function montantEnNombre(texte) {
+  if (!texte) return null;
+  const nettoye = String(texte).replace(/\s/g, "").replace(",", ".").replace(/[^0-9.]/g, "");
+  const valeur = parseFloat(nettoye);
+  return isNaN(valeur) ? null : valeur;
+}
+
+function formatEuros(valeur) {
+  return valeur.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+}
+
 /* ---------- Facturation ---------- */
 function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylane, onRetryPennylane, onDeleteFacturation, onOpenClient }) {
   const aFacturer = facturation.filter((f) => !f.facture);
   const impayees = facturation.filter((f) => f.facture && !f.payee);
+  const totalImpayees = impayees.reduce((somme, f) => somme + (montantEnNombre(f.montant) || 0), 0);
+  const impayeesSansMontant = impayees.filter((f) => montantEnNombre(f.montant) === null).length;
   const payees = facturation.filter((f) => f.facture && f.payee);
 
   return (
@@ -3727,6 +3743,17 @@ function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylan
             </li>
           )}
         />
+        {impayees.length > 0 && (
+          <div className="total-ligne">
+            <span>Total impayé</span>
+            <strong>{formatEuros(totalImpayees)} HT</strong>
+            {impayeesSansMontant > 0 && (
+              <span className="hint">
+                ({impayeesSansMontant} facture{impayeesSansMontant > 1 ? "s" : ""} sans montant, non comptée{impayeesSansMontant > 1 ? "s" : ""})
+              </span>
+            )}
+          </div>
+        )}
       </section>
 
       {payees.length > 0 && (
@@ -4378,6 +4405,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .card { background: #fff; border: 1px solid #D7DEDD; border-radius: 12px; padding: 20px 22px; margin-bottom: 20px; }
 .card h3 { font-family: 'Barlow Condensed', sans-serif; font-size: 18px; font-weight: 600; margin: 0 0 14px; }
 .card h4 { font-size: 13px; font-weight: 600; margin: 0 0 8px; color: #4A5860; text-transform: uppercase; letter-spacing: 0.4px; }
+.total-ligne { display: flex; align-items: baseline; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid #EAEDEC; font-size: 14px; color: #4A5860; }
+.total-ligne strong { font-family: 'Barlow Condensed', sans-serif; font-size: 20px; font-weight: 700; color: #B33128; }
 .month-group { margin-bottom: 18px; }
 .month-group:last-child { margin-bottom: 0; }
 .month-heading { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: #2F6FA3; margin: 0 0 6px; padding-bottom: 4px; border-bottom: 1px solid #EAEDEC; text-transform: none; letter-spacing: 0; }
