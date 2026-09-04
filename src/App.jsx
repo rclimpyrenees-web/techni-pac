@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { useSyncedCollection, useSyncedSettings } from "./useSyncedCollection.js";
 import { supabase } from "./supabaseClient.js";
 import { BLANK_CONTRACT_PDF_BASE64, BLANK_CONTRACT_AIR_EAU_PDF_BASE64, BLANK_CONTRACT_B2B_PDF_BASE64, BLANK_CONTRACT_AIR_EAU_B2B_PDF_BASE64 } from "./contractTemplate.js";
-import { pennylaneCreateInvoice, pennylaneCheckStatus } from "./pennylane.js";
+import { pennylaneCreateInvoice, pennylaneUpdateInvoice, pennylaneCheckStatus } from "./pennylane.js";
 
 /* ---------- Modèles de checklist par défaut (modifiables librement dans chaque rapport) ---------- */
 
@@ -255,6 +255,7 @@ export default function App() {
   const [reportPrefill, setReportPrefill] = useState(null);
   const [focusClient, setFocusClient] = useState(null);
   const [pdfPreviewHtml, setPdfPreviewHtml] = useState(null);
+  const [correctionPennylane, setCorrectionPennylane] = useState(null);
 
   const [showClientForm, setShowClientForm] = useState(false);
   const [showReportForm, setShowReportForm] = useState(false);
@@ -360,8 +361,40 @@ export default function App() {
   };
 
   const handleUpdateReport = (r) => {
+    const ancien = reports.find((x) => x.id === r.id);
     upsertReport(r);
     syncPlanningTaskFromReport(r);
+
+    // Si le montant change alors que l'intervention est déjà passée en
+    // facturation, la ligne correspondante est corrigée immédiatement. La
+    // facture Pennylane, elle, n'est jamais modifiée sans accord explicite.
+    const ligne = facturation.find((f) => f.reportId === r.id);
+    const montantModifie = ancien && String(ancien.montant || "") !== String(r.montant || "");
+    if (ligne && montantModifie) {
+      const ligneAJour = { ...ligne, montant: r.montant ? `${r.montant} €` : "À chiffrer" };
+      upsertFacturation(ligneAJour);
+      if (ligne.pennylaneInvoiceId && r.montant) {
+        setCorrectionPennylane({ ligne: ligneAJour, report: r, ancienMontant: ancien.montant });
+      }
+    }
+  };
+
+  const appliquerCorrectionPennylane = async () => {
+    const demande = correctionPennylane;
+    setCorrectionPennylane(null);
+    if (!demande) return;
+    const { ligne, report } = demande;
+    try {
+      await pennylaneUpdateInvoice({
+        invoiceId: ligne.pennylaneInvoiceId,
+        montantHT: parseFloat(report.montant),
+        label: `${labelType(report.type)} — ${report.date}`,
+        vatRate: report.tva || settings.pennylane?.tvaParDefaut || "FR_200",
+      });
+      upsertFacturation({ ...ligne, pennylaneStatus: "envoyée", pennylaneError: null });
+    } catch (e) {
+      upsertFacturation({ ...ligne, pennylaneStatus: "erreur", pennylaneError: String(e?.message || e) });
+    }
   };
 
   const handleDeleteReport = (r) => {
@@ -659,6 +692,26 @@ export default function App() {
       </main>
 
       {pdfPreviewHtml && <PdfPreviewModal html={pdfPreviewHtml} onClose={() => setPdfPreviewHtml(null)} />}
+
+      {correctionPennylane && (
+        <ConfirmationModal
+          titre="Corriger aussi la facture Pennylane ?"
+          onConfirmer={appliquerCorrectionPennylane}
+          onAnnuler={() => setCorrectionPennylane(null)}
+          libelleConfirmer="Corriger dans Pennylane"
+        >
+          <p>
+            Le montant est passé de <strong>{correctionPennylane.ancienMontant || "—"} €</strong> à{" "}
+            <strong>{correctionPennylane.report.montant} €</strong> HT. La ligne de l'onglet Facturation a déjà
+            été mise à jour.
+          </p>
+          <p className="hint">
+            La correction n'est possible que si la facture est encore à l'état de brouillon dans Pennylane.
+            Si elle a déjà été finalisée, un message vous l'indiquera et il faudra la traiter directement
+            dans Pennylane.
+          </p>
+        </ConfirmationModal>
+      )}
     </div>
   );
 }
@@ -3716,6 +3769,11 @@ function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylan
                 <div className="row-sub">
                   {f.intervention}
                   {f.pennylaneInvoiceId && <span className="pill pill-pennylane">Pennylane</span>}
+                  {f.pennylaneStatus === "erreur" && (
+                    <span className="pill pill-alert pennylane-error-pill" title={f.pennylaneError}>
+                      <Icon name="alert" size={11} /> Correction Pennylane impossible
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="row-actions">
@@ -4145,6 +4203,23 @@ function PdfFileModal({ base64, filename, title, onClose }) {
   );
 }
 
+
+function ConfirmationModal({ titre, children, onConfirmer, onAnnuler, libelleConfirmer }) {
+  return (
+    <div className="pdf-modal-overlay" onClick={onAnnuler}>
+      <div className="pdf-modal-box pdf-modal-box-compact" onClick={(e) => e.stopPropagation()}>
+        <div className="pdf-modal-toolbar">
+          <span className="pdf-modal-title"><Icon name="alert" size={16} /> {titre}</span>
+        </div>
+        <div className="confirmation-corps">{children}</div>
+        <div className="confirmation-actions">
+          <button className="btn-ghost" onClick={onAnnuler}>Ne rien changer</button>
+          <button className="btn-primary" onClick={onConfirmer}>{libelleConfirmer || "Confirmer"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function PdfPreviewModal({ html, onClose }) {
   const iframeRef = useRef(null);
@@ -4711,6 +4786,9 @@ textarea { resize: vertical; }
 .pdf-modal-fallback p { font-size: 14px; max-width: 360px; margin: 0; color: #1B2733; font-weight: 600; }
 .pdf-modal-hint { font-size: 12.5px !important; font-weight: 400 !important; color: #6D7A80 !important; }
 .pdf-modal-fallback-actions { display: flex; gap: 10px; margin-top: 8px; }
+.confirmation-corps { padding: 18px 20px 4px; font-size: 14px; line-height: 1.55; color: #1B2733; }
+.confirmation-corps p { margin: 0 0 12px; }
+.confirmation-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 6px 20px 20px; flex-wrap: wrap; }
 
 .print-only { display: none; }
 .print-letterhead { margin-bottom: 20px; padding-bottom: 12px; border-bottom: 2px solid #1B2733; font-size: 12.5px; color: #4A5860; }
