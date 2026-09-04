@@ -1,5 +1,4 @@
 import { supabase } from "./supabaseClient.js";
-
 // Appelle la fonction Supabase "pennylane-sync" (voir supabase/functions/pennylane-sync).
 // Ne contient jamais la clé API Pennylane — elle reste côté serveur.
 async function callPennylane(action, payload) {
@@ -24,18 +23,21 @@ async function callPennylane(action, payload) {
   if (!data?.ok) throw new Error(data?.error || "Réponse inattendue de la fonction Pennylane.");
   return data.result;
 }
-
 // Crée une facture Pennylane pour ce client (créé/retrouvé automatiquement côté
 // Pennylane) et cette intervention. Retourne { invoice, pennylaneCustomerId }.
 export function pennylaneCreateInvoice({ client, montantHT, label, vatRate }) {
   return callPennylane("create_invoice", { client, montantHT, label, vatRate });
 }
-
+// Corrige le montant d'une facture Pennylane encore à l'état de brouillon.
+// Lève une erreur explicite si elle a déjà été finalisée : dans ce cas, seule
+// une correction manuelle (ou un avoir) est possible côté Pennylane.
+export function pennylaneUpdateInvoice({ invoiceId, montantHT, label, vatRate }) {
+  return callPennylane("update_invoice", { invoiceId, montantHT, label, vatRate });
+}
 // Retourne { id, status, paid, remaining_amount } pour une facture Pennylane.
 export function pennylaneCheckStatus(invoiceId) {
   return callPennylane("check_status", { invoiceId });
 }
-
 export function pennylaneFindOrCreateCustomer(client) {
   return callPennylane("find_or_create_customer", { client });
 }
