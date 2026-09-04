@@ -3996,9 +3996,11 @@ function nl2br(str) {
 
 function tableRowsToHtml(t) {
   const titre = t.nom ? `<h3 class="pdf-table-title">${escapeHtml(t.nom)}</h3>` : "";
-  return `${titre}<table class="pdf-table"><tbody>${t.rows
+  // Titre et tableau sont regroupés dans un bloc insécable : à l'impression,
+  // l'ensemble bascule sur la page suivante plutôt que d'être coupé en deux.
+  return `<div class="pdf-bloc-insecable">${titre}<table class="pdf-table"><tbody>${t.rows
     .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`)
-    .join("")}</tbody></table>`;
+    .join("")}</tbody></table></div>`;
 }
 
 function tablesAtHtml(tables, checklist, anchor) {
@@ -4023,12 +4025,14 @@ function machinesToHtml(machines) {
   machines.forEach((m) => {
     const ext = normalizeUnits(m.exterieur);
     const int = normalizeUnits(m.interieur);
+    html += `<div class="pdf-bloc-insecable">`;
     html += `<p class="pdf-machine-type"><strong>${escapeHtml(m.type || "")}</strong>${m.date ? ` — installé le ${escapeHtml(m.date)}` : ""}</p>`;
     html += `<table class="pdf-table"><tbody>`;
     html += `<tr><td></td><td><strong>Marque</strong></td><td><strong>Modèle</strong></td><td><strong>N° de série</strong></td></tr>`;
     ext.forEach((u, i) => { html += ligne("Groupe extérieur" + (ext.length > 1 ? " " + (i + 1) : ""), u); });
     int.forEach((u, i) => { html += ligne("Unité intérieure" + (int.length > 1 ? " " + (i + 1) : ""), u); });
     html += `</tbody></table>`;
+    html += `</div>`;
   });
   return html;
 }
@@ -4252,6 +4256,15 @@ function buildReportHtml(report, settings, clients) {
   .pdf-section-title { font-family: 'Inter', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 18px 0 4px; text-decoration: underline; text-underline-offset: 3px; }
   .pdf-texte-libre { font-size: 16px; line-height: 1.55; white-space: pre-wrap; }
   .pdf-table-title { font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 16px 0 -4px; text-decoration: underline; text-underline-offset: 3px; }
+  /* Rien ne doit être coupé au milieu par un changement de page : un tableau,
+     un matériel ou une ligne de checklist bascule entier sur la page suivante,
+     et un titre ne reste jamais seul en bas de page. */
+  .pdf-bloc-insecable { break-inside: avoid; page-break-inside: avoid; }
+  .pdf-table-title, .pdf-checklist-title, .pdf-section-title, .pdf-machine-type, .pdf-field-label {
+    break-after: avoid; page-break-after: avoid;
+  }
+  .pdf-checklist li { break-inside: avoid; page-break-inside: avoid; }
+  .pdf-table tr { break-inside: avoid; page-break-inside: avoid; }
   .pdf-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; border: 1px solid #C7D0CE; }
   .pdf-table td { border: 1px solid #C7D0CE; padding: 7px 9px; }
   .pdf-description strong { font-weight: 700; }
