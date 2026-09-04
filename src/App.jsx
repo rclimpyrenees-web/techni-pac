@@ -191,6 +191,20 @@ function AdresseLien({ adresse, className }) {
   );
 }
 
+/* Pour un client professionnel, on affiche partout sa raison sociale plutôt
+   que le nom du contact. En base, c'est toujours le nom de la fiche qui est
+   enregistré sur les rapports, tâches, devis et factures : lui seul fait le
+   lien entre les modules, l'affichage est donc résolu à la volée. */
+function libelleClient(c) {
+  if (!c) return "";
+  return c.raisonSociale && c.raisonSociale.trim() ? c.raisonSociale : c.nom;
+}
+
+function nomAffiche(nomStocke, clients) {
+  const c = (clients || []).find((cl) => cl.nom === nomStocke);
+  return c ? libelleClient(c) : nomStocke;
+}
+
 /* ---------- Petit composant Jauge (élément signature) ---------- */
 function Jauge({ value, max, label, onClick }) {
   const pct = Math.min(1, value / max);
@@ -287,7 +301,10 @@ export default function App() {
     try {
       const { invoice, pennylaneCustomerId } = await pennylaneCreateInvoice({
         client: {
-          nom: client?.nom || r.client,
+          // Facture établie au nom de l'entreprise pour un client
+          // professionnel, et au nom du particulier sinon.
+          nom: libelleClient(client) || r.client,
+          contact: client?.nom || r.client,
           email: client?.email || "",
           adresse: client?.adresse || "",
           tel: client?.tel || "",
@@ -352,7 +369,7 @@ export default function App() {
   };
 
   const handlePrint = (r) => {
-    setPdfPreviewHtml(buildReportHtml(r, settings));
+    setPdfPreviewHtml(buildReportHtml(r, settings, clients));
   };
 
   const goToReport = (id) => {
@@ -522,6 +539,7 @@ export default function App() {
       <main className="main">
         {tab === "dashboard" && (
           <Dashboard
+            clients={clients}
             upcoming={upcoming}
             relances={relances}
             aFacturer={aFacturer}
@@ -602,6 +620,7 @@ export default function App() {
 
         {tab === "devis" && (
           <Devis
+            clients={clients}
             devisAFaire={devisAFaire}
             devisEnCours={devisEnCours}
             onCreated={(id) => removeDevisAFaire(id)}
@@ -616,6 +635,7 @@ export default function App() {
 
         {tab === "facturation" && (
           <Facturation
+            clients={clients}
             facturation={facturation}
             onFacturer={(id) => {
               const item = facturation.find((f) => f.id === id);
@@ -644,7 +664,7 @@ export default function App() {
 }
 
 /* ---------- Dashboard ---------- */
-function Dashboard({ upcoming, relances, aFacturer, planning, reports, rappelsActifs, onToggle, onNavigate, onOpenReport }) {
+function Dashboard({ clients, upcoming, relances, aFacturer, planning, reports, rappelsActifs, onToggle, onNavigate, onOpenReport }) {
   const todayIso = toLocalISODate(new Date());
   const next = planning.filter((p) => !p.fait && p.categorie !== "relance" && p.date === todayIso);
 
@@ -703,7 +723,7 @@ function Dashboard({ upcoming, relances, aFacturer, planning, reports, rappelsAc
               <li key={p.id} className="row clickable" onClick={() => onNavigate("planning")} title="Voir dans le planning">
                 <div>
                   <div className="row-title">{p.titre}</div>
-                  <div className="row-sub">{p.client} {p.heure !== "—" ? `· à ${p.heure}` : ""}{p.duree && ` · ${p.duree}`}</div>
+                  <div className="row-sub">{nomAffiche(p.client, clients)} {p.heure !== "—" ? `· à ${p.heure}` : ""}{p.duree && ` · ${p.duree}`}</div>
                 </div>
                 {p.rappel && <span className="pill pill-warm"><Icon name="bell" size={13} /> rappel</span>}
               </li>
@@ -717,7 +737,7 @@ function Dashboard({ upcoming, relances, aFacturer, planning, reports, rappelsAc
             {reports.slice(0, 4).map((r) => (
               <li key={r.id} className="row clickable" onClick={() => onOpenReport(r.id)} title="Ouvrir le rapport">
                 <div>
-                  <div className="row-title">{r.client}</div>
+                  <div className="row-title">{nomAffiche(r.client, clients)}</div>
                   <div className="row-sub">{labelType(r.type)} · {r.date}</div>
                 </div>
                 <span className={"pill " + typePillClass(r.type)}>{shortType(r.type)}</span>
@@ -736,7 +756,7 @@ function Dashboard({ upcoming, relances, aFacturer, planning, reports, rappelsAc
               <button className="check-circle" onClick={(e) => { e.stopPropagation(); onToggle(p.id); }}></button>
               <div className="grow">
                 <div className="row-title">{p.titre}</div>
-                <div className="row-sub">{p.client} · {p.date.split("-").reverse().join("/")} {p.heure !== "—" ? `à ${p.heure}` : ""}</div>
+                <div className="row-sub">{nomAffiche(p.client, clients)} · {p.date.split("-").reverse().join("/")} {p.heure !== "—" ? `à ${p.heure}` : ""}</div>
               </div>
               <span className="pill pill-warm"><Icon name="bell" size={13} /> rappel</span>
             </li>
@@ -819,7 +839,7 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
                 </button>
                 <div className="grow">
                   <div className="row-title">{p.titre}</div>
-                  <div className="row-sub">{p.client} {p.heure !== "—" && `· ${p.heure}`}</div>
+                  <div className="row-sub">{nomAffiche(p.client, clients)} {p.heure !== "—" && `· ${p.heure}`}</div>
                 </div>
                 <button className="icon-btn" onClick={() => openEditForm(p)} title="Modifier ce rappel">
                   <Icon name="edit" size={15} />
@@ -834,6 +854,162 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
         </section>
       ))}
     </div>
+  );
+}
+
+/* ---------- Notifications push ----------
+   Deux envois par jour (9h et 19h) rappelant les rappels du jour et les devis
+   à faire. Techniquement : le navigateur crée un abonnement auprès de son
+   propre service de notification, et on enregistre cet abonnement dans
+   Supabase pour que la fonction planifiée puisse envoyer le message. */
+
+const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";
+
+// La clé publique est transmise au format base64 « URL-safe » : le navigateur
+// exige, lui, un tableau d'octets.
+function base64UrlEnOctets(base64) {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const normalise = (base64 + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const brut = window.atob(normalise);
+  return Uint8Array.from([...brut].map((c) => c.charCodeAt(0)));
+}
+
+// Sur iPhone, les notifications n'existent que si l'application a été ajoutée
+// à l'écran d'accueil puis lancée depuis son icône : dans un onglet Safari,
+// l'interface de notification n'est tout simplement pas disponible.
+function estSurIphoneHorsEcranAccueil() {
+  const ua = navigator.userAgent || "";
+  const estApple = /iPad|iPhone|iPod/.test(ua);
+  const estInstallee = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  return estApple && !estInstallee;
+}
+
+function notificationsDisponibles() {
+  return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+}
+
+async function activerNotifications() {
+  if (estSurIphoneHorsEcranAccueil()) {
+    throw new Error("Sur iPhone, ajoutez d'abord TECHNI-PAC à l'écran d'accueil (bouton Partager → « Sur l'écran d'accueil »), puis rouvrez l'application depuis son icône.");
+  }
+  if (!notificationsDisponibles()) {
+    throw new Error("Cet appareil ou ce navigateur ne gère pas les notifications.");
+  }
+  if (!VAPID_PUBLIC_KEY) {
+    throw new Error("Clé de notification absente : ajoutez la variable VITE_VAPID_PUBLIC_KEY dans Vercel, puis redéployez.");
+  }
+
+  const registration = await navigator.serviceWorker.register("/sw.js");
+  await navigator.serviceWorker.ready;
+
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    throw new Error("Notifications refusées. Vous pouvez les réautoriser dans les réglages de votre téléphone.");
+  }
+
+  let abonnement = await registration.pushManager.getSubscription();
+  if (!abonnement) {
+    abonnement = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: base64UrlEnOctets(VAPID_PUBLIC_KEY),
+    });
+  }
+
+  const infos = abonnement.toJSON();
+  const { data: auth } = await supabase.auth.getUser();
+  const { error } = await supabase.from("push_subscriptions").upsert(
+    {
+      user_id: auth?.user?.id || null,
+      endpoint: infos.endpoint,
+      p256dh: infos.keys.p256dh,
+      auth: infos.keys.auth,
+      appareil: navigator.userAgent.slice(0, 120),
+    },
+    { onConflict: "endpoint" }
+  );
+  if (error) throw new Error(error.message);
+}
+
+async function desactiverNotifications() {
+  const registration = await navigator.serviceWorker.getRegistration();
+  const abonnement = registration ? await registration.pushManager.getSubscription() : null;
+  if (abonnement) {
+    await supabase.from("push_subscriptions").delete().eq("endpoint", abonnement.endpoint);
+    await abonnement.unsubscribe();
+  }
+}
+
+async function abonnementActif() {
+  if (!notificationsDisponibles()) return false;
+  const registration = await navigator.serviceWorker.getRegistration();
+  if (!registration) return false;
+  const abonnement = await registration.pushManager.getSubscription();
+  return !!abonnement;
+}
+
+function NotificationsSection() {
+  const [actif, setActif] = useState(false);
+  const [enCours, setEnCours] = useState(false);
+  const [message, setMessage] = useState(null);
+
+  useEffect(() => {
+    abonnementActif().then(setActif).catch(() => setActif(false));
+  }, []);
+
+  const activer = async () => {
+    setEnCours(true);
+    setMessage(null);
+    try {
+      await activerNotifications();
+      setActif(true);
+      setMessage({ type: "ok", texte: "Notifications activées sur cet appareil." });
+    } catch (e) {
+      setMessage({ type: "erreur", texte: String(e.message || e) });
+    }
+    setEnCours(false);
+  };
+
+  const desactiver = async () => {
+    setEnCours(true);
+    setMessage(null);
+    try {
+      await desactiverNotifications();
+      setActif(false);
+      setMessage({ type: "ok", texte: "Notifications désactivées sur cet appareil." });
+    } catch (e) {
+      setMessage({ type: "erreur", texte: String(e.message || e) });
+    }
+    setEnCours(false);
+  };
+
+  return (
+    <section className="card">
+      <h3>Notifications sur le téléphone</h3>
+      <p className="hint">
+        Deux fois par jour, à 9h et à 19h, vous recevez un résumé de vos rappels du jour et de vos devis à faire.
+        L'activation se fait appareil par appareil : refaites-la sur chaque téléphone ou ordinateur concerné.
+        Sur iPhone, l'application doit d'abord être ajoutée à l'écran d'accueil, puis ouverte depuis son icône.
+      </p>
+
+      {message && (
+        <div className={"entretien-annuel-badge " + (message.type === "ok" ? "ok" : "late")}>
+          <Icon name={message.type === "ok" ? "check" : "alert"} size={14} /> {message.texte}
+        </div>
+      )}
+
+      <div className="notif-actions">
+        {actif ? (
+          <>
+            <span className="pill pill-ok"><Icon name="check" size={13} /> Activées sur cet appareil</span>
+            <button className="btn-ghost small" onClick={desactiver} disabled={enCours}>Désactiver</button>
+          </>
+        ) : (
+          <button className="btn-primary" onClick={activer} disabled={enCours}>
+            <Icon name="bell" size={16} /> {enCours ? "Activation en cours..." : "Activer les notifications"}
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -962,6 +1138,8 @@ function Parametres({ settings, setSettings }) {
         ))}
         <button type="button" className="btn-ghost small" onClick={addChecklistTpl}><Icon name="plus" size={14} /> Ajouter un modèle de checklist</button>
       </section>
+
+      <NotificationsSection />
 
       <section className="card">
         <h3>Facturation Pennylane</h3>
@@ -1112,6 +1290,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
                   <ReportCard
                     key={r.id}
                     r={r}
+                    clients={clients}
                     open={openReportId === r.id}
                     onToggle={() => {
                       if (openReportId !== r.id) closeForm();
@@ -1153,7 +1332,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
   );
 }
 
-function ReportCard({ r, open, onToggle, onPrint, onEdit, onValidate, onDelete, focusReport, settings }) {
+function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, onDelete, focusReport, settings }) {
   const [viewTab, setViewTab] = useState("details");
   const cardRef = useRef(null);
 
@@ -1179,7 +1358,7 @@ function ReportCard({ r, open, onToggle, onPrint, onEdit, onValidate, onDelete, 
         <span className={"pill " + typePillClass(r.type)}>{shortType(r.type)}</span>
         <div className="report-card-title">
           {settings?.technicien?.nom && <div className="report-tech">Technicien : {settings.technicien.nom}</div>}
-          <div className="row-title">{r.client}</div>
+          <div className="row-title">{nomAffiche(r.client, clients)}</div>
           <div className="row-sub">{r.installation} · {r.date}</div>
         </div>
         {r.valide && <span className="pill pill-ok"><Icon name="check" size={13} /> Validé</span>}
@@ -1214,7 +1393,7 @@ function ReportCard({ r, open, onToggle, onPrint, onEdit, onValidate, onDelete, 
           </div>
 
           {viewTab === "pdf" ? (
-            <iframe className="report-pdf-preview" srcDoc={buildReportHtml(r, settings)} title="Aperçu PDF du rapport" />
+            <iframe className="report-pdf-preview" srcDoc={buildReportHtml(r, settings, clients)} title="Aperçu PDF du rapport" />
           ) : (
             <>
               {r.type === "mise_en_service" && (
@@ -1829,7 +2008,7 @@ function ClientSearchSelect({ clients, value, onChange, placeholder }) {
   // Pour un client professionnel, on affiche sa raison sociale plutôt que le
   // nom du contact. La valeur réellement enregistrée reste le nom de la fiche,
   // qui sert de lien avec les rapports, les devis et les factures.
-  const libelle = (c) => (c.raisonSociale && c.raisonSociale.trim() ? c.raisonSociale : c.nom);
+  const libelle = libelleClient;
   const libellePourValeur = (v) => {
     const c = clients.find((cl) => cl.nom === v);
     return c ? libelle(c) : (v || "");
@@ -2413,7 +2592,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
             >
               <div>
                 <div className="row-title">
-                  {c.nom}
+                  {libelleClient(c)}
                   {(() => {
                     const statut = getEntretienStatus(c, reports);
                     if (!statut) return null;
@@ -2431,7 +2610,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
                     return <span className={"contrat-dot " + classe} title={titre} />;
                   })()}
                 </div>
-                <div className="row-sub">{c.raisonSociale ? c.raisonSociale + " · " : ""}{c.machines.length} matériel(s) installé{c.machines.length > 1 ? "s" : ""}</div>
+                <div className="row-sub">{c.raisonSociale ? c.nom + " · " : ""}{c.machines.length} matériel(s) installé{c.machines.length > 1 ? "s" : ""}</div>
               </div>
             </li>
           ))}
@@ -2506,8 +2685,8 @@ function ClientFiche({ client, reports, showMachines, setShowMachines, onEdit, o
     <section className="card">
       <div className="row-between">
         <div>
-          <h3>{client.nom}</h3>
-          {client.raisonSociale && <div className="client-raison-sociale">{client.raisonSociale}</div>}
+          <h3>{libelleClient(client)}</h3>
+          {client.raisonSociale && <div className="client-raison-sociale">{client.nom}</div>}
         </div>
         <div className="client-detail-actions">
           {client.contrat && (
@@ -2598,7 +2777,7 @@ function ClientHistory({ client, reports, devisAFaire, devisEnCours, facturation
 
   return (
     <section className="card">
-      <h3>Historique — {client.nom}</h3>
+      <h3>Historique — {libelleClient(client)}</h3>
       {!hasHistory && <p className="empty">Aucun historique pour ce client.</p>}
 
       {clientReports.length > 0 && (
@@ -3096,7 +3275,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
                   </button>
                   <div className="grow">
                     <div className="row-title">{p.titre}</div>
-                    <div className="row-sub">{p.client} {p.heure !== "—" && `· ${p.heure}`}{p.duree && ` · ${p.duree}`}</div>
+                    <div className="row-sub">{nomAffiche(p.client, clients)} {p.heure !== "—" && `· ${p.heure}`}{p.duree && ` · ${p.duree}`}</div>
                     {(() => {
                       const fiche = clients.find((c) => c.nom === p.client);
                       const adresseTache = (p.adresse && p.adresse.trim()) || (fiche && fiche.adresse);
@@ -3410,7 +3589,7 @@ function MonthGroupedList({ items, dateField, renderItem, emptyLabel }) {
   );
 }
 
-function Devis({ devisAFaire, devisEnCours, onCreated, onRelance, onValide, onOpenClient }) {
+function Devis({ clients, devisAFaire, devisEnCours, onCreated, onRelance, onValide, onOpenClient }) {
   return (
     <div>
       <header className="page-head">
@@ -3428,7 +3607,7 @@ function Devis({ devisAFaire, devisEnCours, onCreated, onRelance, onValide, onOp
             renderItem={(d) => (
               <li key={d.id} className="row clickable" onClick={() => onOpenClient(d.client)} title="Voir la fiche client">
                 <div>
-                  <div className="row-title">{d.client}</div>
+                  <div className="row-title">{nomAffiche(d.client, clients)}</div>
                   <div className="row-sub">{d.origine}</div>
                 </div>
                 <button className="btn-small" onClick={(e) => { e.stopPropagation(); onCreated(d.id); }}>Marquer créé</button>
@@ -3446,7 +3625,7 @@ function Devis({ devisAFaire, devisEnCours, onCreated, onRelance, onValide, onOp
             renderItem={(d) => (
               <li key={d.id} className="row clickable" onClick={() => onOpenClient(d.client)} title="Voir la fiche client">
                 <div>
-                  <div className="row-title">{d.client} · {d.montant}</div>
+                  <div className="row-title">{nomAffiche(d.client, clients)} · {d.montant}</div>
                   <div className="row-sub">Envoyé le {d.envoye}</div>
                 </div>
                 <div className="devis-actions">
@@ -3471,7 +3650,7 @@ function Devis({ devisAFaire, devisEnCours, onCreated, onRelance, onValide, onOp
 }
 
 /* ---------- Facturation ---------- */
-function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onRetryPennylane, onDeleteFacturation, onOpenClient }) {
+function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylane, onRetryPennylane, onDeleteFacturation, onOpenClient }) {
   const aFacturer = facturation.filter((f) => !f.facture);
   const impayees = facturation.filter((f) => f.facture && !f.payee);
   const payees = facturation.filter((f) => f.facture && f.payee);
@@ -3492,7 +3671,7 @@ function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onRetr
           renderItem={(f) => (
             <li key={f.id} className="row clickable" onClick={() => onOpenClient(f.client)} title="Voir la fiche client">
               <div>
-                <div className="row-title">{f.client} · {f.montant}</div>
+                <div className="row-title">{nomAffiche(f.client, clients)} · {f.montant}</div>
                 <div className="row-sub">
                   {f.intervention}
                   {f.pennylaneStatus === "erreur" && (
@@ -3525,7 +3704,7 @@ function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onRetr
           renderItem={(f) => (
             <li key={f.id} className="row clickable" onClick={() => onOpenClient(f.client)} title="Voir la fiche client">
               <div>
-                <div className="row-title">{f.client} · {f.montant}</div>
+                <div className="row-title">{nomAffiche(f.client, clients)} · {f.montant}</div>
                 <div className="row-sub">
                   {f.intervention}
                   {f.pennylaneInvoiceId && <span className="pill pill-pennylane">Pennylane</span>}
@@ -3560,7 +3739,7 @@ function Facturation({ facturation, onFacturer, onPayer, onSyncPennylane, onRetr
             renderItem={(f) => (
               <li key={f.id} className="row clickable" onClick={() => onOpenClient(f.client)} title="Voir la fiche client">
                 <div>
-                  <div className="row-title">{f.client} · {f.montant}</div>
+                  <div className="row-title">{nomAffiche(f.client, clients)} · {f.montant}</div>
                   <div className="row-sub">
                     {f.intervention}
                     {f.pennylaneInvoiceId && <span className="pill pill-pennylane">Pennylane</span>}
@@ -3973,7 +4152,7 @@ function PdfPreviewModal({ html, onClose }) {
   );
 }
 
-function buildReportHtml(report, settings) {
+function buildReportHtml(report, settings, clients) {
   const entreprise = settings?.entreprise || {};
   const hasLetterhead = entreprise.nom || entreprise.adresse || entreprise.codePostalVille || entreprise.telephone || entreprise.email || entreprise.siret || entreprise.logo;
 
@@ -3996,7 +4175,7 @@ function buildReportHtml(report, settings) {
 
   body += `<h1>${escapeHtml(labelType(report.type))}</h1>`;
   if (settings?.technicien?.nom) body += `<p><strong>Technicien :</strong> ${escapeHtml(settings.technicien.nom)}</p>`;
-  body += `<p><strong>Client :</strong> ${escapeHtml(report.client)}</p>`;
+  body += `<p><strong>Client :</strong> ${escapeHtml(nomAffiche(report.client, clients))}</p>`;
   body += `<p><strong>Date :</strong> ${escapeHtml(report.date)}</p>`;
   body += `<p><strong>Installation :</strong> ${escapeHtml(report.installation)}</p>`;
 
@@ -4048,7 +4227,7 @@ function buildReportHtml(report, settings) {
 <html lang="fr">
 <head>
 <meta charset="UTF-8" />
-<title>${escapeHtml(labelType(report.type))} — ${escapeHtml(report.client)}</title>
+<title>${escapeHtml(labelType(report.type))} — ${escapeHtml(nomAffiche(report.client, clients))}</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600&display=swap');
   * { box-sizing: border-box; }
@@ -4474,6 +4653,7 @@ textarea { resize: vertical; }
 }
 .photo-upload:hover { border-color: #2F6FA3; color: #2F6FA3; }
 
+.notif-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
 .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
 
 .detail-line { font-size: 13.5px; color: #4A5860; margin-bottom: 3px; }
