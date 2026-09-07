@@ -290,8 +290,10 @@ export default function App() {
     { id: "parametres", label: "Paramètres", icon: "settings" },
   ];
 
-  const shouldAutoFacturer = (r) => {
-    if (r.devisAEffectuer && r.devisAEffectuer.trim()) return false;
+  // Une intervention est facturable selon son type, indépendamment d'un
+  // éventuel devis à effectuer : les deux cohabitent très bien, par exemple un
+  // dépannage facturé aujourd'hui et un devis à établir pour la réparation.
+  const estFacturable = (r) => {
     if (r.type === "mise_en_service" || r.type === "entretien") return true;
     if (r.type === "diagnostic") return !!r.facturable;
     return false;
@@ -311,6 +313,9 @@ export default function App() {
           tel: client?.tel || "",
           siren: client?.siren || "",
           tva: client?.tva || "",
+          // Détermine la nature de la fiche créée dans Pennylane : société pour
+          // un professionnel, particulier sinon.
+          professionnel: !!(client?.raisonSociale && client.raisonSociale.trim()),
           pennylaneId: client?.pennylaneCustomerId || null,
         },
         montantHT: parseFloat(r.montant),
@@ -335,26 +340,35 @@ export default function App() {
   const handleAddReport = (r) => {
     upsertReport(r);
     syncPlanningTaskFromReport(r);
-    if (r.devisAEffectuer && r.devisAEffectuer.trim()) {
+
+    const aUnDevisAFaire = !!(r.devisAEffectuer && r.devisAEffectuer.trim());
+    const montantRenseigne = r.montant !== undefined && r.montant !== null && String(r.montant).trim() !== "";
+
+    if (aUnDevisAFaire) {
       upsertDevisAFaire({
         id: "df" + Date.now(),
         client: r.client,
         origine: `${labelType(r.type)} du ${r.date} — ${r.devisAEffectuer.trim()}`,
         date: r.date,
       });
-    } else if (shouldAutoFacturer(r)) {
+    }
+
+    // Le devis à effectuer n'est qu'un pense-bête : il n'a aucune influence sur
+    // la facturation. Toute intervention facturable crée donc sa ligne, avec ou
+    // sans devis en attente.
+    if (estFacturable(r)) {
       const facturationEntry = {
         id: "f" + Date.now(),
         client: r.client,
         intervention: `${labelType(r.type)} — ${r.date}`,
-        montant: r.montant ? `${r.montant} €` : "À chiffrer",
+        montant: montantRenseigne ? `${r.montant} €` : "À chiffrer",
         facture: false,
         payee: false,
         date: r.date,
         reportId: r.id,
       };
       upsertFacturation(facturationEntry);
-      if (settings.pennylane?.active && r.montant) {
+      if (settings.pennylane?.active && montantRenseigne) {
         syncFactureToPennylane(facturationEntry, r);
       }
     }
