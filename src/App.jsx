@@ -2588,11 +2588,16 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
   const [showContract, setShowContract] = useState(false);
   const [showMap, setShowMap] = useState(false);
   const [showMachines, setShowMachines] = useState(false);
+  // La fiche est repliée par défaut : sur téléphone, l'historique reste ainsi
+  // accessible sans faire défiler tout le détail du client.
+  const [ficheOuverte, setFicheOuverte] = useState(false);
   // Aucun client affiché tant qu'aucun n'est sélectionné (cas d'une création
   // en cours) : on ne retombe donc plus systématiquement sur le premier.
   const client = selected ? clients.find((c) => c.id === selected) : null;
 
   const formRef = useRef(null);
+  const ficheRef = useRef(null);
+  const premierAffichage = useRef(true);
 
   const openNew = () => { setEditingClient(null); setSelected(null); setShowForm(true); };
   const openEdit = (c) => { setEditingClient(c); setShowForm(true); };
@@ -2600,6 +2605,19 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
 
   useEffect(() => {
     setShowContract(false);
+    setFicheOuverte(false);
+    setShowMachines(false);
+  }, [selected]);
+
+  // La fiche s'affiche sous la liste : on y amène la page automatiquement, pour
+  // ne pas avoir à faire défiler à la main sur téléphone. On ne le fait pas au
+  // tout premier affichage de l'onglet, qui ne résulte d'aucun clic.
+  useEffect(() => {
+    if (premierAffichage.current) { premierAffichage.current = false; return; }
+    if (selected && !showForm && ficheRef.current) {
+      ficheRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
   // Le formulaire s'ouvre sous la liste des clients : on fait descendre la page
@@ -2677,15 +2695,19 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
       </section>
 
       {client && !showForm && (
-        <ClientFiche
-          client={client}
-          reports={reports}
-          showMachines={showMachines}
-          setShowMachines={setShowMachines}
-          onEdit={() => openEdit(client)}
-          onDelete={() => onDelete(client)}
-          onShowContract={() => setShowContract(true)}
-        />
+        <div ref={ficheRef} className="fiche-ancre">
+          <ClientFiche
+            client={client}
+            reports={reports}
+            ouverte={ficheOuverte}
+            onToggle={() => setFicheOuverte((v) => !v)}
+            showMachines={showMachines}
+            setShowMachines={setShowMachines}
+            onEdit={() => openEdit(client)}
+            onDelete={() => onDelete(client)}
+            onShowContract={() => setShowContract(true)}
+          />
+        </div>
       )}
 
       {client && (
@@ -2737,16 +2759,25 @@ function FicheLigne({ label, value }) {
   );
 }
 
-function ClientFiche({ client, reports, showMachines, setShowMachines, onEdit, onDelete, onShowContract }) {
+function ClientFiche({ client, reports, ouverte, onToggle, showMachines, setShowMachines, onEdit, onDelete, onShowContract }) {
   const estProfessionnel = !!(client.raisonSociale || client.siren || client.tva);
 
   return (
     <section className="card">
-      <div className="row-between">
-        <div>
-          <h3>{libelleClient(client)}</h3>
-          {client.raisonSociale && <div className="client-raison-sociale">{client.nom}</div>}
-        </div>
+      <button type="button" className="machine-section-toggle fiche-bandeau" onClick={onToggle}>
+        <span>
+          <span className="fiche-bandeau-nom">{libelleClient(client)}</span>
+          {client.raisonSociale && <span className="fiche-bandeau-contact">{client.nom}</span>}
+        </span>
+        <Icon name={ouverte ? "chevronDown" : "chevronRight"} size={18} />
+      </button>
+
+      {!ouverte && <p className="hint">Touchez le nom pour afficher la fiche complète.</p>}
+
+      {ouverte && (
+      <>
+      <div className="row-between fiche-actions-row">
+        <div />
         <div className="client-detail-actions">
           {client.contrat && (
             <button className="btn-ghost small btn-contrat" onClick={onShowContract}>
@@ -2822,6 +2853,8 @@ function ClientFiche({ client, reports, showMachines, setShowMachines, onEdit, o
       </button>
       {showMachines && client.machines.length === 0 && <p className="empty">Aucun matériel enregistré pour ce client.</p>}
       {showMachines && client.machines.map((m, i) => <MachineBlock key={i} machine={m} />)}
+      </>
+      )}
     </section>
   );
 }
@@ -3726,9 +3759,11 @@ function formatEuros(valeur) {
 function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylane, onRetryPennylane, onDeleteFacturation, onOpenClient }) {
   const aFacturer = facturation.filter((f) => !f.facture);
   const impayees = facturation.filter((f) => f.facture && !f.payee);
+  const payees = facturation.filter((f) => f.facture && f.payee);
   const totalImpayees = impayees.reduce((somme, f) => somme + (montantEnNombre(f.montant) || 0), 0);
   const impayeesSansMontant = impayees.filter((f) => montantEnNombre(f.montant) === null).length;
-  const payees = facturation.filter((f) => f.facture && f.payee);
+  const totalPayees = payees.reduce((somme, f) => somme + (montantEnNombre(f.montant) || 0), 0);
+  const payeesSansMontant = payees.filter((f) => montantEnNombre(f.montant) === null).length;
 
   return (
     <div>
@@ -3843,6 +3878,15 @@ function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylan
               </li>
             )}
           />
+          <div className="total-ligne total-ligne-ok">
+            <span>Total encaissé</span>
+            <strong>{formatEuros(totalPayees)} HT</strong>
+            {payeesSansMontant > 0 && (
+              <span className="hint">
+                ({payeesSansMontant} facture{payeesSansMontant > 1 ? "s" : ""} sans montant, non comptée{payeesSansMontant > 1 ? "s" : ""})
+              </span>
+            )}
+          </div>
         </section>
       )}
     </div>
@@ -4488,6 +4532,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .card h4 { font-size: 13px; font-weight: 600; margin: 0 0 8px; color: #4A5860; text-transform: uppercase; letter-spacing: 0.4px; }
 .total-ligne { display: flex; align-items: baseline; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid #EAEDEC; font-size: 14px; color: #4A5860; }
 .total-ligne strong { font-family: 'Barlow Condensed', sans-serif; font-size: 20px; font-weight: 700; color: #B33128; }
+.total-ligne-ok strong { color: #2E7048; }
 .month-group { margin-bottom: 18px; }
 .month-group:last-child { margin-bottom: 0; }
 .month-heading { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: #2F6FA3; margin: 0 0 6px; padding-bottom: 4px; border-bottom: 1px solid #EAEDEC; text-transform: none; letter-spacing: 0; }
@@ -4583,7 +4628,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .filter-btn { background: #fff; border: 1px solid #D7DEDD; padding: 7px 13px; border-radius: 20px; font-size: 13px; cursor: pointer; color: #4A5860; }
 .filter-btn.active { background: #1B2733; color: #fff; border-color: #1B2733; }
 
-.report-card { scroll-margin-top: 14px; }
+.report-card, .fiche-ancre { scroll-margin-top: 14px; }
 .report-card-head { display: flex; align-items: center; gap: 12px; cursor: pointer; }
 .report-card-title { flex: 1; }
 .chevron { font-size: 20px; color: #97A3A7; width: 20px; text-align: center; }
@@ -4619,6 +4664,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .unit-block { padding: 12px; background: #fff; border: 1px solid #E4E9E8; border-radius: 8px; margin-bottom: 10px; }
 
 .client-detail-actions { display: flex; gap: 8px; }
+.fiche-bandeau { gap: 12px; }
+.fiche-bandeau-nom { font-family: 'Barlow Condensed', sans-serif; font-size: 18px; font-weight: 600; color: #1B2733; }
+.fiche-bandeau-contact { display: block; font-size: 13px; font-weight: 400; color: #6C7A80; margin-top: 1px; }
+.fiche-actions-row { margin-top: 12px; }
 .fiche-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px 22px; margin: 14px 0 4px; }
 .fiche-item { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; border-bottom: 1px solid #EEF1F0; }
 .fiche-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; color: #8A959A; }
@@ -4831,7 +4880,7 @@ textarea { resize: vertical; }
   .row-delete-hover { opacity: 1; }
   /* La barre du haut étant fixe sur mobile, on laisse la place nécessaire
      au-dessus de la carte que l'on fait remonter. */
-  .report-card { scroll-margin-top: calc(70px + env(safe-area-inset-top, 0px)); }
+  .report-card, .fiche-ancre { scroll-margin-top: calc(70px + env(safe-area-inset-top, 0px)); }
 
   /* Checklists : sur un écran étroit, l'intitulé et le détail prennent toute
      la largeur, sous la ligne « Fait / Non fait », pour rester lisibles. */
