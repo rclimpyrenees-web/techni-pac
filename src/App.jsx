@@ -2058,6 +2058,40 @@ function SignaturePad({ label, value, onChange }) {
   );
 }
 
+/* ---------- Préparation des photos ----------
+   Les photos prises avec un iPhone sont volumineuses, et souvent au format
+   HEIC que la plupart des navigateurs et lecteurs PDF ne savent pas afficher.
+   On les redessine donc systématiquement en JPEG redimensionné : le rapport
+   reste léger à enregistrer, et la photo s'affiche partout. */
+function preparerImage(fichier, maxCote = 1600, qualite = 0.72) {
+  return new Promise((resolve, reject) => {
+    const lecteur = new FileReader();
+    lecteur.onerror = () => reject(new Error("Impossible de lire ce fichier."));
+    lecteur.onload = () => {
+      const image = new Image();
+      // Format non décodable par le navigateur : on conserve le fichier tel quel
+      // plutôt que de perdre la photo.
+      image.onerror = () => resolve(lecteur.result);
+      image.onload = () => {
+        try {
+          const facteur = Math.min(1, maxCote / Math.max(image.width, image.height));
+          const largeur = Math.max(1, Math.round(image.width * facteur));
+          const hauteur = Math.max(1, Math.round(image.height * facteur));
+          const canvas = document.createElement("canvas");
+          canvas.width = largeur;
+          canvas.height = hauteur;
+          canvas.getContext("2d").drawImage(image, 0, 0, largeur, hauteur);
+          resolve(canvas.toDataURL("image/jpeg", qualite));
+        } catch (_e) {
+          resolve(lecteur.result);
+        }
+      };
+      image.src = lecteur.result;
+    };
+    lecteur.readAsDataURL(fichier);
+  });
+}
+
 /* ---------- Champ « Client » : menu déroulant avec recherche ----------
    La liste native <datalist> du navigateur se comporte de façon inégale d'un
    navigateur et d'un appareil à l'autre : on gère donc nous-mêmes l'ouverture,
@@ -2198,14 +2232,32 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportType]);
 
-  const handlePhotos = (e) => {
-    const files = Array.from(e.target.files || []);
-    files.forEach((f) => {
-      const reader = new FileReader();
-      reader.onload = (ev) => setPhotos((p) => [...p, ev.target.result]);
-      reader.readAsDataURL(f);
-    });
+  const [photosEnCours, setPhotosEnCours] = useState(false);
+  const [photosErreur, setPhotosErreur] = useState(null);
+
+  const handlePhotos = async (e) => {
+    const fichiers = Array.from(e.target.files || []);
+    // On vide la sélection tout de suite : sans cela, reprendre exactement la
+    // même photo ne déclenche aucun événement et semble ne rien faire.
+    e.target.value = "";
+    if (fichiers.length === 0) return;
+
+    setPhotosEnCours(true);
+    setPhotosErreur(null);
+    // Traitement une par une : plus lent, mais un iPhone ne sature pas sa
+    // mémoire sur une série de photos en pleine résolution.
+    for (const fichier of fichiers) {
+      try {
+        const image = await preparerImage(fichier);
+        setPhotos((p) => [...p, image]);
+      } catch (err) {
+        setPhotosErreur("Une photo n'a pas pu être ajoutée : " + String(err?.message || err));
+      }
+    }
+    setPhotosEnCours(false);
   };
+
+  const retirerPhoto = (index) => setPhotos((p) => p.filter((_, i) => i !== index));
 
   const addMachine = () => setMachines((list) => [...list, blankMachine()]);
   const updateMachine = (id, next) => setMachines((list) => list.map((m) => (m.id === id ? next : m)));
@@ -2496,18 +2548,30 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
         </>
       )}
 
-      <label className="block mt">
-        Photos
-        <div className="photo-upload" onClick={() => fileRef.current.click()}>
-          <Icon name="photo" /> Ajouter des photos
-        </div>
+      <div className="block mt field-block">
+        <div className="field-caption">Photos</div>
+        <button type="button" className="photo-upload" onClick={() => fileRef.current && fileRef.current.click()} disabled={photosEnCours}>
+          <Icon name="photo" /> {photosEnCours ? "Ajout en cours..." : "Ajouter des photos"}
+        </button>
         <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={handlePhotos} />
-        {photos.length > 0 && (
-          <div className="photo-strip">
-            {photos.map((src, i) => <img key={i} src={src} alt="" />)}
+        {photosErreur && (
+          <div className="entretien-annuel-badge late">
+            <Icon name="alert" size={14} /> {photosErreur}
           </div>
         )}
-      </label>
+        {photos.length > 0 && (
+          <div className="photo-strip">
+            {photos.map((src, i) => (
+              <div key={i} className="photo-vignette">
+                <img src={src} alt={"Photo " + (i + 1)} />
+                <button type="button" className="icon-btn" onClick={() => retirerPhoto(i)} title="Retirer cette photo">
+                  <Icon name="trash" size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="block mt">
         <label>Signatures</label>
@@ -2952,12 +3016,15 @@ function ClientHistory({ client, reports, devisAFaire, devisEnCours, facturation
 
 function SinglePhotoField({ label, value, onChange }) {
   const fileRef = useRef();
-  const handleFile = (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => onChange(ev.target.result);
-    reader.readAsDataURL(file);
+  const handleFile = async (e) => {
+    const fichier = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!fichier) return;
+    try {
+      onChange(await preparerImage(fichier));
+    } catch (_err) {
+      // Photo illisible : on laisse le champ en l'état plutôt que d'écraser.
+    }
   };
   return (
     <div className="single-photo-field">
@@ -2968,9 +3035,9 @@ function SinglePhotoField({ label, value, onChange }) {
           <button type="button" className="icon-btn" onClick={() => onChange("")}><Icon name="trash" size={14} /></button>
         </div>
       ) : (
-        <div className="photo-upload" onClick={() => fileRef.current.click()}>
+        <button type="button" className="photo-upload" onClick={() => fileRef.current && fileRef.current.click()}>
           <Icon name="photo" size={16} /> Ajouter une photo
-        </div>
+        </button>
       )}
       <input ref={fileRef} type="file" accept="image/*" hidden onChange={handleFile} />
     </div>
@@ -4821,8 +4888,11 @@ textarea { resize: vertical; }
 .photo-upload {
   display: flex; align-items: center; gap: 8px; justify-content: center;
   border: 1.5px dashed #C6D0D0; border-radius: 8px; padding: 14px; cursor: pointer;
-  font-size: 13px; color: #5E7078; background: #fff;
+  font-size: 13px; color: #5E7078; background: #fff; width: 100%; font-family: inherit;
 }
+.photo-upload:disabled { opacity: 0.6; cursor: default; }
+.photo-vignette { position: relative; display: inline-block; }
+.photo-vignette .icon-btn { position: absolute; top: 2px; right: 2px; background: rgba(255,255,255,0.92); border-radius: 50%; padding: 3px; }
 .photo-upload:hover { border-color: #2F6FA3; color: #2F6FA3; }
 
 .notif-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
