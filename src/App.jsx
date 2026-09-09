@@ -3804,7 +3804,14 @@ function groupByMonth(items, dateField) {
   const result = sortedKeys.map((key) => ({
     key,
     label: monthLabel(groups[key].year, groups[key].month),
-    items: groups[key].items,
+    // À l'intérieur d'un mois, de la plus ancienne à la plus récente : les
+    // factures qui traînent le plus remontent ainsi en tête de liste.
+    items: [...groups[key].items].sort((a, b) => {
+      const da = parseFrDate(a[dateField]);
+      const db = parseFrDate(b[dateField]);
+      if (!da || !db) return 0;
+      return da - db;
+    }),
   }));
   if (sansDate.length > 0) result.push({ key: "sans-date", label: "Sans date", items: sansDate });
   return result;
@@ -3900,10 +3907,34 @@ function formatEuros(valeur) {
 }
 
 /* ---------- Facturation ---------- */
+// Date d'une ligne de facturation. On s'appuie d'abord sur le champ prévu pour
+// ça ; s'il manque ou n'est pas lisible (lignes créées par d'anciennes versions
+// du logiciel), on récupère la date affichée dans le libellé de l'intervention.
+function dateFacture(f) {
+  const directe = parseFrDate(f.date);
+  if (directe) return directe;
+  const trouvee = String(f.intervention || "").match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (trouvee) return new Date(Number(trouvee[3]), Number(trouvee[2]) - 1, Number(trouvee[1]));
+  return null;
+}
+
+// De la plus ancienne à la plus récente ; les lignes sans date exploitable
+// ferment la marche plutôt que de se glisser n'importe où.
+function trierParDate(liste) {
+  return [...liste].sort((a, b) => {
+    const da = dateFacture(a);
+    const db = dateFacture(b);
+    if (!da && !db) return 0;
+    if (!da) return 1;
+    if (!db) return -1;
+    return da - db;
+  });
+}
+
 function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylane, onRetryPennylane, onDeleteFacturation, onOpenClient }) {
-  const aFacturer = facturation.filter((f) => !f.facture);
-  const impayees = facturation.filter((f) => f.facture && !f.payee);
-  const payees = facturation.filter((f) => f.facture && f.payee);
+  const aFacturer = trierParDate(facturation.filter((f) => !f.facture));
+  const impayees = trierParDate(facturation.filter((f) => f.facture && !f.payee));
+  const payees = trierParDate(facturation.filter((f) => f.facture && f.payee));
   const totalImpayees = impayees.reduce((somme, f) => somme + (montantEnNombre(f.montant) || 0), 0);
   const impayeesSansMontant = impayees.filter((f) => montantEnNombre(f.montant) === null).length;
   const totalPayees = payees.reduce((somme, f) => somme + (montantEnNombre(f.montant) || 0), 0);
