@@ -359,6 +359,7 @@ export default function App() {
         client: r.client,
         origine: `${labelType(r.type)} du ${r.date} — ${r.devisAEffectuer.trim()}`,
         date: r.date,
+        reportId: r.id,
       });
     }
 
@@ -387,6 +388,26 @@ export default function App() {
     const ancien = reports.find((x) => x.id === r.id);
     upsertReport(r);
     syncPlanningTaskFromReport(r);
+
+    // Devis à effectuer ajouté, modifié ou retiré après coup : la ligne de
+    // l'onglet Devis suit. On n'agit que si le texte a réellement changé, pour
+    // ne pas ressusciter une ligne déjà marquée comme créée.
+    const ancienDevis = ((ancien && ancien.devisAEffectuer) || "").trim();
+    const nouveauDevis = (r.devisAEffectuer || "").trim();
+    if (nouveauDevis !== ancienDevis) {
+      const ligneDevis = devisAFaire.find((d) => d.reportId === r.id);
+      if (nouveauDevis) {
+        upsertDevisAFaire({
+          id: ligneDevis ? ligneDevis.id : "df" + Date.now(),
+          client: r.client,
+          origine: `${labelType(r.type)} du ${r.date} — ${nouveauDevis}`,
+          date: r.date,
+          reportId: r.id,
+        });
+      } else if (ligneDevis) {
+        removeDevisAFaire(ligneDevis.id);
+      }
+    }
 
     // Si le montant change alors que l'intervention est déjà passée en
     // facturation, la ligne correspondante est corrigée immédiatement. La
