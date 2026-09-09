@@ -249,7 +249,16 @@ export default function App() {
 
   // Tri stable pour un affichage cohérent, indépendant de l'ordre d'arrivée réseau.
   const reports = [...reportsRaw].sort((a, b) => (a.id < b.id ? 1 : -1));
-  const planning = [...planningRaw].sort((a, b) => a.date.localeCompare(b.date));
+  // Tri par date, puis par heure à l'intérieur d'une même journée : sans le
+  // second critère, les interventions s'affichaient dans leur ordre de saisie.
+  // Les tâches sans heure précise ("—", typiquement les rappels) ferment la marche.
+  const planning = [...planningRaw].sort((a, b) => {
+    const parDate = (a.date || "").localeCompare(b.date || "");
+    if (parDate !== 0) return parDate;
+    const heureA = a.heure && a.heure !== "—" ? a.heure : "99:99";
+    const heureB = b.heure && b.heure !== "—" ? b.heure : "99:99";
+    return heureA.localeCompare(heureB);
+  });
 
   const [focusReport, setFocusReport] = useState(null);
   const [reportPrefill, setReportPrefill] = useState(null);
@@ -274,7 +283,7 @@ export default function App() {
   const upcoming = planning.filter(
     (p) => !p.fait && p.categorie !== "relance" && p.date >= isoDebutSemaine && p.date <= isoFinSemaine
   ).length;
-  const relances = devisEnCours.filter((d) => d.statut === "a_relancer").length;
+  const devisAFaireCount = devisAFaire.length;
   const aFacturer = facturation.filter((f) => !f.facture).length;
   const facturesNonPayees = facturation.filter((f) => !f.payee).length;
   const rappelsActifs = planning.filter((p) => p.rappel && !p.fait && p.categorie !== "intervention");
@@ -651,7 +660,7 @@ export default function App() {
           <Dashboard
             clients={clients}
             upcoming={upcoming}
-            relances={relances}
+            devisAFaireCount={devisAFaireCount}
             aFacturer={aFacturer}
             planning={planning}
             reports={reports}
@@ -795,7 +804,7 @@ export default function App() {
 }
 
 /* ---------- Dashboard ---------- */
-function Dashboard({ clients, upcoming, relances, aFacturer, planning, reports, rappelsActifs, onToggle, onNavigate, onOpenReport }) {
+function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, reports, rappelsActifs, onToggle, onNavigate, onOpenReport }) {
   const todayIso = toLocalISODate(new Date());
   const next = planning.filter((p) => !p.fait && p.categorie !== "relance" && p.date === todayIso);
 
@@ -822,7 +831,7 @@ function Dashboard({ clients, upcoming, relances, aFacturer, planning, reports, 
 
       <div className="gauges">
         <Jauge value={upcoming} max={10} label="Interventions cette semaine" onClick={() => onNavigate("planning")} />
-        <Jauge value={relances} max={5} label="Devis à relancer" onClick={() => onNavigate("devis")} />
+        <Jauge value={devisAFaireCount} max={5} label="Devis à faire" onClick={() => onNavigate("devis")} />
         <Jauge value={aFacturer} max={5} label="À facturer" onClick={() => onNavigate("facturation")} />
         <Jauge value={rappelsActifs.length} max={5} label="Rappels actifs" onClick={() => onNavigate("rappels")} />
       </div>
