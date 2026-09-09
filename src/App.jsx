@@ -419,6 +419,20 @@ export default function App() {
     setPdfPreviewHtml(buildReportHtml(r, settings, clients));
   };
 
+  // Passer d'un onglet à l'autre referme les formulaires de saisie : sans cela,
+  // un formulaire laissé ouvert réapparaissait tel quel au retour sur l'onglet,
+  // donnant l'impression d'un rapport vide en haut de la liste.
+  const allerAOnglet = (id) => {
+    setShowReportForm(false);
+    setShowClientForm(false);
+    setShowTaskForm(false);
+    setShowRappelForm(false);
+    setTab(id);
+    // Sans cela, la page conserve la position de défilement de l'onglet
+    // précédent et s'ouvre au milieu du contenu.
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
+  };
+
   const goToReport = (id) => {
     setTab("rapports");
     setFocusReport({ id, token: Date.now() });
@@ -481,6 +495,55 @@ export default function App() {
   const handleDeleteFacturation = (id) => {
     removeFacturation(id);
   };
+
+  // Relance automatique des envois Pennylane qui ont échoué, typiquement à
+  // cause d'une coupure réseau sur le terrain. On retente au retour de la
+  // connexion et au retour de l'application au premier plan.
+  const relanceEnCours = useRef(false);
+  const derniereRelance = useRef(0);
+
+  useEffect(() => {
+    if (!settings.pennylane?.active) return;
+
+    const relancerEnvoisEchoues = async () => {
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      if (relanceEnCours.current) return;
+      // Une tentative par minute au maximum, pour ne pas boucler si Pennylane
+      // refuse la facture pour une raison qui n'a rien à voir avec le réseau.
+      if (Date.now() - derniereRelance.current < 60000) return;
+
+      const aRelancer = facturation.filter(
+        (f) => f.pennylaneStatus === "erreur" && !f.pennylaneInvoiceId && f.reportId && (f.pennylaneTentatives || 0) < 5
+      );
+      if (aRelancer.length === 0) return;
+
+      relanceEnCours.current = true;
+      derniereRelance.current = Date.now();
+      for (const item of aRelancer) {
+        const report = reports.find((r) => r.id === item.reportId);
+        if (!report || !report.montant) continue;
+        await syncFactureToPennylane(
+          { ...item, montant: `${report.montant} €`, pennylaneTentatives: (item.pennylaneTentatives || 0) + 1 },
+          report
+        );
+      }
+      relanceEnCours.current = false;
+    };
+
+    const auRetourAuPremierPlan = () => {
+      if (document.visibilityState === "visible") relancerEnvoisEchoues();
+    };
+
+    window.addEventListener("online", relancerEnvoisEchoues);
+    document.addEventListener("visibilitychange", auRetourAuPremierPlan);
+    relancerEnvoisEchoues();
+
+    return () => {
+      window.removeEventListener("online", relancerEnvoisEchoues);
+      document.removeEventListener("visibilitychange", auRetourAuPremierPlan);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [facturation, reports, settings.pennylane?.active]);
 
   // Vérification automatique du statut payé/impayé des factures Pennylane à
   // chaque ouverture de l'onglet Facturation, pour éviter de devoir cliquer
@@ -567,7 +630,7 @@ export default function App() {
         </div>
         <nav>
           {nav.map((n) => (
-            <button key={n.id} className={"navbtn" + (tab === n.id ? " active" : "")} onClick={() => { setTab(n.id); setMobileNavOpen(false); }}>
+            <button key={n.id} className={"navbtn" + (tab === n.id ? " active" : "")} onClick={() => { allerAOnglet(n.id); setMobileNavOpen(false); }}>
               <Icon name={n.icon} />
               {n.label}
               {n.id === "rappels" && rappelsActifs.length > 0 && <span className="nav-badge">{rappelsActifs.length}</span>}
@@ -594,7 +657,7 @@ export default function App() {
             reports={reports}
             rappelsActifs={rappelsActifs}
             onToggle={togglePlanning}
-            onNavigate={setTab}
+            onNavigate={allerAOnglet}
             onOpenReport={goToReport}
           />
         )}
@@ -615,6 +678,7 @@ export default function App() {
             onPrint={handlePrint}
             focusReport={focusReport}
             reportPrefill={reportPrefill}
+            onPrefillConsomme={() => setReportPrefill(null)}
           />
         )}
 
@@ -631,7 +695,7 @@ export default function App() {
             devisEnCours={devisEnCours}
             facturation={facturation}
             onOpenReport={goToReport}
-            onNavigate={setTab}
+            onNavigate={allerAOnglet}
             focusClient={focusClient}
             onDeleteFacturation={handleDeleteFacturation}
             settings={settings}
@@ -1281,18 +1345,26 @@ function TemplateTableEditor({ template, onChange, onRemove }) {
 }
 
 /* ---------- Rapports ---------- */
-function Rapports({ reports, clients, settings, showForm, setShowForm, reportType, setReportType, onAdd, onUpdate, onValidate, onDelete, onPrint, focusReport, reportPrefill }) {
+function Rapports({ reports, clients, settings, showForm, setShowForm, reportType, setReportType, onAdd, onUpdate, onValidate, onDelete, onPrint, focusReport, reportPrefill, onPrefillConsomme }) {
   const [filter, setFilter] = useState("tous");
   const [editingReport, setEditingReport] = useState(null);
   const [activePrefillClient, setActivePrefillClient] = useState(null);
+  const [prefillTaskId, setPrefillTaskId] = useState(null);
+  const [formKey, setFormKey] = useState("new-0");
   const formRef = useRef(null);
   // Un seul rapport déplié à la fois : en ouvrir un referme le précédent.
   const [openReportId, setOpenReportId] = useState(null);
   const filtered = filter === "tous" ? reports : reports.filter((r) => r.type === filter);
 
-  const openNew = () => { setEditingReport(null); setActivePrefillClient(null); setShowForm(true); };
-  const openEdit = (r) => { setEditingReport(r); setActivePrefillClient(null); setReportType(r.type); setShowForm(true); };
-  const closeForm = () => { setShowForm(false); setEditingReport(null); };
+  const openNew = () => {
+    setEditingReport(null);
+    setActivePrefillClient(null);
+    setPrefillTaskId(null);
+    setFormKey("new-" + Date.now());
+    setShowForm(true);
+  };
+  const openEdit = (r) => { setEditingReport(r); setActivePrefillClient(null); setPrefillTaskId(null); setReportType(r.type); setShowForm(true); };
+  const closeForm = () => { setShowForm(false); setEditingReport(null); setActivePrefillClient(null); setPrefillTaskId(null); };
 
   // Le formulaire s'ouvre sous la liste des rapports : on descend
   // automatiquement jusqu'à lui pour qu'il ne passe pas inaperçu.
@@ -1311,13 +1383,18 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusReport]);
 
+  // Une demande venue du planning ouvre le formulaire pré-rempli, puis elle est
+  // effacée. Sans cet effacement, elle se rejouait à chaque retour sur l'onglet
+  // et rouvrait un rapport vide qu'on n'avait pas demandé.
   useEffect(() => {
-    if (reportPrefill) {
-      setEditingReport(null);
-      setActivePrefillClient(reportPrefill.client);
-      setReportType(reportPrefill.reportType);
-      setShowForm(true);
-    }
+    if (!reportPrefill) return;
+    setEditingReport(null);
+    setActivePrefillClient(reportPrefill.client);
+    setPrefillTaskId(reportPrefill.planningTaskId || null);
+    setFormKey("new-" + reportPrefill.token);
+    setReportType(reportPrefill.reportType);
+    setShowForm(true);
+    if (onPrefillConsomme) onPrefillConsomme();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportPrefill]);
 
@@ -1381,14 +1458,14 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
       {showForm && (
         <div ref={formRef}>
           <ReportForm
-            key={editingReport ? editingReport.id : "new-" + (reportPrefill ? reportPrefill.token : "0")}
+            key={editingReport ? editingReport.id : formKey}
             clients={clients}
             settings={settings}
             reportType={reportType}
             setReportType={setReportType}
             editingReport={editingReport}
             prefillClient={!editingReport ? activePrefillClient : undefined}
-            prefillPlanningTaskId={!editingReport ? reportPrefill?.planningTaskId : undefined}
+            prefillPlanningTaskId={!editingReport ? prefillTaskId : undefined}
             onCancel={closeForm}
             onSubmit={(r) => { editingReport ? onUpdate(r) : onAdd(r); closeForm(); }}
             onPreview={onPrint}
