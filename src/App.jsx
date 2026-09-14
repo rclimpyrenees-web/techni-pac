@@ -348,7 +348,9 @@ export default function App() {
           pennylaneId: client?.pennylaneCustomerId || null,
         },
         montantHT: parseFloat(r.montant),
-        label: `${labelType(r.type)} — ${r.date}`,
+        // Libellé de la ligne de facture dans Pennylane : formulation commune à
+        // tous les types d'intervention, plutôt que "Entretien — 08/09/2026".
+        label: `Suivant rapport d'intervention du ${r.date}`,
         vatRate: r.tva || settings.pennylane?.tvaParDefaut || "FR_200",
       });
       upsertFacturation({ ...facturationEntry, facture: true, pennylaneInvoiceId: invoice.id, pennylaneStatus: "envoyée" });
@@ -452,7 +454,7 @@ export default function App() {
       await pennylaneUpdateInvoice({
         invoiceId: ligne.pennylaneInvoiceId,
         montantHT: parseFloat(report.montant),
-        label: `${labelType(report.type)} — ${report.date}`,
+        label: `Suivant rapport d'intervention du ${report.date}`,
         vatRate: report.tva || settings.pennylane?.tvaParDefaut || "FR_200",
       });
       upsertFacturation({ ...ligne, pennylaneStatus: "envoyée", pennylaneError: null });
