@@ -35,6 +35,8 @@ export function useSyncedCollection(table, seed) {
   const [error, setError] = useState(null);
   const seeded = useRef(false);
   const chargementEnCours = useRef(false);
+  const rechargementDemande = useRef(false);
+  const essais = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -42,7 +44,13 @@ export function useSyncedCollection(table, seed) {
     const load = async () => {
       // Évite les lectures simultanées quand plusieurs déclencheurs se
       // superposent (retour au premier plan + rafraîchissement du jeton...).
-      if (chargementEnCours.current) return;
+      // Une demande ignorée n'est pas perdue : elle est rejouée à la fin de la
+      // lecture en cours. Sans cela, l'arrivée de la session pendant une lecture
+      // partie trop tôt était purement et simplement oubliée.
+      if (chargementEnCours.current) {
+        rechargementDemande.current = true;
+        return;
+      }
       chargementEnCours.current = true;
 
       try {
@@ -50,11 +58,18 @@ export function useSyncedCollection(table, seed) {
         if (!active) return;
 
         if (!session) {
-          // Personne n'est connecté : on n'efface surtout pas ce qui est déjà
-          // affiché, et on attend l'événement de connexion pour recharger.
+          // Session pas encore restaurée depuis le stockage de l'appareil : on
+          // réessaie quelques fois, plutôt que de rester sur un écran vide
+          // jusqu'au prochain événement de connexion.
+          if (essais.current < 5) {
+            essais.current += 1;
+            setTimeout(() => { if (active) load(); }, 600 * essais.current);
+            return;
+          }
           setLoading(false);
           return;
         }
+        essais.current = 0;
 
         const { data, error: fetchError } = await supabase.from(table).select("id, data");
         if (!active) return;
@@ -80,6 +95,10 @@ export function useSyncedCollection(table, seed) {
         setLoading(false);
       } finally {
         chargementEnCours.current = false;
+        if (rechargementDemande.current) {
+          rechargementDemande.current = false;
+          load();
+        }
       }
     };
 
@@ -162,12 +181,20 @@ export function useSyncedSettings(defaultValue) {
   const [error, setError] = useState(null);
   const seeded = useRef(false);
   const chargementEnCours = useRef(false);
+  const rechargementDemande = useRef(false);
+  const essais = useRef(0);
 
   useEffect(() => {
     let active = true;
 
     const load = async () => {
-      if (chargementEnCours.current) return;
+      // Une demande ignorée n'est pas perdue : elle est rejouée à la fin de la
+      // lecture en cours. Sans cela, l'arrivée de la session pendant une lecture
+      // partie trop tôt était purement et simplement oubliée.
+      if (chargementEnCours.current) {
+        rechargementDemande.current = true;
+        return;
+      }
       chargementEnCours.current = true;
 
       try {
@@ -175,9 +202,18 @@ export function useSyncedSettings(defaultValue) {
         if (!active) return;
 
         if (!session) {
+          // Session pas encore restaurée depuis le stockage de l'appareil : on
+          // réessaie quelques fois, plutôt que de rester sur un écran vide
+          // jusqu'au prochain événement de connexion.
+          if (essais.current < 5) {
+            essais.current += 1;
+            setTimeout(() => { if (active) load(); }, 600 * essais.current);
+            return;
+          }
           setLoading(false);
           return;
         }
+        essais.current = 0;
 
         const { data, error: fetchError } = await supabase
           .from("settings")
@@ -204,6 +240,10 @@ export function useSyncedSettings(defaultValue) {
         setLoading(false);
       } finally {
         chargementEnCours.current = false;
+        if (rechargementDemande.current) {
+          rechargementDemande.current = false;
+          load();
+        }
       }
     };
 
