@@ -2233,7 +2233,7 @@ function ClientSearchSelect({ clients, value, onChange, placeholder }) {
   }, []);
 
   const sansAccent = (t) => (t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  const tries = [...clients].sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr", { sensitivity: "base" }));
+  const tries = [...clients].sort((a, b) => libelleClient(a).localeCompare(libelleClient(b), "fr", { sensitivity: "base" }));
   const recherche = sansAccent(query).trim();
   const filtres = recherche
     ? tries.filter((c) => sansAccent(c.nom).includes(recherche) || sansAccent(c.raisonSociale).includes(recherche))
@@ -2749,12 +2749,25 @@ function MachineBlock({ machine }) {
 }
 
 function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, focusClient, onDeleteFacturation, settings }) {
-  // Liste triée par ordre alphabétique sur le nom, en ignorant la casse et les
-  // accents — l'ordre d'arrivée réseau n'a ainsi plus d'effet sur l'affichage.
+  const [recherche, setRecherche] = useState("");
+
+  // Tri alphabétique sur le libellé réellement affiché — la raison sociale pour
+  // un professionnel, le nom sinon. Trier sur le nom du contact donnait une
+  // liste qui paraissait en désordre, puisque ce n'est pas ce qu'on lit.
   const clientsTries = [...clients].sort((a, b) =>
-    (a.nom || "").localeCompare(b.nom || "", "fr", { sensitivity: "base" })
+    libelleClient(a).localeCompare(libelleClient(b), "fr", { sensitivity: "base" })
   );
-  const [selected, setSelected] = useState(clientsTries[0]?.id);
+
+  const sansAccent = (t) => (t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const termeRecherche = sansAccent(recherche).trim();
+  const clientsAffiches = termeRecherche
+    ? clientsTries.filter((c) =>
+        [c.nom, c.raisonSociale, c.adresse, c.tel, c.email].some((champ) =>
+          sansAccent(champ).includes(termeRecherche)
+        )
+      )
+    : clientsTries;
+  const [selected, setSelected] = useState(clients[0]?.id);
   const [editingClient, setEditingClient] = useState(null);
   const [showContract, setShowContract] = useState(false);
   const [showMap, setShowMap] = useState(false);
@@ -2831,8 +2844,26 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
       {showMap && <ClientsMap clients={clients} onUpdateClient={onUpdate} onOpenClient={(nom) => { const c = clients.find((cl) => cl.nom === nom); if (c) { setSelected(c.id); setShowMap(false); } }} entrepriseNom={settings?.entreprise?.nom} entrepriseAdresse={[settings?.entreprise?.adresse, settings?.entreprise?.codePostalVille].filter(Boolean).join(", ")} />}
 
       <section className="card">
+        <div className="recherche-client">
+          <input
+            value={recherche}
+            onChange={(e) => setRecherche(e.target.value)}
+            placeholder="Rechercher un client : nom, raison sociale, ville, téléphone..."
+          />
+          {recherche && (
+            <button type="button" className="icon-btn" onClick={() => setRecherche("")} title="Effacer la recherche">
+              <Icon name="close" size={15} />
+            </button>
+          )}
+        </div>
+        {termeRecherche && (
+          <p className="hint">
+            {clientsAffiches.length} client{clientsAffiches.length > 1 ? "s" : ""} sur {clients.length}
+          </p>
+        )}
         <ul className="list">
-          {clientsTries.map((c) => (
+          {clientsAffiches.length === 0 && <li className="empty">Aucun client ne correspond à cette recherche.</li>}
+          {clientsAffiches.map((c) => (
             <li
               key={c.id}
               className={"row clickable" + (client?.id === c.id ? " selected" : "")}
@@ -4868,6 +4899,9 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .machine-editor-card .machine-editor { margin-top: 14px; }
 .unit-block { padding: 12px; background: #fff; border: 1px solid #E4E9E8; border-radius: 8px; margin-bottom: 10px; }
 
+.recherche-client { position: relative; display: flex; align-items: center; margin-bottom: 10px; }
+.recherche-client input { width: 100%; padding-right: 36px; }
+.recherche-client .icon-btn { position: absolute; right: 4px; color: #6D7A80; }
 .client-detail-actions { display: flex; gap: 8px; }
 .fiche-bandeau { gap: 12px; }
 .fiche-bandeau-nom { font-family: 'Barlow Condensed', sans-serif; font-size: 18px; font-weight: 600; color: #1B2733; }
