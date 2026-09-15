@@ -206,6 +206,31 @@ function nomAffiche(nomStocke, clients) {
   return c ? libelleClient(c) : nomStocke;
 }
 
+// Met en forme un numéro par groupes de deux chiffres, à la saisie comme à
+// l'affichage : "0637123456" devient "06 37 12 34 56". Pour un numéro français
+// écrit à l'international, le chiffre qui suit l'indicatif reste isolé, comme
+// le veut l'usage : "+33 6 37 12 34 56".
+function formaterTelephone(valeur) {
+  const brut = String(valeur || "");
+  const international = brut.trim().startsWith("+");
+  const chiffres = brut.replace(/\D/g, "").slice(0, 15);
+  if (!chiffres) return international ? "+" : "";
+
+  if (international) {
+    const indicatif = chiffres.slice(0, 2);
+    let reste = chiffres.slice(2);
+    let premier = "";
+    if (indicatif === "33") {
+      premier = reste.slice(0, 1);
+      reste = reste.slice(1);
+    }
+    const groupes = (reste.match(/.{1,2}/g) || []).join(" ");
+    return ["+" + indicatif, premier, groupes].filter(Boolean).join(" ");
+  }
+
+  return (chiffres.match(/.{1,2}/g) || []).join(" ");
+}
+
 /* ---------- Téléphone cliquable : lance l'appel ----------
    Espaces, points et tirets sont retirés du numéro composé, sinon certains
    téléphones refusent le lien ; l'affichage, lui, reste tel que saisi. */
@@ -220,7 +245,7 @@ function TelephoneLien({ numero, className }) {
       title="Appeler ce numéro"
     >
       <Icon name="phone" size={13} />
-      <span>{numero}</span>
+      <span>{formaterTelephone(numero)}</span>
     </a>
   );
 }
@@ -1269,7 +1294,7 @@ function Parametres({ settings, setSettings }) {
           </label>
           <div className="form-grid">
             <label>Téléphone
-              <input value={draft.entreprise.telephone} onChange={(e) => updateEntreprise({ telephone: e.target.value })} placeholder="05 58 00 00 00" />
+              <input value={draft.entreprise.telephone} onChange={(e) => updateEntreprise({ telephone: formaterTelephone(e.target.value) })} inputMode="tel" placeholder="05 58 00 00 00" />
             </label>
             <label>Email
               <input value={draft.entreprise.email} onChange={(e) => updateEntreprise({ email: e.target.value })} placeholder="contact@entreprise.fr" />
@@ -3389,7 +3414,7 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
             <label>N° de TVA intracommunautaire<input value={tva} onChange={(e) => setTva(e.target.value)} placeholder="Ex : FR12345678900" /></label>
           </>
         )}
-        <label>Téléphone<input value={tel} onChange={(e) => setTel(e.target.value)} placeholder="06 00 00 00 00" /></label>
+        <label>Téléphone<input value={tel} onChange={(e) => setTel(formaterTelephone(e.target.value))} inputMode="tel" placeholder="06 00 00 00 00" /></label>
         <label>Adresse<input value={adresse} onChange={(e) => setAdresse(e.target.value)} placeholder="Rue, code postal, ville" /></label>
         <label>Email<input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nom@email.fr" /></label>
         <label>Mois de l'entretien contractuel (facultatif)
