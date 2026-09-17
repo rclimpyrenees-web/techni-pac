@@ -1337,7 +1337,7 @@ function Parametres({ settings, setSettings }) {
 
       <section className="card">
         <h3>Modèles de checklist</h3>
-        <p className="hint">Créez des checklists réutilisables. Elles seront proposées dans les rapports de mise en service et d'entretien — vous pourrez toujours les modifier librement une fois insérées.</p>
+        <p className="hint">Créez des checklists réutilisables. Elles seront proposées dans les rapports du type choisi — vous pourrez toujours les modifier librement une fois insérées.</p>
         {(draft.checklists || []).length === 0 && <p className="empty">Aucun modèle créé pour le moment.</p>}
         {(draft.checklists || []).map((t) => (
           <div key={t.id} className="card machine-editor-card">
@@ -1675,7 +1675,7 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
               <div className="remarque rte-render" dangerouslySetInnerHTML={{ __html: r.description }} />
               {r.pieces && <p><strong>Pièces utilisées :</strong> {r.pieces}</p>}
               <p><strong>Facturable :</strong> {r.facturable ? "Oui" : "Non"}</p>
-              {tablesAt(r.tables, [], "__end__")}
+              <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
               {r.conclusion && (
                 <>
                   <div className="section-title">Conclusion</div>
@@ -2018,6 +2018,7 @@ function ChecklistTemplateEditor({ template, onChange, onRemove }) {
           <select value={template.type || "entretien"} onChange={(e) => onChange({ ...template, type: e.target.value })}>
             <option value="mise_en_service">Mise en service</option>
             <option value="entretien">Entretien</option>
+            <option value="diagnostic">Diagnostic / dépannage</option>
           </select>
         </label>
       </div>
@@ -2100,7 +2101,38 @@ function RichTextEditor({ initialValue, onChange, minHeight }) {
   const handleInput = () => {
     if (ref.current) onChange(ref.current.innerHTML);
   };
+  // Un tiret suivi d'un espace en début de ligne démarre une liste à puces,
+  // comme dans un traitement de texte. Le tiret lui-même est effacé.
+  const puceAutomatique = () => {
+    if (document.queryCommandState("insertUnorderedList")) return false;
+    const selection = window.getSelection();
+    if (!selection || !selection.isCollapsed || selection.rangeCount === 0) return false;
+
+    const noeud = selection.anchorNode;
+    if (!noeud || noeud.nodeType !== 3) return false;
+
+    const avantCurseur = noeud.textContent.slice(0, selection.anchorOffset);
+    // Uniquement si la ligne ne contient QUE le tiret jusqu'au curseur.
+    if (!/^[-*]$/.test(avantCurseur.trim()) || avantCurseur.trim().length !== avantCurseur.length) return false;
+
+    noeud.textContent = noeud.textContent.slice(selection.anchorOffset);
+    const plage = document.createRange();
+    plage.setStart(noeud, 0);
+    plage.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(plage);
+    document.execCommand("insertUnorderedList");
+    return true;
+  };
+
   const handleKeyDown = (e) => {
+    if (e.key === " " && puceAutomatique()) {
+      e.preventDefault();
+      handleInput();
+      updateActiveState();
+      return;
+    }
+
     // Dans une liste à puces, Tab imbrique d'un niveau, Maj+Tab remonte d'un niveau.
     if (e.key === "Tab") {
       const inList = document.queryCommandState("insertUnorderedList") || document.queryCommandState("insertOrderedList");
@@ -2452,7 +2484,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
     } else if (reportType === "entretien") {
       return { ...base, intro: introRef.current, checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
     } else {
-      return { ...base, intro: introRef.current, machines: cleanMachines(), description: descriptionRef.current, tables, pieces, facturable, conclusion, remarques, montant, tva, devisAEffectuer };
+      return { ...base, intro: introRef.current, machines: cleanMachines(), description: descriptionRef.current, checklists: cleanChecklists(), tables, pieces, facturable, conclusion, remarques, montant, tva, devisAEffectuer };
     }
   };
 
@@ -2683,7 +2715,9 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
             </>
           )}
 
-          <TablesSection tables={tables} checklist={[]} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
+          <ChecklistsSection checklists={checklists} setChecklists={setChecklists} settings={settings} reportType="diagnostic" />
+
+          <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
 
           <label className="block mt">Conclusion
             <textarea rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} placeholder="Ex : panne résolue, installation remise en service." />
@@ -3628,10 +3662,12 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
                     {(() => {
                       const fiche = clients.find((c) => c.nom === p.client);
                       const adresseTache = (p.adresse && p.adresse.trim()) || (fiche && fiche.adresse);
+                      const telTache = (p.tel && p.tel.trim()) || (fiche && fiche.tel);
                       return (
                         <>
                           {adresseTache ? <AdresseLien adresse={adresseTache} /> : null}
-                          {fiche && fiche.tel ? <TelephoneLien numero={fiche.tel} /> : null}
+                          {telTache ? <TelephoneLien numero={telTache} /> : null}
+                          {p.notes && p.notes.trim() ? <div className="tache-notes">{p.notes}</div> : null}
                         </>
                       );
                     })()}
@@ -3767,6 +3803,9 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
   // pas encore dans le fichier (prospects) : pour les autres, on affiche
   // directement celle de leur fiche.
   const [adresse, setAdresse] = useState(editingTask?.adresse || "");
+  // Téléphone saisi à la main, pour un client qui n'est pas encore au fichier.
+  const [tel, setTel] = useState(editingTask?.tel || "");
+  const [notes, setNotes] = useState(editingTask?.notes || "");
 
   const clientConnu = clients.find((c) => c.nom === client);
   // L'adresse du site l'emporte toujours ; à défaut, on retombe sur celle de la
@@ -3783,6 +3822,8 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
       heure,
       duree,
       adresse,
+      tel,
+      notes,
       rappel: hideRappelToggle ? true : rappel,
       fait: editingTask?.fait || false,
       categorie: editingTask?.categorie || forceCategorie || "intervention",
@@ -3817,6 +3858,34 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
             Utile pour un client professionnel chez qui vous intervenez sur le site de son propre client. C'est cette adresse qui sera ouverte dans votre application de navigation.
           </span>
           {adresseNavigation && <AdresseLien adresse={adresseNavigation} />}
+        </label>
+
+        {clientConnu ? (
+          <div className="field-col">
+            Téléphone
+            {clientConnu.tel
+              ? <TelephoneLien numero={clientConnu.tel} />
+              : <span className="hint">Aucun numéro dans la fiche de ce client.</span>}
+          </div>
+        ) : (
+          <label>Téléphone
+            <input
+              value={tel}
+              onChange={(e) => setTel(formaterTelephone(e.target.value))}
+              inputMode="tel"
+              placeholder="06 00 00 00 00"
+            />
+            <span className="hint">Ce client n'est pas encore au fichier : notez son numéro ici.</span>
+          </label>
+        )}
+
+        <label className="grid-full">Notes
+          <textarea
+            rows={2}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Ex : code portail 1234, prévoir échelle, intervenir côté cour..."
+          />
         </label>
         <label>Date<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
         <label>Heure
@@ -4647,7 +4716,7 @@ function buildReportHtml(report, settings, clients) {
     body += machinesToHtml(report.machines);
     if (report.description) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.description}</div>`;
     if (report.pieces) body += `<p><strong>Pièces utilisées :</strong> ${escapeHtml(report.pieces)}</p>`;
-    body += tablesAtHtml(report.tables, [], "__end__");
+    body += checklistsToHtml(report);
     if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
     if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
   }
@@ -5095,6 +5164,7 @@ textarea { resize: vertical; }
 .description-view p { white-space: pre-wrap; margin: 4px 0 0; }
 .grid-full { grid-column: 1 / -1; }
 .field-col { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; font-weight: 600; color: #4A5860; }
+.tache-notes { font-size: 12.5px; color: #4A5860; background: #F6F8F7; border-radius: 6px; padding: 6px 8px; margin-top: 4px; white-space: pre-wrap; }
 .telephone-lien { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 500; color: #2F6FA3; text-decoration: none; margin-top: 2px; }
 .telephone-lien span { text-decoration: underline; text-underline-offset: 2px; }
 .telephone-lien:hover { color: #1B4E77; }
