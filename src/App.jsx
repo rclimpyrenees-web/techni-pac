@@ -1813,7 +1813,12 @@ function tablesAt(tables, checklist, anchor) {
 /* ---------- Section « Checklists » du formulaire : plusieurs checklists à la
    suite, chacune avec son titre, sur le même principe que les tableaux ---------- */
 function ChecklistsSection({ checklists, setChecklists, settings, reportType }) {
-  const modeles = (settings.checklists || []).filter((t) => t.type === reportType);
+  // Un dépannage peut porter sur n'importe quel type d'installation : on y
+  // propose donc tous les modèles de checklist, y compris ceux créés pour les
+  // mises en service et les entretiens.
+  const tousLesModeles = settings.checklists || [];
+  const modeles = reportType === "diagnostic" ? tousLesModeles : tousLesModeles.filter((t) => t.type === reportType);
+  const afficherLeType = reportType === "diagnostic";
 
   // On fournit à chaque ChecklistEditor un setter qui ne touche qu'à ses
   // propres lignes, pour pouvoir réutiliser l'éditeur existant tel quel.
@@ -1886,7 +1891,9 @@ function ChecklistsSection({ checklists, setChecklists, settings, reportType }) 
           >
             <option value="">Insérer un modèle de checklist...</option>
             {modeles.map((t) => (
-              <option key={t.id} value={t.id}>{t.nom || "Modèle sans nom"}</option>
+              <option key={t.id} value={t.id}>
+                {(t.nom || "Modèle sans nom") + (afficherLeType && t.type !== reportType ? ` (${labelType(t.type)})` : "")}
+              </option>
             ))}
           </select>
         )}
@@ -2393,7 +2400,9 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
       exterieur: normalizeUnits(m.exterieur).map((u) => ({ marque: "", modele: "", serie: "", photo: "", ...u })),
       interieur: normalizeUnits(m.interieur).map((u) => ({ marque: "", modele: "", serie: "", photo: "", ...u })),
     }));
-    return existantes.length > 0 ? existantes : [blankMachine()];
+    // On ne pré-crée aucun matériel vide : le compteur part de zéro et ne
+    // s'incrémente qu'à l'ajout réel d'un matériel.
+    return existantes;
   });
   const [signatureTech, setSignatureTech] = useState(editingReport?.signatureTech || "");
   const [signatureClient, setSignatureClient] = useState(editingReport?.signatureClient || "");
@@ -2554,12 +2563,13 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
                     key={m.id}
                     machine={m}
                     index={i}
-                    defaultOpen={machines.length === 1}
+                    defaultOpen
                     onChange={(next) => updateMachine(m.id, next)}
                     onRemove={() => removeMachine(m.id)}
-                    removable={machines.length > 1}
+                    removable
                   />
                 ))}
+                {machines.length === 0 && <p className="empty">Aucun matériel renseigné.</p>}
                 <button type="button" className="btn-ghost small" onClick={addMachine}>
                   <Icon name="plus" size={14} /> Ajouter un matériel
                 </button>
@@ -2673,12 +2683,13 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
                     key={m.id}
                     machine={m}
                     index={i}
-                    defaultOpen={machines.length === 1}
+                    defaultOpen
                     onChange={(next) => updateMachine(m.id, next)}
                     onRemove={() => removeMachine(m.id)}
-                    removable={machines.length > 1}
+                    removable
                   />
                 ))}
+                {machines.length === 0 && <p className="empty">Aucun matériel renseigné.</p>}
                 <button type="button" className="btn-ghost small" onClick={addMachine}>
                   <Icon name="plus" size={14} /> Ajouter un matériel
                 </button>
@@ -3396,7 +3407,7 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
       exterieur: normalizeUnits(m.exterieur).map((u) => ({ marque: "", modele: "", serie: "", photo: "", ...u })),
       interieur: normalizeUnits(m.interieur).map((u) => ({ marque: "", modele: "", serie: "", photo: "", ...u })),
     }));
-    return existing.length > 0 ? existing : [blankMachine()];
+    return existing;
   });
   const [contrat, setContrat] = useState(editingClient?.contrat || null);
   const [blankContractType, setBlankContractType] = useState(null); // "air_air" | "air_eau" | "air_air_b2b" | "air_eau_b2b" | null
@@ -3477,12 +3488,13 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
           key={m.id}
           machine={m}
           index={i}
-          defaultOpen={false}
+          defaultOpen
           onChange={(next) => updateMachine(m.id, next)}
           onRemove={() => removeMachine(m.id)}
-          removable={machines.length > 1}
+          removable
         />
       ))}
+      {machines.length === 0 && <p className="empty">Aucun matériel renseigné.</p>}
       <button type="button" className="btn-ghost small" onClick={addMachine}><Icon name="plus" size={14} /> Ajouter un matériel</button>
 
       <label className="block mt">Contrat de maintenance</label>
