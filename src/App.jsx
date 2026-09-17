@@ -3808,7 +3808,7 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
   const [titre, setTitre] = useState(editingTask?.titre || "");
   const [client, setClient] = useState(editingTask?.client || "");
   const [date, setDate] = useState(editingTask?.date || initialDate || toLocalISODate(new Date()));
-  const [heure, setHeure] = useState(editingTask?.heure && editingTask.heure !== "—" ? editingTask.heure : "09:00");
+  const [heure, setHeure] = useState(editingTask?.heure && editingTask.heure !== "—" ? editingTask.heure : "08:30");
   const [duree, setDuree] = useState(editingTask?.duree || "1h");
   const [rappel, setRappel] = useState(editingTask ? !!editingTask.rappel : true);
   // Adresse saisie à la main, utilisée uniquement pour les clients qui ne sont
