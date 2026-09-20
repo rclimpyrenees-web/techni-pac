@@ -809,6 +809,8 @@ export default function App() {
         {tab === "devis" && (
           <Devis
             clients={clients}
+            onAjoutAFaire={(d) => upsertDevisAFaire(d)}
+            onAjoutEnCours={(d) => upsertDevisEnCours(d)}
             devisAFaire={devisAFaire}
             devisEnCours={devisEnCours}
             onCreated={(id) => removeDevisAFaire(id)}
@@ -4031,13 +4033,116 @@ function MonthGroupedList({ items, dateField, renderItem, emptyLabel }) {
   );
 }
 
-function Devis({ clients, devisAFaire, devisEnCours, onCreated, onRelance, onValide, onOpenClient }) {
+/* ---------- Ajout manuel d'un devis ----------
+   Les devis arrivent normalement depuis un rapport d'intervention. Ce
+   formulaire permet d'en saisir un directement : soit un devis à établir, soit
+   un devis déjà envoyé au client et en attente de réponse. */
+function DevisForm({ clients, onAjoutAFaire, onAjoutEnCours, onCancel }) {
+  const [etat, setEtat] = useState("a_faire");
+  const [client, setClient] = useState("");
+  const [objet, setObjet] = useState("");
+  const [date, setDate] = useState(toLocalISODate(new Date()));
+  const [montant, setMontant] = useState("");
+  const [statut, setStatut] = useState("bientot");
+
+  const enregistrer = () => {
+    if (!client.trim()) return;
+    if (etat === "a_faire") {
+      onAjoutAFaire({
+        id: "df" + Date.now(),
+        client,
+        origine: objet.trim() || "Devis à établir",
+        date: isoToFr(date),
+      });
+    } else {
+      onAjoutEnCours({
+        id: "de" + Date.now(),
+        client,
+        montant: montant.trim() ? `${montant.trim()} €` : "Montant à préciser",
+        objet: objet.trim(),
+        envoye: isoToFr(date),
+        statut,
+      });
+    }
+    onCancel();
+  };
+
+  return (
+    <div className="card form-card">
+      <div className="type-toggle">
+        <button className={"toggle-btn" + (etat === "a_faire" ? " active" : "")} onClick={() => setEtat("a_faire")}>
+          Devis à faire
+        </button>
+        <button className={"toggle-btn" + (etat === "en_cours" ? " active" : "")} onClick={() => setEtat("en_cours")}>
+          Devis déjà envoyé
+        </button>
+      </div>
+
+      <div className="form-grid">
+        <div className="field-col">
+          Client
+          <ClientSearchSelect
+            clients={clients}
+            value={client}
+            onChange={setClient}
+            placeholder="Taper les premières lettres du nom, ou dérouler la liste"
+          />
+        </div>
+        <label>{etat === "a_faire" ? "Date" : "Date d'envoi"}
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </label>
+        {etat === "en_cours" && (
+          <>
+            <label>Montant (€, facultatif)
+              <input type="number" step="0.01" min="0" value={montant} onChange={(e) => setMontant(e.target.value)} placeholder="Ex : 1250" />
+            </label>
+            <label>Suivi
+              <select value={statut} onChange={(e) => setStatut(e.target.value)}>
+                <option value="bientot">À relancer bientôt</option>
+                <option value="a_relancer">À relancer maintenant</option>
+                <option value="relance_faite">Relance déjà faite</option>
+              </select>
+            </label>
+          </>
+        )}
+        <label className="grid-full">Objet du devis
+          <textarea rows={2} value={objet} onChange={(e) => setObjet(e.target.value)} placeholder="Ex : remplacement groupe extérieur, ajout d'une unité intérieure..." />
+        </label>
+      </div>
+
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Annuler</button>
+        <button className="btn-primary" onClick={enregistrer} disabled={!client.trim()} title={!client.trim() ? "Choisissez d'abord un client" : ""}>
+          Ajouter le devis
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Devis({ clients, devisAFaire, devisEnCours, onCreated, onRelance, onValide, onOpenClient, onAjoutAFaire, onAjoutEnCours }) {
+  const [showForm, setShowForm] = useState(false);
+
   return (
     <div>
-      <header className="page-head">
-        <h1>Devis</h1>
-        <p>Devis à réaliser et devis en attente de réponse — cliquez une ligne pour voir le client</p>
+      <header className="page-head row-between">
+        <div>
+          <h1>Devis</h1>
+          <p>Devis à réaliser et devis en attente de réponse — cliquez une ligne pour voir le client</p>
+        </div>
+        <button className="btn-primary" onClick={() => setShowForm(!showForm)}>
+          <Icon name="plus" size={16} /> Nouveau devis
+        </button>
       </header>
+
+      {showForm && (
+        <DevisForm
+          clients={clients}
+          onAjoutAFaire={onAjoutAFaire}
+          onAjoutEnCours={onAjoutEnCours}
+          onCancel={() => setShowForm(false)}
+        />
+      )}
 
       <div className="grid-2">
         <section className="card">
@@ -4068,7 +4173,7 @@ function Devis({ clients, devisAFaire, devisEnCours, onCreated, onRelance, onVal
               <li key={d.id} className="row clickable" onClick={() => onOpenClient(d.client)} title="Voir la fiche client">
                 <div>
                   <div className="row-title">{nomAffiche(d.client, clients)} · {d.montant}</div>
-                  <div className="row-sub">Envoyé le {d.envoye}</div>
+                  <div className="row-sub">{d.objet ? d.objet + " · " : ""}Envoyé le {d.envoye}</div>
                 </div>
                 <div className="devis-actions">
                   {d.statut === "relance_faite" ? (
