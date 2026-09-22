@@ -1288,9 +1288,18 @@ function Parametres({ settings, setSettings }) {
           <label>Nom de l'entreprise
             <input value={draft.entreprise.nom} onChange={(e) => updateEntreprise({ nom: e.target.value })} placeholder="Ex : TECHNI-PAC SARL" />
           </label>
-          <label className="mt">Adresse (rue)
-            <input value={draft.entreprise.adresse} onChange={(e) => updateEntreprise({ adresse: e.target.value })} placeholder="Ex : 450 Route des Grottes" />
-          </label>
+          <div className="field-col mt">
+            Adresse (rue)
+            <AdresseInput
+              value={draft.entreprise.adresse}
+              onChange={(v) => updateEntreprise({ adresse: v })}
+              onSelectAdresse={(p) => updateEntreprise({
+                adresse: p.name,
+                codePostalVille: [p.postcode, p.city].filter(Boolean).join(" "),
+              })}
+              placeholder="Ex : 450 Route des Grottes"
+            />
+          </div>
           <label className="mt">Code postal et ville
             <input value={draft.entreprise.codePostalVille} onChange={(e) => updateEntreprise({ codePostalVille: e.target.value })} placeholder="Ex : 64800 Lestelle-Bétharram" />
           </label>
@@ -2285,6 +2294,118 @@ function preparerImage(fichier, maxCote = 1600, qualite = 0.72) {
     };
     lecteur.readAsDataURL(fichier);
   });
+}
+
+/* ---------- Champ d'adresse avec suggestions ----------
+   Propose des adresses au fil de la frappe, à partir de la Base Adresse
+   Nationale (service public gratuit, sans clé — celui qu'utilise déjà la carte
+   des secteurs). On n'interroge le service qu'à partir de 4 caractères et après
+   un court temps d'arrêt dans la frappe, pour ne pas l'appeler à chaque lettre.
+   La saisie libre reste toujours possible : les suggestions sont une aide, pas
+   une obligation. */
+function AdresseInput({ value, onChange, onSelectAdresse, placeholder }) {
+  const [suggestions, setSuggestions] = useState([]);
+  const [ouvert, setOuvert] = useState(false);
+  const [actif, setActif] = useState(-1);
+  const saisieUtilisateur = useRef(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    // On ne cherche que lorsque c'est l'utilisateur qui tape, pas lorsque le
+    // champ est rempli par l'application (ouverture d'une fiche existante...).
+    if (!saisieUtilisateur.current) return;
+    const recherche = (value || "").trim();
+    if (recherche.length < 4) {
+      setSuggestions([]);
+      setOuvert(false);
+      return;
+    }
+    const controleur = new AbortController();
+    const minuteur = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(recherche)}&limit=5&autocomplete=1`,
+          { signal: controleur.signal }
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const liste = (data.features || []).map((f) => f.properties).filter((p) => p && p.label);
+        setSuggestions(liste);
+        setOuvert(liste.length > 0);
+        setActif(-1);
+      } catch (_e) {
+        // Pas de réseau ou service indisponible : on laisse simplement la saisie libre.
+      }
+    }, 250);
+    return () => {
+      clearTimeout(minuteur);
+      controleur.abort();
+    };
+  }, [value]);
+
+  useEffect(() => {
+    const fermerSiClicDehors = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOuvert(false);
+    };
+    document.addEventListener("mousedown", fermerSiClicDehors);
+    document.addEventListener("touchstart", fermerSiClicDehors);
+    return () => {
+      document.removeEventListener("mousedown", fermerSiClicDehors);
+      document.removeEventListener("touchstart", fermerSiClicDehors);
+    };
+  }, []);
+
+  const choisir = (p) => {
+    saisieUtilisateur.current = false;
+    onChange(p.label);
+    if (onSelectAdresse) onSelectAdresse(p);
+    setOuvert(false);
+    setSuggestions([]);
+  };
+
+  const auClavier = (e) => {
+    if (!ouvert || suggestions.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActif((i) => Math.min(i + 1, suggestions.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActif((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter" && actif >= 0) {
+      e.preventDefault();
+      choisir(suggestions[actif]);
+    } else if (e.key === "Escape") {
+      setOuvert(false);
+    }
+  };
+
+  return (
+    <div className="client-select" ref={wrapRef}>
+      <input
+        value={value}
+        onChange={(e) => { saisieUtilisateur.current = true; onChange(e.target.value); }}
+        onKeyDown={auClavier}
+        placeholder={placeholder}
+        autoComplete="off"
+      />
+      {ouvert && suggestions.length > 0 && (
+        <ul className="client-select-list">
+          {suggestions.map((p, i) => (
+            <li
+              key={p.id || i}
+              className={i === actif ? "actif" : ""}
+              // onMouseDown plutôt qu'onClick : le choix est pris en compte avant
+              // que le champ ne perde le focus et ne referme la liste.
+              onMouseDown={(e) => { e.preventDefault(); choisir(p); }}
+            >
+              <span className="client-select-nom">{p.name}</span>
+              <span className="client-select-sub">{[p.postcode, p.city].filter(Boolean).join(" ")}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /* ---------- Champ « Client » : menu déroulant avec recherche ----------
@@ -3462,7 +3583,10 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
           </>
         )}
         <label>Téléphone<input value={tel} onChange={(e) => setTel(formaterTelephone(e.target.value))} inputMode="tel" placeholder="06 00 00 00 00" /></label>
-        <label>Adresse<input value={adresse} onChange={(e) => setAdresse(e.target.value)} placeholder="Rue, code postal, ville" /></label>
+        <div className="field-col">
+          Adresse
+          <AdresseInput value={adresse} onChange={setAdresse} placeholder="Commencez à taper l'adresse..." />
+        </div>
         <label>Email<input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nom@email.fr" /></label>
         <label>Mois de l'entretien contractuel (facultatif)
           <select value={moisEcheance} onChange={(e) => setMoisEcheance(e.target.value)}>
@@ -3862,17 +3986,18 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
             </span>
           )}
         </div>
-        <label className="grid-full">Adresse du site
-          <input
+        <div className="field-col grid-full">
+          Adresse du site
+          <AdresseInput
             value={adresse}
-            onChange={(e) => setAdresse(e.target.value)}
+            onChange={setAdresse}
             placeholder={clientConnu && clientConnu.adresse ? "Laisser vide pour utiliser l'adresse de la fiche client" : "Adresse où se déroule l'intervention"}
           />
           <span className="hint">
             Utile pour un client professionnel chez qui vous intervenez sur le site de son propre client. C'est cette adresse qui sera ouverte dans votre application de navigation.
           </span>
           {adresseNavigation && <AdresseLien adresse={adresseNavigation} />}
-        </label>
+        </div>
 
         {clientConnu ? (
           <div className="field-col">
@@ -5297,7 +5422,7 @@ textarea { resize: vertical; }
 .client-select-arrow { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: #6D7A80; cursor: pointer; padding: 4px; display: flex; }
 .client-select-list { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 50; list-style: none; margin: 0; padding: 4px; background: #fff; border: 1px solid #D7DEDD; border-radius: 8px; box-shadow: 0 6px 20px rgba(27,39,51,0.14); max-height: 260px; overflow-y: auto; }
 .client-select-list li { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border-radius: 6px; cursor: pointer; font-weight: 400; }
-.client-select-list li:hover { background: #EAF1F7; }
+.client-select-list li:hover, .client-select-list li.actif { background: #EAF1F7; }
 .client-select-nom { font-size: 14px; font-weight: 600; color: #1B2733; }
 .client-select-sub { font-size: 12px; color: #6D7A80; }
 .client-select-empty { font-size: 12.5px; color: #8A959A; font-style: italic; cursor: default; }
