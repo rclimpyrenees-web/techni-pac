@@ -1683,10 +1683,8 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
                   {r.machines.map((m, i) => <MachineBlock key={i} machine={m} />)}
                 </>
               )}
-              <div className="remarque rte-render" dangerouslySetInnerHTML={{ __html: r.description }} />
-              {r.pieces && <p><strong>Pièces utilisées :</strong> {r.pieces}</p>}
-              <p><strong>Facturable :</strong> {r.facturable ? "Oui" : "Non"}</p>
               <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
+              {r.description && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.description }} /></div>}
               {r.conclusion && (
                 <>
                   <div className="section-title">Conclusion</div>
@@ -1699,6 +1697,8 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
                   <p className="remarque texte-libre">{r.remarques}</p>
                 </>
               )}
+              {r.pieces && <p><strong>Pièces utilisées :</strong> {r.pieces}</p>}
+              <p><strong>Facturable :</strong> {r.facturable ? "Oui" : "Non"}</p>
               <DevisNote text={r.devisAEffectuer} />
             </>
           )}
@@ -2512,9 +2512,15 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   const [checklists, setChecklists] = useState(() => normalizeChecklists(editingReport));
   const [tables, setTables] = useState(editingReport?.tables || []);
   const [showMachinesSection, setShowMachinesSection] = useState(false);
-  // Matériel installé (rapports de mise en service) — même fonctionnement que
+  // Retient si le matériel affiché provient d'une reprise automatique depuis la
+  // fiche client : dans ce cas seulement, changer de client le remplace. Du
+  // matériel saisi ou corrigé à la main n'est jamais écrasé.
+  const materielRepris = useRef(false);
+
+  // Matériel installé (mise en service et dépannage) — même fonctionnement que
   // dans la fiche client : plusieurs matériels, chacun avec ses groupes
-  // extérieurs et unités intérieures.
+  // extérieurs et unités intérieures. Aucun matériel vide n'est pré-créé : le
+  // compteur part de zéro.
   const [machines, setMachines] = useState(() => {
     const existantes = (editingReport?.machines || []).map((m, i) => ({
       id: "m" + i + "_" + Date.now(),
@@ -2523,9 +2529,16 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
       exterieur: normalizeUnits(m.exterieur).map((u) => ({ marque: "", modele: "", serie: "", photo: "", ...u })),
       interieur: normalizeUnits(m.interieur).map((u) => ({ marque: "", modele: "", serie: "", photo: "", ...u })),
     }));
-    // On ne pré-crée aucun matériel vide : le compteur part de zéro et ne
-    // s'incrémente qu'à l'ajout réel d'un matériel.
-    return existantes;
+    if (existantes.length > 0) return existantes;
+
+    // Nouveau rapport ouvert avec un client déjà connu (depuis le planning ou
+    // la fiche client) : on reprend d'emblée le matériel de sa fiche.
+    if (!editingReport && initialClient) {
+      const duClient = machinesDepuisFiche(clients.find((cl) => cl.nom === initialClient));
+      materielRepris.current = duClient.length > 0;
+      return duClient;
+    }
+    return [];
   });
   const [signatureTech, setSignatureTech] = useState(editingReport?.signatureTech || "");
   const [signatureClient, setSignatureClient] = useState(editingReport?.signatureClient || "");
@@ -2533,14 +2546,22 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   const fileRef = useRef();
 
   // Quand on choisit un client déjà enregistré, on reprend automatiquement le
-  // type de son premier matériel installé — sans écraser la valeur d'un rapport
-  // ouvert en modification (d'où le saut du tout premier rendu).
+  // type de son premier matériel installé ET la totalité du matériel de sa
+  // fiche — sans écraser la valeur d'un rapport ouvert en modification (d'où le
+  // saut du tout premier rendu).
   const premierRendu = useRef(true);
   useEffect(() => {
     if (premierRendu.current) { premierRendu.current = false; return; }
     const c = clients.find((cl) => cl.nom === client);
     const type = c?.machines?.[0]?.type;
     if (type) setInstallation(type);
+
+    setMachines((actuelles) => {
+      if (actuelles.length > 0 && !materielRepris.current) return actuelles;
+      const duClient = machinesDepuisFiche(c);
+      materielRepris.current = duClient.length > 0;
+      return duClient;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
 
@@ -2577,9 +2598,11 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
   const retirerPhoto = (index) => setPhotos((p) => p.filter((_, i) => i !== index));
 
-  const addMachine = () => setMachines((list) => [...list, blankMachine()]);
-  const updateMachine = (id, next) => setMachines((list) => list.map((m) => (m.id === id ? next : m)));
-  const removeMachine = (id) => setMachines((list) => list.filter((m) => m.id !== id));
+  // Dès que l'utilisateur touche au matériel, il devient le sien : un changement
+  // de client ne le remplacera plus.
+  const addMachine = () => { materielRepris.current = false; setMachines((list) => [...list, blankMachine()]); };
+  const updateMachine = (id, next) => { materielRepris.current = false; setMachines((list) => list.map((m) => (m.id === id ? next : m))); };
+  const removeMachine = (id) => { materielRepris.current = false; setMachines((list) => list.filter((m) => m.id !== id)); };
   // On ne conserve que les matériels réellement renseignés.
   const cleanMachines = () =>
     machines
@@ -2824,6 +2847,20 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
             <div className="field-caption">Description</div>
             <RichTextEditor initialValue={editingReport?.description || ""} onChange={(html) => { descriptionRef.current = html; }} minHeight={200} />
           </div>
+          <ChecklistsSection checklists={checklists} setChecklists={setChecklists} settings={settings} reportType="diagnostic" />
+
+          <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
+
+          <label className="block mt">Conclusion
+            <textarea rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} placeholder="Ex : panne résolue, installation remise en service." />
+            <span className="hint">Le titre « Conclusion » n'apparaît dans le rapport que si ce champ est rempli.</span>
+          </label>
+
+          <label className="block mt">Remarques
+            <textarea rows={3} value={remarques} onChange={(e) => setRemarques(e.target.value)} placeholder="Observations, recommandations au client..." />
+            <span className="hint">Le titre « Remarques » n'apparaît dans le rapport que si ce champ est rempli.</span>
+          </label>
+
           <label className="block">Pièces utilisées
             <input value={pieces} onChange={(e) => setPieces(e.target.value)} placeholder="Ex : raccord flare 1/4 pouce" />
           </label>
@@ -2848,20 +2885,6 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
               <span className="hint">Utilisés pour la facturation. Si la synchronisation Pennylane est activée et qu'aucun devis n'est à effectuer, la facture est créée automatiquement à l'enregistrement avec ce taux.</span>
             </>
           )}
-
-          <ChecklistsSection checklists={checklists} setChecklists={setChecklists} settings={settings} reportType="diagnostic" />
-
-          <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
-
-          <label className="block mt">Conclusion
-            <textarea rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} placeholder="Ex : panne résolue, installation remise en service." />
-            <span className="hint">Le titre « Conclusion » n'apparaît dans le rapport que si ce champ est rempli.</span>
-          </label>
-
-          <label className="block mt">Remarques
-            <textarea rows={3} value={remarques} onChange={(e) => setRemarques(e.target.value)} placeholder="Observations, recommandations au client..." />
-            <span className="hint">Le titre « Remarques » n'apparaît dans le rapport que si ce champ est rempli.</span>
-          </label>
 
           <label className="block">Devis à effectuer pour la réparation
             <textarea rows={2} value={devisAEffectuer} onChange={(e) => setDevisAEffectuer(e.target.value)} placeholder="Ex : remplacement compresseur, prévoir devis ~450 €" />
@@ -3499,6 +3522,18 @@ function normalizeUnits(u) {
   if (Array.isArray(u)) return u.length > 0 ? u : [{ marque: "", modele: "", serie: "", photo: "" }];
   if (u && typeof u === "object") return [u];
   return [{ marque: "", modele: "", serie: "", photo: "" }];
+}
+
+// Convertit le matériel d'une fiche client au format utilisé dans les rapports
+// (un identifiant propre à chaque carte, et des unités toujours complètes).
+function machinesDepuisFiche(fiche) {
+  return (fiche?.machines || []).map((m, i) => ({
+    id: "mc" + i + "_" + Date.now(),
+    type: m.type || installTypes[0],
+    date: m.date || new Date().toLocaleDateString("fr-FR"),
+    exterieur: normalizeUnits(m.exterieur).map((u) => ({ marque: "", modele: "", serie: "", photo: "", ...u })),
+    interieur: normalizeUnits(m.interieur).map((u) => ({ marque: "", modele: "", serie: "", photo: "", ...u })),
+  }));
 }
 
 function blankMachine() {
@@ -4957,10 +4992,10 @@ function buildReportHtml(report, settings, clients) {
     if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
     body += machinesToHtml(report.machines);
     if (report.description) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.description}</div>`;
-    if (report.pieces) body += `<p><strong>Pièces utilisées :</strong> ${escapeHtml(report.pieces)}</p>`;
     body += checklistsToHtml(report);
     if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
     if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
+    if (report.pieces) body += `<p><strong>Pièces utilisées :</strong> ${escapeHtml(report.pieces)}</p>`;
   }
 
   if (report.signatureTech || report.signatureClient) {
