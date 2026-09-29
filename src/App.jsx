@@ -1661,6 +1661,12 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
           {r.type === "entretien" && (
             <>
               {r.intro && <div className="remarque description-view"><strong>Objet</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.intro }} /></div>}
+              {r.machines && r.machines.length > 0 && (
+                <>
+                  <div className="section-title">Matériel installé</div>
+                  {r.machines.map((m, i) => <MachineBlock key={i} machine={m} />)}
+                </>
+              )}
               <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
               {r.descriptionLibre && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.descriptionLibre }} /></div>}
               {r.conclusion && (
@@ -2641,7 +2647,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
     if (reportType === "mise_en_service") {
       return { ...base, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
     } else if (reportType === "entretien") {
-      return { ...base, intro: introRef.current, checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
+      return { ...base, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
     } else {
       return { ...base, intro: introRef.current, machines: cleanMachines(), description: descriptionRef.current, checklists: cleanChecklists(), tables, pieces, facturable, conclusion, remarques, montant, tva, devisAEffectuer };
     }
@@ -2773,6 +2779,32 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
           <div className="block field-block mb-lg">
             <div className="field-caption">Objet</div>
             <RichTextEditor initialValue={editingReport?.intro || ""} onChange={(html) => { introRef.current = html; }} minHeight={100} />
+          </div>
+
+          <div className="block mt">
+            <button type="button" className="machine-section-toggle section-toggle-bar" onClick={() => setShowMachinesSection(!showMachinesSection)}>
+              <span>Matériel installé ({machines.length})</span>
+              <Icon name={showMachinesSection ? "chevronDown" : "chevronRight"} size={18} />
+            </button>
+            {showMachinesSection && (
+              <div className="mt">
+                {machines.map((m, i) => (
+                  <CollapsibleMachineCard
+                    key={m.id}
+                    machine={m}
+                    index={i}
+                    defaultOpen
+                    onChange={(next) => updateMachine(m.id, next)}
+                    onRemove={() => removeMachine(m.id)}
+                    removable
+                  />
+                ))}
+                {machines.length === 0 && <p className="empty">Aucun matériel renseigné.</p>}
+                <button type="button" className="btn-ghost small" onClick={addMachine}>
+                  <Icon name="plus" size={14} /> Ajouter un matériel
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="block field-block">
@@ -4998,6 +5030,7 @@ function buildReportHtml(report, settings, clients) {
     if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
   } else if (report.type === "entretien") {
     if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
+    body += machinesToHtml(report.machines);
     if (report.descriptionLibre) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
     body += checklistsToHtml(report);
     if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
