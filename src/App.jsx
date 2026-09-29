@@ -367,9 +367,13 @@ export default function App() {
           tel: client?.tel || "",
           siren: client?.siren || "",
           tva: client?.tva || "",
-          // Détermine la nature de la fiche créée dans Pennylane : société pour
-          // un professionnel, particulier sinon.
-          professionnel: !!(client?.raisonSociale && client.raisonSociale.trim()),
+          // Nature de la fiche créée dans Pennylane : c'est la case
+          // « Professionnel » de la fiche client qui décide. Pour les fiches
+          // antérieures à cette case, on retombe sur les informations légales.
+          professionnel:
+            typeof client?.professionnel === "boolean"
+              ? client.professionnel
+              : !!(client?.raisonSociale || client?.siren || client?.tva),
           pennylaneId: client?.pennylaneCustomerId || null,
         },
         montantHT: parseFloat(r.montant),
@@ -3200,7 +3204,10 @@ function FicheLigne({ label, value }) {
 }
 
 function ClientFiche({ client, reports, ouverte, onToggle, showMachines, setShowMachines, onEdit, onDelete, onShowContract }) {
-  const estProfessionnel = !!(client.raisonSociale || client.siren || client.tva);
+  const estProfessionnel =
+    typeof client.professionnel === "boolean"
+      ? client.professionnel
+      : !!(client.raisonSociale || client.siren || client.tva);
 
   return (
     <section className="card">
@@ -3550,7 +3557,11 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
   const isEditing = !!editingClient;
   const [nom, setNom] = useState(editingClient?.nom || "");
   const [raisonSociale, setRaisonSociale] = useState(editingClient?.raisonSociale || "");
-  const [estProfessionnel, setEstProfessionnel] = useState(!!editingClient?.raisonSociale);
+  const [estProfessionnel, setEstProfessionnel] = useState(
+    typeof editingClient?.professionnel === "boolean"
+      ? editingClient.professionnel
+      : !!(editingClient?.raisonSociale || editingClient?.siren || editingClient?.tva)
+  );
   const [siren, setSiren] = useState(editingClient?.siren || "");
   const [tva, setTva] = useState(editingClient?.tva || "");
   const [moisEcheance, setMoisEcheance] = useState(editingClient?.moisEcheance || "");
@@ -3598,6 +3609,10 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
     onSubmit({
       id: isEditing ? editingClient.id : "c" + Date.now(),
       nom, raisonSociale, siren, tva, adresse, email, tel, moisEcheance,
+      // La case « Professionnel » est enregistrée telle quelle : c'est elle qui
+      // décide de la nature de la fiche créée dans Pennylane (société ou
+      // particulier), et non la présence d'une raison sociale.
+      professionnel: estProfessionnel,
       machines: cleanedMachines,
       contrat,
     });
