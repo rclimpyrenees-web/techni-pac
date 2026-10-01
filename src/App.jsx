@@ -201,6 +201,31 @@ function libelleClient(c) {
   return c.raisonSociale && c.raisonSociale.trim() ? c.raisonSociale : c.nom;
 }
 
+// Adresse à faire figurer sur un rapport : celle du lieu d'intervention quand
+// elle a été saisie (chantier du client d'un client, résidence secondaire...),
+// sinon celle de la fiche client.
+function adresseDuRapport(report, clients) {
+  if (report?.adresseSite && report.adresseSite.trim()) return report.adresseSite.trim();
+  const fiche = (clients || []).find((c) => c.nom === report?.client);
+  return (fiche && fiche.adresse) || "";
+}
+
+// Durée d'une tâche en heures ("30min", "1h30", "8h"...). Sert à savoir si une
+// journée est remplie, et non seulement combien d'interventions s'y trouvent.
+function dureeEnHeures(duree) {
+  const t = String(duree || "").trim().toLowerCase();
+  if (!t) return 0;
+  const min = t.match(/^(\d+)\s*min$/);
+  if (min) return Number(min[1]) / 60;
+  const hm = t.match(/^(\d+)\s*h\s*(\d+)?$/);
+  if (hm) return Number(hm[1]) + (hm[2] ? Number(hm[2]) / 60 : 0);
+  return 0;
+}
+
+// Une journée est considérée pleine à partir de 7 heures d'intervention : une
+// seule intervention à la journée suffit donc à la marquer comme telle.
+const HEURES_JOURNEE_PLEINE = 7;
+
 function nomAffiche(nomStocke, clients) {
   const c = (clients || []).find((cl) => cl.nom === nomStocke);
   return c ? libelleClient(c) : nomStocke;
@@ -353,8 +378,24 @@ export default function App() {
     return false;
   };
 
+  // Retrouve la fiche client rattachée à un rapport. La correspondance exacte
+  // suffit presque toujours ; les deux suivantes rattrapent un nom saisi à la
+  // main, avec une casse ou des accents différents, ou la raison sociale tapée
+  // à la place du nom. Sans cela, la facture partait dans Pennylane avec le
+  // seul nom du rapport : ni SIREN, ni TVA, ni adresse.
+  const ficheDuRapport = (nomRapport) => {
+    const sansAccent = (t) => (t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    const cible = sansAccent(nomRapport);
+    if (!cible) return undefined;
+    return (
+      clients.find((c) => c.nom === nomRapport) ||
+      clients.find((c) => sansAccent(c.nom) === cible) ||
+      clients.find((c) => c.raisonSociale && sansAccent(c.raisonSociale) === cible)
+    );
+  };
+
   const syncFactureToPennylane = async (facturationEntry, r) => {
-    const client = clients.find((c) => c.nom === r.client);
+    const client = ficheDuRapport(r.client);
     try {
       const { invoice, pennylaneCustomerId } = await pennylaneCreateInvoice({
         client: {
@@ -382,7 +423,19 @@ export default function App() {
         label: `Suivant rapport d'intervention du ${r.date}`,
         vatRate: r.tva || settings.pennylane?.tvaParDefaut || "FR_200",
       });
-      upsertFacturation({ ...facturationEntry, facture: true, pennylaneInvoiceId: invoice.id, pennylaneStatus: "envoyée" });
+      upsertFacturation({
+        ...facturationEntry,
+        facture: true,
+        pennylaneInvoiceId: invoice.id,
+        pennylaneStatus: "envoyée",
+        pennylaneError: null,
+        // Facture émise sans fiche client : Pennylane n'a reçu que le nom, donc
+        // ni adresse, ni SIREN, ni TVA. On le signale plutôt que de le laisser
+        // passer inaperçu.
+        pennylaneAvertissement: client
+          ? null
+          : "Aucune fiche client ne correspond à ce nom : la facture est partie sans adresse ni informations légales.",
+      });
       if (client && pennylaneCustomerId && client.pennylaneCustomerId !== String(pennylaneCustomerId)) {
         upsertClient({ ...client, pennylaneCustomerId: String(pennylaneCustomerId) });
       }
@@ -520,7 +573,15 @@ export default function App() {
   };
 
   const startReportFromTask = (task) => {
-    setReportPrefill({ client: task.client, reportType: guessReportType(task.titre), planningTaskId: task.id, token: Date.now() });
+    setReportPrefill({
+      client: task.client,
+      reportType: guessReportType(task.titre),
+      planningTaskId: task.id,
+      // L'adresse du site saisie sur la tâche suit jusque dans le rapport :
+      // inutile de la ressaisir pour une intervention sur un chantier.
+      adresseSite: task.adresse || "",
+      token: Date.now(),
+    });
     setTab("rapports");
   };
 
@@ -1442,6 +1503,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
   const [editingReport, setEditingReport] = useState(null);
   const [activePrefillClient, setActivePrefillClient] = useState(null);
   const [prefillTaskId, setPrefillTaskId] = useState(null);
+  const [prefillAdresse, setPrefillAdresse] = useState("");
   const [formKey, setFormKey] = useState("new-0");
   const formRef = useRef(null);
   // Un seul rapport déplié à la fois : en ouvrir un referme le précédent.
@@ -1452,11 +1514,12 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
     setEditingReport(null);
     setActivePrefillClient(null);
     setPrefillTaskId(null);
+    setPrefillAdresse("");
     setFormKey("new-" + Date.now());
     setShowForm(true);
   };
-  const openEdit = (r) => { setEditingReport(r); setActivePrefillClient(null); setPrefillTaskId(null); setReportType(r.type); setShowForm(true); };
-  const closeForm = () => { setShowForm(false); setEditingReport(null); setActivePrefillClient(null); setPrefillTaskId(null); };
+  const openEdit = (r) => { setEditingReport(r); setActivePrefillClient(null); setPrefillTaskId(null); setPrefillAdresse(""); setReportType(r.type); setShowForm(true); };
+  const closeForm = () => { setShowForm(false); setEditingReport(null); setActivePrefillClient(null); setPrefillTaskId(null); setPrefillAdresse(""); };
 
   // Le formulaire s'ouvre sous la liste des rapports : on descend
   // automatiquement jusqu'à lui pour qu'il ne passe pas inaperçu.
@@ -1483,6 +1546,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
     setEditingReport(null);
     setActivePrefillClient(reportPrefill.client);
     setPrefillTaskId(reportPrefill.planningTaskId || null);
+    setPrefillAdresse(reportPrefill.adresseSite || "");
     setFormKey("new-" + reportPrefill.token);
     setReportType(reportPrefill.reportType);
     setShowForm(true);
@@ -1558,6 +1622,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
             editingReport={editingReport}
             prefillClient={!editingReport ? activePrefillClient : undefined}
             prefillPlanningTaskId={!editingReport ? prefillTaskId : undefined}
+            prefillAdresseSite={!editingReport ? prefillAdresse : undefined}
             onCancel={closeForm}
             onSubmit={(r) => { editingReport ? onUpdate(r) : onAdd(r); closeForm(); }}
             onPreview={onPrint}
@@ -2418,6 +2483,149 @@ function AdresseInput({ value, onChange, onSelectAdresse, placeholder }) {
   );
 }
 
+/* ---------- Informations légales d'une entreprise ----------
+   Le SIREN porte une clé de contrôle : une faute de frappe ou deux chiffres
+   intervertis se détectent sans aucun accès réseau. Et le numéro de TVA
+   intracommunautaire français se calcule à partir du SIREN, il n'y a donc
+   jamais besoin de le saisir. */
+function sirenCleValide(siren) {
+  const c = (siren || "").replace(/\D/g, "");
+  if (c.length !== 9) return false;
+  let somme = 0;
+  for (let i = 0; i < 9; i++) {
+    let n = Number(c[i]);
+    if (i % 2 === 1) { n *= 2; if (n > 9) n -= 9; }
+    somme += n;
+  }
+  return somme % 10 === 0;
+}
+
+function tvaDepuisSiren(siren) {
+  const c = (siren || "").replace(/\D/g, "");
+  if (c.length !== 9) return "";
+  const cle = (12 + 3 * (Number(c) % 97)) % 97;
+  return "FR" + String(cle).padStart(2, "0") + c;
+}
+
+// Affichage par groupes de trois chiffres, à la saisie comme à la lecture.
+function formaterSiren(valeur) {
+  const c = String(valeur || "").replace(/\D/g, "").slice(0, 9);
+  return (c.match(/.{1,3}/g) || []).join(" ");
+}
+
+// Interroge l'annuaire officiel des entreprises (service public gratuit, sans
+// clé). Renvoie une liste normalisée, ou une liste vide si le service est
+// indisponible — la saisie libre reste toujours possible.
+async function rechercherEntreprises(texte, signal) {
+  const q = (texte || "").trim();
+  if (q.length < 3) return [];
+  const res = await fetch(
+    `https://recherche-entreprises.api.gouv.fr/search?q=${encodeURIComponent(q)}&per_page=5`,
+    { signal }
+  );
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data.results || []).map((e) => {
+    const siege = e.siege || {};
+    const adresse = [siege.numero_voie, siege.type_voie, siege.libelle_voie]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    return {
+      nom: e.nom_raison_sociale || e.nom_complet || "",
+      siren: e.siren || "",
+      adresse: [adresse || siege.adresse || "", siege.code_postal || "", siege.libelle_commune || ""]
+        .filter(Boolean)
+        .join(" ")
+        .trim(),
+      ville: [siege.code_postal, siege.libelle_commune].filter(Boolean).join(" "),
+      fermee: e.etat_administratif === "C",
+    };
+  }).filter((e) => e.nom && e.siren);
+}
+
+/* ---------- Champ « Raison sociale » avec recherche dans l'annuaire ----------
+   Choisir une entreprise dans la liste remplit d'un coup la raison sociale, le
+   SIREN et le numéro de TVA : plus rien n'est saisi à la main, donc plus
+   d'erreur possible sur les informations légales. */
+function EntrepriseInput({ value, onChange, onSelectEntreprise, placeholder }) {
+  const [suggestions, setSuggestions] = useState([]);
+  const [ouvert, setOuvert] = useState(false);
+  const [recherche, setRecherche] = useState(false);
+  const saisieUtilisateur = useRef(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!saisieUtilisateur.current) return;
+    const texte = (value || "").trim();
+    if (texte.length < 3) {
+      setSuggestions([]);
+      setOuvert(false);
+      return;
+    }
+    const controleur = new AbortController();
+    const minuteur = setTimeout(async () => {
+      setRecherche(true);
+      try {
+        const liste = await rechercherEntreprises(texte, controleur.signal);
+        setSuggestions(liste);
+        setOuvert(liste.length > 0);
+      } catch (_e) {
+        // Service indisponible ou hors ligne : on laisse la saisie libre.
+      }
+      setRecherche(false);
+    }, 300);
+    return () => {
+      clearTimeout(minuteur);
+      controleur.abort();
+    };
+  }, [value]);
+
+  useEffect(() => {
+    const fermerSiClicDehors = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOuvert(false);
+    };
+    document.addEventListener("mousedown", fermerSiClicDehors);
+    document.addEventListener("touchstart", fermerSiClicDehors);
+    return () => {
+      document.removeEventListener("mousedown", fermerSiClicDehors);
+      document.removeEventListener("touchstart", fermerSiClicDehors);
+    };
+  }, []);
+
+  const choisir = (e) => {
+    saisieUtilisateur.current = false;
+    onSelectEntreprise(e);
+    setOuvert(false);
+    setSuggestions([]);
+  };
+
+  return (
+    <div className="client-select" ref={wrapRef}>
+      <input
+        value={value}
+        onChange={(e) => { saisieUtilisateur.current = true; onChange(e.target.value); }}
+        placeholder={placeholder}
+        autoComplete="off"
+      />
+      {recherche && <span className="hint">Recherche dans l'annuaire des entreprises...</span>}
+      {ouvert && suggestions.length > 0 && (
+        <ul className="client-select-list">
+          {suggestions.map((e) => (
+            <li key={e.siren} onMouseDown={(ev) => { ev.preventDefault(); choisir(e); }}>
+              <span className="client-select-nom">
+                {e.nom}
+                {e.fermee && <span className="pill pill-alert entreprise-fermee">fermée</span>}
+              </span>
+              <span className="client-select-sub">SIREN {formaterSiren(e.siren)}{e.ville ? " · " + e.ville : ""}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /* ---------- Champ « Client » : menu déroulant avec recherche ----------
    La liste native <datalist> du navigateur se comporte de façon inégale d'un
    navigateur et d'un appareil à l'autre : on gère donc nous-mêmes l'ouverture,
@@ -2489,7 +2697,7 @@ function ClientSearchSelect({ clients, value, onChange, placeholder }) {
   );
 }
 
-function ReportForm({ clients, settings, reportType, setReportType, editingReport, prefillClient, prefillPlanningTaskId, onCancel, onSubmit, onPreview }) {
+function ReportForm({ clients, settings, reportType, setReportType, editingReport, prefillClient, prefillPlanningTaskId, prefillAdresseSite, onCancel, onSubmit, onPreview }) {
   const isEditing = !!editingReport;
   // Liste des clients triée alphabétiquement (accents et casse ignorés).
   const clientsTries = [...clients].sort((a, b) =>
@@ -2505,6 +2713,9 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
     return c?.machines?.[0]?.type || installTypes[0];
   });
   const [date, setDate] = useState(editingReport?.date || new Date().toLocaleDateString("fr-FR"));
+  // Adresse du lieu d'intervention, laissée vide quand elle est identique à
+  // celle de la fiche client.
+  const [adresseSite, setAdresseSite] = useState(editingReport?.adresseSite || prefillAdresseSite || "");
   const [remarques, setRemarques] = useState(editingReport?.remarques || "");
   const [conclusion, setConclusion] = useState(editingReport?.conclusion || "");
   const introRef = useRef(editingReport?.intro || "");
@@ -2559,6 +2770,10 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   // type de son premier matériel installé ET la totalité du matériel de sa
   // fiche — sans écraser la valeur d'un rapport ouvert en modification (d'où le
   // saut du tout premier rendu).
+  // Fiche du client sélectionné : sert à reprendre son adresse par défaut et à
+  // indiquer, sous le champ, celle qui figurera sur le rapport.
+  const ficheClient = clients.find((c) => c.nom === client);
+
   const premierRendu = useRef(true);
   useEffect(() => {
     if (premierRendu.current) { premierRendu.current = false; return; }
@@ -2645,11 +2860,11 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
       valide: marquerEffectue,
     };
     if (reportType === "mise_en_service") {
-      return { ...base, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
+      return { ...base, adresseSite, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
     } else if (reportType === "entretien") {
-      return { ...base, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
+      return { ...base, adresseSite, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
     } else {
-      return { ...base, intro: introRef.current, machines: cleanMachines(), description: descriptionRef.current, checklists: cleanChecklists(), tables, pieces, facturable, conclusion, remarques, montant, tva, devisAEffectuer };
+      return { ...base, adresseSite, intro: introRef.current, machines: cleanMachines(), description: descriptionRef.current, checklists: cleanChecklists(), tables, pieces, facturable, conclusion, remarques, montant, tva, devisAEffectuer };
     }
   };
 
@@ -2698,6 +2913,22 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
         <label>Date
           <input type="date" value={frToIso(date)} onChange={(e) => setDate(isoToFr(e.target.value))} />
         </label>
+
+        <div className="field-col grid-full">
+          Adresse du site
+          <AdresseInput
+            value={adresseSite}
+            onChange={setAdresseSite}
+            placeholder={ficheClient && ficheClient.adresse ? "Laisser vide pour utiliser l'adresse de la fiche client" : "Adresse où s'est déroulée l'intervention"}
+          />
+          <span className="hint">
+            {adresseSite.trim()
+              ? "Cette adresse figurera sur le rapport et le PDF, à la place de celle de la fiche client."
+              : ficheClient && ficheClient.adresse
+              ? `Adresse de la fiche client utilisée : ${ficheClient.adresse}`
+              : "Aucune adresse dans la fiche de ce client : indiquez-la ici pour qu'elle figure sur le rapport."}
+          </span>
+        </div>
       </div>
 
       {reportType === "mise_en_service" && (
@@ -3659,9 +3890,48 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
         </label>
         {estProfessionnel && (
           <>
-            <label>Raison sociale<input value={raisonSociale} onChange={(e) => setRaisonSociale(e.target.value)} placeholder="Ex : Garcia Bâtiment SARL" /></label>
-            <label>SIREN<input value={siren} onChange={(e) => setSiren(e.target.value)} placeholder="Ex : 123 456 789" /></label>
-            <label>N° de TVA intracommunautaire<input value={tva} onChange={(e) => setTva(e.target.value)} placeholder="Ex : FR12345678900" /></label>
+            <div className="field-col">
+              Raison sociale
+              <EntrepriseInput
+                value={raisonSociale}
+                onChange={setRaisonSociale}
+                onSelectEntreprise={(e) => {
+                  // Un seul geste renseigne les trois informations légales, et
+                  // l'adresse du siège si le champ est encore vide.
+                  setRaisonSociale(e.nom);
+                  setSiren(formaterSiren(e.siren));
+                  setTva(tvaDepuisSiren(e.siren));
+                  if (!adresse.trim() && e.adresse) setAdresse(e.adresse);
+                }}
+                placeholder="Tapez le nom de l'entreprise, la liste se complète..."
+              />
+              <span className="hint">Choisissez l'entreprise dans la liste : SIREN et TVA seront remplis automatiquement.</span>
+            </div>
+
+            <label>SIREN
+              <input value={siren} onChange={(e) => setSiren(formaterSiren(e.target.value))} inputMode="numeric" placeholder="Ex : 123 456 789" />
+              {/* On n'alerte qu'une fois les neuf chiffres saisis : sinon le
+                  message clignoterait pendant toute la frappe. */}
+              {siren.replace(/\D/g, "").length === 9 && !sirenCleValide(siren) && (
+                <span className="hint alerte">
+                  <Icon name="alert" size={12} /> Ce SIREN comporte une erreur : vérifiez les chiffres.
+                </span>
+              )}
+              {siren.trim() && sirenCleValide(siren) && !tva.trim() && (
+                <button type="button" className="btn-ghost small mt-xs" onClick={() => setTva(tvaDepuisSiren(siren))}>
+                  Calculer le n° de TVA
+                </button>
+              )}
+            </label>
+
+            <label>N° de TVA intracommunautaire
+              <input value={tva} onChange={(e) => setTva(e.target.value.toUpperCase())} placeholder="Ex : FR12345678900" />
+              {tva.trim() && sirenCleValide(siren) && tva.replace(/\s/g, "").toUpperCase() !== tvaDepuisSiren(siren) && (
+                <span className="hint alerte">
+                  <Icon name="alert" size={12} /> Ce numéro ne correspond pas au SIREN saisi (attendu : {tvaDepuisSiren(siren)}).
+                </span>
+              )}
+            </label>
           </>
         )}
         <label>Téléphone<input value={tel} onChange={(e) => setTel(formaterTelephone(e.target.value))} inputMode="tel" placeholder="06 00 00 00 00" /></label>
@@ -3806,7 +4076,11 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
   }, {});
   const dates = Object.keys(grouped).sort();
   const dateCounts = {};
-  dates.forEach((d) => { dateCounts[d] = grouped[d].length; });
+  const dateHeures = {};
+  dates.forEach((d) => {
+    dateCounts[d] = grouped[d].length;
+    dateHeures[d] = grouped[d].reduce((total, t) => total + dureeEnHeures(t.duree), 0);
+  });
   // On ouvre toujours le planning sur la journée en cours (et non sur la plus
   // ancienne date programmée). Si l'application reste ouverte au passage de
   // minuit, ou revient au premier plan un autre jour, la sélection bascule
@@ -3859,7 +4133,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
         />
       )}
 
-      <MiniCalendar dateCounts={dateCounts} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+      <MiniCalendar dateCounts={dateCounts} dateHeures={dateHeures} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
 
       {selectedDate && (
         <section className="card planning-day">
@@ -3912,7 +4186,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
 }
 
 /* ---------- Mini calendrier mensuel interactif (pastilles sur les jours avec intervention) ---------- */
-function MiniCalendar({ dateCounts, selectedDate, onSelectDate }) {
+function MiniCalendar({ dateCounts, dateHeures, selectedDate, onSelectDate }) {
   const todayIso = toLocalISODate(new Date());
   const [cursor, setCursor] = useState(() => {
     const d = new Date();
@@ -3945,8 +4219,11 @@ function MiniCalendar({ dateCounts, selectedDate, onSelectDate }) {
 
   // Code couleur selon le nombre d'interventions du jour : 1 = bleu,
   // 2 = vert, 3 = jaune, 4 ou plus = rouge.
-  const colorForCount = (count) => {
-    if (count >= 4) return "red";
+  // La couleur traduit la charge de la journée : le nombre d'interventions,
+  // mais aussi le temps qu'elles occupent. Une seule intervention à la journée
+  // remplit l'agenda tout autant que quatre interventions courtes.
+  const colorForCount = (count, heures) => {
+    if (count >= 4 || heures >= HEURES_JOURNEE_PLEINE) return "red";
     if (count === 3) return "yellow";
     if (count === 2) return "green";
     return "blue";
@@ -3984,6 +4261,8 @@ function MiniCalendar({ dateCounts, selectedDate, onSelectDate }) {
           if (day === null) return <div key={"b" + i} className="mini-calendar-cell empty" />;
           const iso = isoFor(day);
           const count = dateCounts[iso] || 0;
+          const heures = (dateHeures || {})[iso] || 0;
+          const journeePleine = heures >= HEURES_JOURNEE_PLEINE;
           const hasTask = count > 0;
           const isToday = iso === todayIso;
           return (
@@ -3992,11 +4271,16 @@ function MiniCalendar({ dateCounts, selectedDate, onSelectDate }) {
               key={iso}
               className={"mini-calendar-cell clickable-day" + (hasTask ? " has-task" : "") + (isToday ? " is-today" : "") + (iso === selectedDate ? " is-selected" : "")}
               onClick={() => onSelectDate(iso)}
-              title={(isJourneeDaikin(day) ? "Journée DAIKIN — " : "") + (hasTask ? `${count} intervention${count > 1 ? "s" : ""} — voir le détail` : "Voir ce jour / ajouter une tâche")}
+              title={
+                (isJourneeDaikin(day) ? "Journée DAIKIN — " : "") +
+                (hasTask
+                  ? `${count} intervention${count > 1 ? "s" : ""}${journeePleine ? " — journée complète" : ""} — voir le détail`
+                  : "Voir ce jour / ajouter une tâche")
+              }
             >
               {isJourneeDaikin(day) && <span className="mini-calendar-daikin" />}
               {day}
-              {hasTask && <span className={"mini-calendar-dot " + colorForCount(count)} />}
+              {hasTask && <span className={"mini-calendar-dot " + colorForCount(count, heures)} />}
             </button>
           );
         })}
@@ -4005,7 +4289,7 @@ function MiniCalendar({ dateCounts, selectedDate, onSelectDate }) {
         <span><span className="mini-calendar-dot blue" /> 1</span>
         <span><span className="mini-calendar-dot green" /> 2</span>
         <span><span className="mini-calendar-dot yellow" /> 3</span>
-        <span><span className="mini-calendar-dot red" /> 4+</span>
+        <span><span className="mini-calendar-dot red" /> 4+ ou journée pleine</span>
         <span><span className="mini-calendar-daikin static" /> Mar/Mer (DAIKIN)</span>
       </div>
     </div>
@@ -4473,6 +4757,11 @@ function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylan
                   {f.pennylaneStatus === "erreur" && (
                     <span className="pill pill-alert pennylane-error-pill" title={f.pennylaneError}>
                       <Icon name="alert" size={11} /> Échec envoi Pennylane
+                    </span>
+                  )}
+                  {f.pennylaneAvertissement && (
+                    <span className="pill pill-todo pennylane-error-pill" title={f.pennylaneAvertissement}>
+                      <Icon name="alert" size={11} /> Fiche client non retrouvée
                     </span>
                   )}
                 </div>
@@ -5018,6 +5307,8 @@ function buildReportHtml(report, settings, clients) {
   body += `<h1>${escapeHtml(labelType(report.type))}</h1>`;
   if (settings?.technicien?.nom) body += `<p><strong>Technicien :</strong> ${escapeHtml(settings.technicien.nom)}</p>`;
   body += `<p><strong>Client :</strong> ${escapeHtml(nomAffiche(report.client, clients))}</p>`;
+  const adresseSite = adresseDuRapport(report, clients);
+  if (adresseSite) body += `<p><strong>Adresse du site :</strong> ${escapeHtml(adresseSite)}</p>`;
   body += `<p><strong>Date :</strong> ${escapeHtml(report.date)}</p>`;
   body += `<p><strong>Installation :</strong> ${escapeHtml(report.installation)}</p>`;
 
@@ -5246,6 +5537,11 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .pill-warm { background: #FBEADB; color: #B45F1D; }
 .pill-ok { background: #E2F1E7; color: #2E7048; }
 .pill-alert { background: #FBE3E1; color: #B33128; }
+.pill-todo { background: #FBEEDC; color: #9A5B16; }
+.hint.alerte { display: inline-flex; align-items: center; gap: 5px; color: #B33128; font-weight: 500; }
+.hint.alerte svg { flex-shrink: 0; }
+.mt-xs { margin-top: 5px; }
+.entreprise-fermee { margin-left: 8px; font-size: 10.5px; }
 .pill-pennylane { background: #E9F0FB; color: #2F6FA3; font-size: 11px; margin-left: 8px; padding: 2px 8px; }
 .pennylane-error-pill { margin-left: 8px; font-size: 11px; padding: 2px 8px; display: inline-flex; align-items: center; gap: 4px; cursor: help; }
 .row-actions { display: flex; align-items: center; gap: 8px; }
@@ -5278,14 +5574,14 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .btn-valide:hover { background: #357a51; }
 .icon-btn { background: transparent; border: none; color: #B3413A; cursor: pointer; padding: 6px; flex-shrink: 0; }
 
-.mini-calendar { margin-bottom: 20px; max-width: 300px; padding: 14px; }
+.mini-calendar { margin-bottom: 20px; max-width: 520px; padding: 18px 20px; }
 .mini-calendar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .mini-calendar-header .icon-btn { color: #2F6FA3; padding: 3px; }
-.mini-calendar-title { font-family: 'Barlow Condensed', sans-serif; font-weight: 600; font-size: 14.5px; color: #1B2733; text-transform: capitalize; }
-.mini-calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.mini-calendar-title { font-family: 'Barlow Condensed', sans-serif; font-weight: 600; font-size: 18px; color: #1B2733; text-transform: capitalize; }
+.mini-calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
 .mini-calendar-weekdays { margin-bottom: 2px; }
-.mini-calendar-weekday { text-align: center; font-size: 9.5px; font-weight: 600; color: #8A959A; text-transform: uppercase; padding: 2px 0; }
-.mini-calendar-cell { position: relative; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border: none; background: transparent; border-radius: 6px; font-size: 11.5px; color: #4A5860; cursor: default; }
+.mini-calendar-weekday { text-align: center; font-size: 11.5px; font-weight: 600; color: #8A959A; text-transform: uppercase; padding: 4px 0; }
+.mini-calendar-cell { position: relative; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border: none; background: transparent; border-radius: 8px; font-size: 15px; color: #4A5860; cursor: default; }
 .mini-calendar-cell.clickable-day { cursor: pointer; }
 .mini-calendar-cell.clickable-day:hover { background: #EEF1F0; }
 .mini-calendar-cell.empty { visibility: hidden; }
@@ -5293,16 +5589,16 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .mini-calendar-cell.has-task { cursor: pointer; background: #EAF1F7; color: #1B2733; font-weight: 600; }
 .mini-calendar-cell.has-task:hover { background: #D9E6F0; }
 .mini-calendar-cell.is-selected { background: #2F6FA3; color: #fff; }
-.mini-calendar-dot { position: absolute; bottom: 2px; width: 4px; height: 4px; border-radius: 50%; background: #D9762B; }
+.mini-calendar-dot { position: absolute; bottom: 4px; width: 6px; height: 6px; border-radius: 50%; background: #D9762B; }
 .mini-calendar-dot.blue { background: #2F6FA3; }
 .mini-calendar-dot.green { background: #3F8F5F; }
 .mini-calendar-dot.yellow { background: #D9A62B; }
 .mini-calendar-dot.red { background: #C0392B; }
 .mini-calendar-cell.is-selected .mini-calendar-dot { box-shadow: 0 0 0 1.5px #fff; }
-.mini-calendar-daikin { position: absolute; top: 3px; right: 4px; width: 5px; height: 5px; border-radius: 50%; background: #2F6FA3; }
+.mini-calendar-daikin { position: absolute; top: 5px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: #2F6FA3; }
 .mini-calendar-daikin.static { position: static; }
 .mini-calendar-cell.is-selected .mini-calendar-daikin { box-shadow: 0 0 0 1.5px #fff; }
-.mini-calendar-legend { display: flex; gap: 12px; justify-content: center; margin-top: 10px; font-size: 10.5px; color: #6C7A80; flex-wrap: wrap; }
+.mini-calendar-legend { display: flex; gap: 14px; justify-content: center; margin-top: 14px; font-size: 11.5px; color: #6C7A80; flex-wrap: wrap; }
 .mini-calendar-legend span { display: inline-flex; align-items: center; gap: 4px; }
 .mini-calendar-legend .mini-calendar-dot { position: static; }
 .planning-day-flash { animation: planningFlash 1.4s ease; }
@@ -5580,6 +5876,9 @@ textarea { resize: vertical; }
   /* La barre du haut étant fixe sur mobile, on laisse la place nécessaire
      au-dessus de la carte que l'on fait remonter. */
   .report-card, .fiche-ancre { scroll-margin-top: calc(70px + env(safe-area-inset-top, 0px)); }
+  /* Sur téléphone, le calendrier occupe toute la largeur : les cases restent
+     assez grandes pour être visées au doigt. */
+  .mini-calendar { max-width: 100%; }
 
   /* Checklists : sur un écran étroit, l'intitulé et le détail prennent toute
      la largeur, sous la ligne « Fait / Non fait », pour rester lisibles. */
