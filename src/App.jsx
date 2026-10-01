@@ -5583,6 +5583,12 @@ const css = `
   --violet-clair: #E9E0F3;
   --daikin-clair: #EDF6FD;
 
+  --charge-1: #B9E0C6;
+  --charge-2: #F3DCA4;
+  --charge-3: #D3C0EA;
+  --charge-4: #F3BEB7;
+  --charge-daikin: #CFE6F8;
+
   --nav: #1B2733;
   --nav-encre: #8FA0A8;
   --nav-encre-clair: #E7ECEB;
@@ -5635,6 +5641,12 @@ const css = `
   --violet: #A98BD1;
   --violet-clair: #2E2742;
   --daikin-clair: #27455F;
+
+  --charge-1: #2A6B45;
+  --charge-2: #6B5418;
+  --charge-3: #463573;
+  --charge-4: #6E2E26;
+  --charge-daikin: #1E5A85;
 
   --nav: #0E141A;
   --nav-encre: #96A4AD;
@@ -5822,26 +5834,26 @@ nav { display: flex; flex-direction: column; gap: 2px; }
    gêner. La journée consultée garde ses dégradés et reçoit un liseré, pour
    que sa charge reste lisible. */
 .mini-calendar-cell.has-task { cursor: pointer; color: var(--encre); font-weight: 600; overflow: hidden; }
-.mini-calendar-cell.charge-1 { background-image: linear-gradient(to top, var(--vert-clair) 0%, transparent 92%); }
-.mini-calendar-cell.charge-2 { background-image: linear-gradient(to top, var(--jaune-clair) 0%, transparent 92%); }
-.mini-calendar-cell.charge-3 { background-image: linear-gradient(to top, var(--violet-clair) 0%, transparent 92%); }
-.mini-calendar-cell.charge-4 { background-image: linear-gradient(to top, var(--rouge-clair) 0%, transparent 92%); }
+.mini-calendar-cell.charge-1 { background-image: linear-gradient(to top, var(--charge-1) 0%, transparent 92%); }
+.mini-calendar-cell.charge-2 { background-image: linear-gradient(to top, var(--charge-2) 0%, transparent 92%); }
+.mini-calendar-cell.charge-3 { background-image: linear-gradient(to top, var(--charge-3) 0%, transparent 92%); }
+.mini-calendar-cell.charge-4 { background-image: linear-gradient(to top, var(--charge-4) 0%, transparent 92%); }
 
-.mini-calendar-cell.est-daikin { background-image: linear-gradient(to bottom, var(--daikin-clair) 0%, transparent 70%); }
-.mini-calendar-cell.est-daikin.charge-1 { background-image: linear-gradient(to top, var(--vert-clair) 0%, transparent 92%), linear-gradient(to bottom, var(--daikin-clair) 0%, transparent 70%); }
-.mini-calendar-cell.est-daikin.charge-2 { background-image: linear-gradient(to top, var(--jaune-clair) 0%, transparent 92%), linear-gradient(to bottom, var(--daikin-clair) 0%, transparent 70%); }
-.mini-calendar-cell.est-daikin.charge-3 { background-image: linear-gradient(to top, var(--violet-clair) 0%, transparent 92%), linear-gradient(to bottom, var(--daikin-clair) 0%, transparent 70%); }
-.mini-calendar-cell.est-daikin.charge-4 { background-image: linear-gradient(to top, var(--rouge-clair) 0%, transparent 92%), linear-gradient(to bottom, var(--daikin-clair) 0%, transparent 70%); }
+.mini-calendar-cell.est-daikin { background-image: linear-gradient(to bottom, var(--charge-daikin) 0%, transparent 70%); }
+.mini-calendar-cell.est-daikin.charge-1 { background-image: linear-gradient(to top, var(--charge-1) 0%, transparent 92%), linear-gradient(to bottom, var(--charge-daikin) 0%, transparent 70%); }
+.mini-calendar-cell.est-daikin.charge-2 { background-image: linear-gradient(to top, var(--charge-2) 0%, transparent 92%), linear-gradient(to bottom, var(--charge-daikin) 0%, transparent 70%); }
+.mini-calendar-cell.est-daikin.charge-3 { background-image: linear-gradient(to top, var(--charge-3) 0%, transparent 92%), linear-gradient(to bottom, var(--charge-daikin) 0%, transparent 70%); }
+.mini-calendar-cell.est-daikin.charge-4 { background-image: linear-gradient(to top, var(--charge-4) 0%, transparent 92%), linear-gradient(to bottom, var(--charge-daikin) 0%, transparent 70%); }
 
 .mini-calendar-cell.clickable-day:hover { background-color: var(--survol); }
 .mini-calendar-cell.is-selected { box-shadow: inset 0 0 0 2.5px var(--bleu); color: var(--encre); font-weight: 700; }
 
 .mini-calendar-ech { width: 15px; height: 11px; border-radius: 3px; display: inline-block; border: 1px solid var(--trait); }
-.mini-calendar-ech.charge-1 { background: var(--vert-clair); }
-.mini-calendar-ech.charge-2 { background: var(--jaune-clair); }
-.mini-calendar-ech.charge-3 { background: var(--violet-clair); }
-.mini-calendar-ech.charge-4 { background: var(--rouge-clair); }
-.mini-calendar-ech.daikin { background: var(--daikin-clair); }
+.mini-calendar-ech.charge-1 { background: var(--charge-1); }
+.mini-calendar-ech.charge-2 { background: var(--charge-2); }
+.mini-calendar-ech.charge-3 { background: var(--charge-3); }
+.mini-calendar-ech.charge-4 { background: var(--charge-4); }
+.mini-calendar-ech.daikin { background: var(--charge-daikin); }
 
 .mini-calendar-legend { display: flex; gap: 14px; justify-content: center; margin-top: 14px; font-size: 11.5px; color: var(--encre-3); flex-wrap: wrap; }
 .mini-calendar-legend span { display: inline-flex; align-items: center; gap: 4px; }
