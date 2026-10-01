@@ -284,16 +284,16 @@ function Jauge({ value, max, label, onClick }) {
   return (
     <div className={"jauge" + (onClick ? " jauge-clickable" : "")} onClick={onClick} role={onClick ? "button" : undefined}>
       <svg viewBox="0 0 120 70" width="120" height="70">
-        <path d="M10,65 A50,50 0 0,1 110,65" fill="none" stroke="#DDE4E2" strokeWidth="8" strokeLinecap="round" />
+        <path className="jauge-piste" d="M10,65 A50,50 0 0,1 110,65" fill="none" strokeWidth="8" strokeLinecap="round" />
         <path d="M10,65 A50,50 0 0,1 110,65" fill="none" stroke="url(#gaugeGrad)" strokeWidth="8" strokeLinecap="round" strokeDasharray={`${pct * 157} 157`} />
         <defs>
           <linearGradient id="gaugeGrad" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#2F6FA3" />
-            <stop offset="100%" stopColor="#D9762B" />
+            <stop className="jauge-grad-debut" offset="0%" />
+            <stop className="jauge-grad-fin" offset="100%" />
           </linearGradient>
         </defs>
-        <line x1="60" y1="65" x2={60 + 38 * Math.cos((angle * Math.PI) / 180)} y2={65 + 38 * Math.sin((angle * Math.PI) / 180)} stroke="#1B2733" strokeWidth="2.5" strokeLinecap="round" />
-        <circle cx="60" cy="65" r="3.5" fill="#1B2733" />
+        <line x1="60" y1="65" x2={60 + 38 * Math.cos((angle * Math.PI) / 180)} y2={65 + 38 * Math.sin((angle * Math.PI) / 180)} className="jauge-aiguille" strokeWidth="2.5" strokeLinecap="round" />
+        <circle className="jauge-pivot" cx="60" cy="65" r="3.5" />
       </svg>
       <div className="jauge-val">{value}</div>
       <div className="jauge-label">{label}</div>
@@ -5744,6 +5744,11 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .jauge-clickable:active { transform: scale(0.98); }
 .jauge-val { font-family: 'Barlow Condensed', sans-serif; font-size: 28px; font-weight: 700; margin-top: -6px; }
 .jauge-label { font-size: 12.5px; color: var(--encre-3); margin-top: 2px; }
+.jauge-piste { stroke: var(--trait-fonce); }
+.jauge-aiguille { stroke: var(--encre); }
+.jauge-pivot { fill: var(--encre); }
+.jauge-grad-debut { stop-color: var(--bleu); }
+.jauge-grad-fin { stop-color: var(--orange); }
 
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 
@@ -6014,12 +6019,12 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .signatures-edit { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 4px; }
 .signature-block { display: flex; flex-direction: column; gap: 6px; }
 .signature-label { font-size: 12.5px; font-weight: 600; color: var(--encre-2); }
-.signature-canvas { border: 1.5px dashed var(--trait-fonce); border-radius: 8px; background: var(--carte); touch-action: none; cursor: crosshair; width: 260px; height: 100px; }
+.signature-canvas { border: 1.5px dashed var(--trait-fonce); border-radius: 8px; background: #FFFFFF; touch-action: none; cursor: crosshair; width: 260px; height: 100px; }
 
 .signatures-view { display: flex; gap: 30px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--trait-clair); flex-wrap: wrap; }
 .sig-col { flex: 1; min-width: 180px; }
 .sig-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; color: var(--encre-4); margin-bottom: 6px; }
-.sig-img { max-width: 220px; max-height: 90px; border: 1px solid var(--trait); border-radius: 6px; background: var(--carte); }
+.sig-img { max-width: 220px; max-height: 90px; border: 1px solid var(--trait); border-radius: 6px; background: #FFFFFF; }
 .sig-empty { font-size: 12.5px; color: var(--encre-5); font-style: italic; }
 
 .print-signatures { display: flex; gap: 40px; margin-top: 30px; }
@@ -6190,7 +6195,7 @@ textarea { resize: vertical; }
   .mobile-topbar {
     display: flex; align-items: center; gap: 12px;
     position: sticky; top: 0; z-index: 30;
-    background: var(--encre); color: var(--nav-encre-clair);
+    background: var(--nav); color: var(--nav-encre-clair);
     /* Marges de sécurité : sur iPhone (encoche / Dynamic Island) et en mode
        application installée, la barre de statut recouvre sinon le bouton menu. */
     padding: calc(12px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) 12px calc(16px + env(safe-area-inset-left, 0px));
