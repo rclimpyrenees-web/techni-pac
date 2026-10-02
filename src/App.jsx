@@ -1184,18 +1184,89 @@ function choisirVoixFrancaise() {
 const REPONSE_OUI = /^(oui|ouais|ok|okay|d'accord|valide|valider|vas-y|vas y|go|confirme|confirmer|c'est bon|parfait|exact|c'est ça)\b/i;
 const REPONSE_NON = /^(non|annule|annuler|laisse tomber|stop|pas maintenant)\b/i;
 
-// Sur iPhone, la synthèse vocale doit être lancée une première fois suite à
-// un geste de l'utilisateur, sinon les réponses suivantes restent muettes.
+/* ---------- Lecture à voix haute ----------
+   Les navigateurs (Safari sur iPhone surtout, mais aussi Chrome) refusent de
+   parler tant que la synthèse vocale n'a pas été lancée une première fois
+   pendant un geste de l'utilisateur. La réponse de l'assistant arrivant
+   plusieurs secondes après l'appui, on « réveille » la voix au moment du
+   geste avec une phrase muette, et on recommence à chaque geste tant que le
+   navigateur n'a pas confirmé qu'elle a bien démarré. */
 let syntheseVocaleDebloquee = false;
+// Références conservées pendant la lecture : sans cela, Chrome peut
+// abandonner une phrase en cours de route.
+let phrasesEnCours = [];
+
+function syntheseVocaleDisponible() {
+  return typeof window !== "undefined" && "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
+}
+
 function debloquerSyntheseVocale() {
-  if (syntheseVocaleDebloquee || typeof window === "undefined" || !("speechSynthesis" in window)) return;
-  syntheseVocaleDebloquee = true;
+  if (syntheseVocaleDebloquee || !syntheseVocaleDisponible()) return;
   try {
-    const u = new SpeechSynthesisUtterance(" ");
+    const u = new SpeechSynthesisUtterance(".");
     u.volume = 0;
+    u.rate = 2;
+    u.lang = "fr-FR";
+    u.onstart = () => { syntheseVocaleDebloquee = true; };
+    u.onend = () => { syntheseVocaleDebloquee = true; };
+    window.speechSynthesis.resume();
     window.speechSynthesis.speak(u);
   } catch (e) {
     // Sans conséquence : la réponse s'affichera simplement à l'écran.
+  }
+}
+
+function arreterLecture() {
+  if (!syntheseVocaleDisponible()) return;
+  phrasesEnCours = [];
+  try { window.speechSynthesis.cancel(); } catch (e) { /* ignoré */ }
+}
+
+// Découpe en phrases courtes : Chrome coupe les lectures trop longues au bout
+// d'une quinzaine de secondes.
+function decouperPourLecture(texte) {
+  const morceaux = [];
+  textepourVoix(texte).split(/(?<=[.!?;:])\s+/).forEach((phrase) => {
+    let reste = phrase.trim();
+    while (reste.length > 180) {
+      const coupe = reste.lastIndexOf(",", 180) > 60 ? reste.lastIndexOf(",", 180) + 1 : reste.lastIndexOf(" ", 180);
+      morceaux.push(reste.slice(0, coupe > 0 ? coupe : 180).trim());
+      reste = reste.slice(coupe > 0 ? coupe : 180).trim();
+    }
+    if (reste) morceaux.push(reste);
+  });
+  return morceaux;
+}
+
+function lireAVoixHaute(texte) {
+  if (!syntheseVocaleDisponible() || !texte) return;
+  const synth = window.speechSynthesis;
+  const morceaux = decouperPourLecture(texte);
+  if (morceaux.length === 0) return;
+  const lancer = () => {
+    try {
+      synth.resume();
+      const voix = choisirVoixFrancaise();
+      phrasesEnCours = morceaux.map((m) => {
+        const u = new SpeechSynthesisUtterance(m);
+        u.lang = "fr-FR";
+        if (voix) u.voice = voix;
+        u.rate = 1.05;
+        u.volume = 1;
+        return u;
+      });
+      phrasesEnCours.forEach((u) => synth.speak(u));
+    } catch (e) {
+      // Ignoré : la réponse reste affichée.
+    }
+  };
+  // Une lecture lancée juste après une annulation est parfois ignorée par
+  // Chrome et Safari : on laisse un court délai.
+  if (synth.speaking || synth.pending) {
+    arreterLecture();
+    setTimeout(lancer, 150);
+  } else {
+    lancer();
   }
 }
 
@@ -1234,8 +1305,10 @@ function BoutonMicroFlottant({ onTexte, onOuvrir }) {
   const Reconnaissance = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 
   const appuyer = () => {
+    // D'abord couper une éventuelle lecture, puis réveiller la voix pendant le
+    // geste (l'inverse annulerait aussitôt le réveil).
+    arreterLecture();
     debloquerSyntheseVocale();
-    if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
     if (!Reconnaissance) { onOuvrir(); return; }
     if (ecoute) { recRef.current?.stop(); return; }
 
@@ -1335,7 +1408,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     window.speechSynthesis.addEventListener?.("voiceschanged", recharger);
     return () => {
       window.speechSynthesis.removeEventListener?.("voiceschanged", recharger);
-      window.speechSynthesis.cancel();
+      arreterLecture();
       reconnaissanceRef.current?.abort?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1344,25 +1417,18 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     const debloquerVoix = debloquerSyntheseVocale;
 
   const parler = (texte) => {
-    if (!syntheseDispo || !voixActive || !texte) return;
-    try {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(textepourVoix(texte));
-      u.lang = "fr-FR";
-      const voix = choisirVoixFrancaise();
-      if (voix) u.voice = voix;
-      u.rate = 1.05;
-      window.speechSynthesis.speak(u);
-    } catch (e) {
-      // Ignoré : la réponse reste affichée.
-    }
+    if (!voixActive) return;
+    // Le micro vient parfois de se libérer : sur iPhone, parler tout de suite
+    // après l'écoute peut rester muet.
+    setTimeout(() => lireAVoixHaute(texte), 250);
   };
 
   const basculerVoix = () => {
     const nouvelle = !voixActive;
     setVoixActive(nouvelle);
     try { localStorage.setItem(ASSISTANT_VOIX_KEY, nouvelle ? "true" : "false"); } catch (e) { /* ignoré */ }
-    if (!nouvelle && syntheseDispo) window.speechSynthesis.cancel();
+    if (!nouvelle) arreterLecture();
+    else { debloquerSyntheseVocale(); lireAVoixHaute("Voix activée."); }
   };
 
   const ajouterMessage = (role, content, extra = {}) => {
@@ -1443,8 +1509,8 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
 
   const demarrerEcoute = () => {
     if (!Reconnaissance) return;
+    arreterLecture();
     debloquerVoix();
-    if (syntheseDispo) window.speechSynthesis.cancel();
     if (ecoute) {
       reconnaissanceRef.current?.stop();
       return;
@@ -1484,7 +1550,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
   };
 
   const nouvelleConversation = () => {
-    if (syntheseDispo) window.speechSynthesis.cancel();
+    arreterLecture();
     setMessages([]);
     setActions([]);
   };
@@ -1523,6 +1589,11 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
         {messages.map((m) => (
           <div key={m.id} className={"assistant-bulle " + (m.role === "user" ? "bulle-moi" : "bulle-assistant") + (m.erreur ? " bulle-erreur" : "")}>
             {m.erreur && <span className="bulle-icone"><Icon name="alert" size={14} /></span>}{m.content}
+            {m.role === "assistant" && !m.erreur && syntheseDispo && (
+              <button className="bulle-ecouter" onClick={() => { syntheseVocaleDebloquee = true; lireAVoixHaute(m.content); }} title="Écouter cette réponse">
+                <Icon name="volume" size={13} /> Écouter
+              </button>
+            )}
           </div>
         ))}
 
@@ -6682,6 +6753,8 @@ textarea { resize: vertical; }
 .bulle-moi { align-self: flex-end; background: var(--bleu); color: #fff; border-bottom-right-radius: 4px; }
 .bulle-assistant { align-self: flex-start; background: var(--carte); color: var(--encre); border: 1px solid var(--trait); border-bottom-left-radius: 4px; }
 .bulle-erreur { background: var(--rouge-clair); color: var(--rouge-fonce); border-color: var(--rouge-clair-2); }
+.bulle-ecouter { display: flex; align-items: center; gap: 5px; margin-top: 8px; padding: 4px 10px; border-radius: 14px; border: 1px solid var(--trait); background: var(--fond-doux); color: var(--encre-3); font-size: 12px; cursor: pointer; }
+.bulle-ecouter:hover { color: var(--bleu); border-color: var(--bleu-clair-2); }
 .bulle-icone { display: inline-flex; vertical-align: -2px; margin-right: 6px; }
 .assistant-attente { display: inline-flex; gap: 5px; padding: 14px 16px; }
 .assistant-attente span { width: 7px; height: 7px; border-radius: 50%; background: var(--encre-4); animation: assistantPoint 1.2s infinite ease-in-out; }
