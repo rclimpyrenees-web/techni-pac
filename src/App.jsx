@@ -122,6 +122,11 @@ const Icon = ({ name, size = 18 }) => {
     pin: "M12 21s7-6.5 7-11a7 7 0 10-14 0c0 4.5 7 11 7 11zM12 11.5a2 2 0 100-4 2 2 0 000 4z",
     phone: "M22 16.9v3a2 2 0 01-2.2 2 19.8 19.8 0 01-8.6-3.1 19.5 19.5 0 01-6-6A19.8 19.8 0 012.1 4.2 2 2 0 014.1 2h3a2 2 0 012 1.7c.1.9.3 1.8.6 2.7a2 2 0 01-.5 2.1L8.1 9.7a16 16 0 006 6l1.2-1.1a2 2 0 012.1-.5c.9.3 1.8.5 2.7.6a2 2 0 011.9 2.2z",
     close: "M18 6L6 18M6 6l12 12",
+    assistant: "M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z",
+    mic: "M12 2a3 3 0 00-3 3v6a3 3 0 006 0V5a3 3 0 00-3-3zM19 10v1a7 7 0 01-14 0v-1M12 18v4M8 22h8",
+    volume: "M11 5L6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 010 7M19 5a10 10 0 010 14",
+    volumeOff: "M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6M17 9l6 6",
+    send: "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z",
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -304,7 +309,7 @@ function Jauge({ value, max, label, onClick }) {
 /* ---------- App principale ---------- */
 
 export default function App() {
-  const [tab, setTab] = useState("dashboard");
+  const [tab, setTab] = useState(ongletDepuisAdresse);
   const [theme, setTheme] = useState(themeEnregistre);
 
   useEffect(() => { appliquerTheme(theme); }, [theme]);
@@ -345,6 +350,33 @@ export default function App() {
   const [showRappelForm, setShowRappelForm] = useState(false);
   const [reportType, setReportType] = useState("mise_en_service");
 
+  // Conversation avec l'assistant, conservée ici pour ne pas être perdue
+  // quand on passe d'un onglet à l'autre.
+  const [assistantMessages, setAssistantMessages] = useState([]);
+  const [assistantActions, setAssistantActions] = useState([]);
+  const [assistantTexteAEnvoyer, setAssistantTexteAEnvoyer] = useState(null);
+
+  // Enregistre une action proposée par l'assistant, une fois validée par
+  // l'utilisateur. On passe par les mêmes fonctions que les formulaires, donc
+  // tout se synchronise comme une saisie à la main.
+  const appliquerActionAssistant = (action) => {
+    if (action.type === "planning" && action.item) {
+      upsertPlanning(action.item);
+      return true;
+    }
+    if (action.type === "planning_fait" && action.planningId) {
+      const tache = planningRaw.find((p) => p.id === action.planningId);
+      if (!tache) return false;
+      upsertPlanning({ ...tache, fait: true });
+      return true;
+    }
+    if (action.type === "devis_a_faire" && action.item) {
+      upsertDevisAFaire(action.item);
+      return true;
+    }
+    return false;
+  };
+
   // Interventions de la semaine en cours (du lundi au dimanche) restant à faire,
   // plutôt que l'ensemble des interventions non effectuées.
   const debutSemaine = new Date();
@@ -363,6 +395,7 @@ export default function App() {
 
   const nav = [
     { id: "dashboard", label: "Tableau de bord", icon: "dashboard" },
+    { id: "assistant", label: "Assistant", icon: "assistant" },
     { id: "rapports", label: "Interventions", icon: "report" },
     { id: "clients", label: "Clients", icon: "users" },
     { id: "planning", label: "Planning", icon: "calendar" },
@@ -807,6 +840,18 @@ export default function App() {
           />
         )}
 
+        {tab === "assistant" && (
+          <Assistant
+            messages={assistantMessages}
+            setMessages={setAssistantMessages}
+            actions={assistantActions}
+            setActions={setAssistantActions}
+            onAppliquerAction={appliquerActionAssistant}
+            texteAEnvoyer={assistantTexteAEnvoyer}
+            onTexteEnvoye={() => setAssistantTexteAEnvoyer(null)}
+          />
+        )}
+
         {tab === "rapports" && (
           <Rapports
             reports={reports}
@@ -915,6 +960,16 @@ export default function App() {
 
         {tab === "parametres" && <Parametres settings={settings} setSettings={saveSettings} loading={loadingSettings} theme={theme} setTheme={setTheme} />}
       </main>
+
+      {tab !== "assistant" && (
+        <BoutonMicroFlottant
+          onTexte={(texte) => {
+            setAssistantTexteAEnvoyer({ texte, id: Date.now() });
+            allerAOnglet("assistant");
+          }}
+          onOuvrir={() => allerAOnglet("assistant")}
+        />
+      )}
 
       {pdfPreviewHtml && <PdfPreviewModal html={pdfPreviewHtml} onClose={() => setPdfPreviewHtml(null)} />}
 
@@ -1060,6 +1115,469 @@ function shortType(t) {
 }
 function typePillClass(t) {
   return t === "mise_en_service" ? "pill-cold" : t === "entretien" ? "pill-ok" : "pill-warm";
+}
+
+/* ---------- Assistant IA ----------
+   L'onglet Assistant envoie la conversation à la fonction Supabase
+   "assistant" (voir supabase/functions/assistant), qui interroge Claude et
+   lui donne accès aux données du logiciel. Les créations et modifications
+   reviennent sous forme de propositions, enregistrées seulement après
+   validation (bouton ou réponse « oui »). */
+
+async function appelerAssistant(messages) {
+  const { data, error } = await supabase.functions.invoke("assistant", { body: { messages } });
+  if (error) {
+    let detail = error.message;
+    try {
+      if (error.context && typeof error.context.json === "function") {
+        if (error.context.status === 404) {
+          detail = "La fonction « assistant » n'est pas encore déployée dans Supabase.";
+        } else {
+          const body = await error.context.json();
+          if (body?.error) detail = body.error;
+        }
+      }
+    } catch (_e) {
+      // Corps illisible : on garde le message générique.
+    }
+    if (error.name === "FunctionsFetchError") detail = "Impossible de joindre l'assistant : vérifie la connexion internet.";
+    throw new Error(detail || "Erreur de connexion à l'assistant.");
+  }
+  if (!data?.ok) throw new Error(data?.error || "Réponse inattendue de l'assistant.");
+  return data;
+}
+
+const ASSISTANT_VOIX_KEY = "techni-pac-assistant-voix";
+
+function voixActiveEnregistree() {
+  try {
+    return localStorage.getItem(ASSISTANT_VOIX_KEY) !== "false";
+  } catch (e) {
+    return true;
+  }
+}
+
+// Texte prêt à être lu : sans symboles de mise en forme, et avec des heures
+// prononcées naturellement (« 14h30 » plutôt que « 14 h 30 min »).
+function textepourVoix(texte) {
+  return String(texte || "")
+    .replace(/[*_#`>]/g, "")
+    .replace(/^\s*[-•]\s*/gm, "")
+    .replace(/(\d{1,2})h(\d{2})/g, "$1 heures $2")
+    .replace(/(\d{1,2})h\b/g, "$1 heures")
+    .replace(/€/g, " euros")
+    .replace(/\bHT\b/g, "hors taxes")
+    .replace(/\n+/g, ". ");
+}
+
+function choisirVoixFrancaise() {
+  const voix = (window.speechSynthesis?.getVoices() || []).filter((v) => (v.lang || "").toLowerCase().startsWith("fr"));
+  if (voix.length === 0) return null;
+  const preferees = ["Amélie", "Audrey", "Thomas", "Google français", "Denise", "Henri", "Marie"];
+  for (const nom of preferees) {
+    const v = voix.find((x) => x.name.includes(nom));
+    if (v) return v;
+  }
+  return voix.find((v) => v.lang === "fr-FR") || voix[0];
+}
+
+const REPONSE_OUI = /^(oui|ouais|ok|okay|d'accord|valide|valider|vas-y|vas y|go|confirme|confirmer|c'est bon|parfait|exact|c'est ça)\b/i;
+const REPONSE_NON = /^(non|annule|annuler|laisse tomber|stop|pas maintenant)\b/i;
+
+// Sur iPhone, la synthèse vocale doit être lancée une première fois suite à
+// un geste de l'utilisateur, sinon les réponses suivantes restent muettes.
+let syntheseVocaleDebloquee = false;
+function debloquerSyntheseVocale() {
+  if (syntheseVocaleDebloquee || typeof window === "undefined" || !("speechSynthesis" in window)) return;
+  syntheseVocaleDebloquee = true;
+  try {
+    const u = new SpeechSynthesisUtterance(" ");
+    u.volume = 0;
+    window.speechSynthesis.speak(u);
+  } catch (e) {
+    // Sans conséquence : la réponse s'affichera simplement à l'écran.
+  }
+}
+
+// Onglet d'ouverture demandé dans l'adresse, par exemple par un raccourci
+// Siri : techni-pac.vercel.app/?onglet=assistant
+const ONGLETS_VALIDES = ["dashboard", "assistant", "rapports", "clients", "planning", "rappels", "devis", "facturation", "parametres"];
+function ongletDepuisAdresse() {
+  try {
+    const demande = new URLSearchParams(window.location.search).get("onglet");
+    if (demande && ONGLETS_VALIDES.includes(demande)) {
+      // On retire le paramètre de l'adresse : un rechargement de la page ne
+      // doit pas ramener sur l'assistant.
+      window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+      return demande;
+    }
+  } catch (e) {
+    // Adresse illisible : on ouvre le tableau de bord.
+  }
+  return "dashboard";
+}
+
+/* Bouton micro flottant, présent sur tous les onglets sauf l'assistant : un
+   appui, on parle, et la question part vers l'assistant. L'écoute démarre
+   dans le geste lui-même, condition imposée par Safari pour accéder au micro.
+   Sans reconnaissance vocale sur l'appareil, le bouton ouvre simplement
+   l'onglet Assistant. */
+function BoutonMicroFlottant({ onTexte, onOuvrir }) {
+  const [ecoute, setEcoute] = useState(false);
+  const [transcription, setTranscription] = useState("");
+  const [info, setInfo] = useState("");
+  const recRef = useRef(null);
+  const texteRef = useRef("");
+
+  useEffect(() => () => recRef.current?.abort?.(), []);
+
+  const Reconnaissance = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+
+  const appuyer = () => {
+    debloquerSyntheseVocale();
+    if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
+    if (!Reconnaissance) { onOuvrir(); return; }
+    if (ecoute) { recRef.current?.stop(); return; }
+
+    setInfo("");
+    setTranscription("");
+    texteRef.current = "";
+    const rec = new Reconnaissance();
+    rec.lang = "fr-FR";
+    rec.interimResults = true;
+    rec.continuous = false;
+    rec.onresult = (ev) => {
+      let texte = "";
+      for (let i = 0; i < ev.results.length; i++) texte += ev.results[i][0].transcript;
+      texteRef.current = texte;
+      setTranscription(texte);
+    };
+    rec.onerror = (ev) => {
+      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+        setInfo("Micro bloqué : autorise-le dans les réglages du navigateur.");
+      } else if (ev.error === "no-speech") {
+        setInfo("Je n'ai rien entendu.");
+      }
+    };
+    rec.onend = () => {
+      setEcoute(false);
+      const texte = texteRef.current.trim();
+      texteRef.current = "";
+      setTranscription("");
+      if (texte) onTexte(texte);
+    };
+    recRef.current = rec;
+    try {
+      rec.start();
+      setEcoute(true);
+    } catch (e) {
+      setEcoute(false);
+      onOuvrir();
+    }
+  };
+
+  // Le message d'erreur disparaît de lui-même après quelques secondes.
+  useEffect(() => {
+    if (!info) return;
+    const t = setTimeout(() => setInfo(""), 4000);
+    return () => clearTimeout(t);
+  }, [info]);
+
+  return (
+    <div className="micro-flottant">
+      {(ecoute || info) && (
+        <div className="micro-flottant-bulle">
+          {info || transcription || "Je t'écoute…"}
+        </div>
+      )}
+      <button
+        className={"micro-flottant-btn" + (ecoute ? " en-ecoute" : "")}
+        onClick={appuyer}
+        aria-label={ecoute ? "Arrêter l'écoute" : "Parler à l'assistant"}
+        title={ecoute ? "Arrêter l'écoute" : "Parler à l'assistant"}
+      >
+        <Icon name="mic" size={26} />
+      </button>
+    </div>
+  );
+}
+
+const SUGGESTIONS_ASSISTANT = [
+  "Fais-moi mon briefing du jour",
+  "Qu'est-ce que j'ai demain ?",
+  "Quels devis je dois relancer ?",
+  "Qu'est-ce qui reste à facturer ?",
+];
+
+function Assistant({ messages, setMessages, actions, setActions, onAppliquerAction, texteAEnvoyer, onTexteEnvoye }) {
+  const [saisie, setSaisie] = useState("");
+  const [chargement, setChargement] = useState(false);
+  const [ecoute, setEcoute] = useState(false);
+  const [voixActive, setVoixActive] = useState(voixActiveEnregistree);
+  const [infoMicro, setInfoMicro] = useState("");
+  const reconnaissanceRef = useRef(null);
+  const transcriptionRef = useRef("");
+  const finRef = useRef(null);
+  const envoyerRef = useRef(null);
+
+  const Reconnaissance = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+  const syntheseDispo = typeof window !== "undefined" && "speechSynthesis" in window;
+
+  useEffect(() => {
+    finRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, actions, chargement]);
+
+  // La liste des voix se charge en différé sur certains navigateurs.
+  useEffect(() => {
+    if (!syntheseDispo) return;
+    window.speechSynthesis.getVoices();
+    const recharger = () => window.speechSynthesis.getVoices();
+    window.speechSynthesis.addEventListener?.("voiceschanged", recharger);
+    return () => {
+      window.speechSynthesis.removeEventListener?.("voiceschanged", recharger);
+      window.speechSynthesis.cancel();
+      reconnaissanceRef.current?.abort?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+    const debloquerVoix = debloquerSyntheseVocale;
+
+  const parler = (texte) => {
+    if (!syntheseDispo || !voixActive || !texte) return;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(textepourVoix(texte));
+      u.lang = "fr-FR";
+      const voix = choisirVoixFrancaise();
+      if (voix) u.voice = voix;
+      u.rate = 1.05;
+      window.speechSynthesis.speak(u);
+    } catch (e) {
+      // Ignoré : la réponse reste affichée.
+    }
+  };
+
+  const basculerVoix = () => {
+    const nouvelle = !voixActive;
+    setVoixActive(nouvelle);
+    try { localStorage.setItem(ASSISTANT_VOIX_KEY, nouvelle ? "true" : "false"); } catch (e) { /* ignoré */ }
+    if (!nouvelle && syntheseDispo) window.speechSynthesis.cancel();
+  };
+
+  const ajouterMessage = (role, content, extra = {}) => {
+    setMessages((liste) => [...liste, { id: "m" + Date.now() + Math.random().toString(16).slice(2, 6), role, content, ...extra }]);
+  };
+
+  const validerAction = (action) => {
+    const ok = onAppliquerAction(action);
+    setActions((liste) => liste.filter((a) => a.id !== action.id));
+    return ok;
+  };
+
+  const annulerAction = (action) => {
+    setActions((liste) => liste.filter((a) => a.id !== action.id));
+  };
+
+  const validerTout = () => {
+    const nb = actions.filter((a) => onAppliquerAction(a)).length;
+    setActions([]);
+    const texte = nb > 1 ? `C'est enregistré, ${nb} éléments ajoutés.` : nb === 1 ? "C'est enregistré." : "Je n'ai rien pu enregistrer, l'élément n'existe plus.";
+    ajouterMessage("assistant", texte);
+    parler(texte);
+  };
+
+  const annulerTout = () => {
+    setActions([]);
+    const texte = "D'accord, j'annule.";
+    ajouterMessage("assistant", texte);
+    parler(texte);
+  };
+
+  const envoyer = async (texteBrut) => {
+    const texte = String(texteBrut ?? saisie).trim();
+    if (!texte || chargement) return;
+    debloquerVoix();
+    setSaisie("");
+
+    // Réponse courte à une proposition en attente : traitée sur place, sans
+    // repasser par l'assistant.
+    if (actions.length > 0 && texte.split(/\s+/).length <= 4) {
+      if (REPONSE_OUI.test(texte)) { ajouterMessage("user", texte); validerTout(); return; }
+      if (REPONSE_NON.test(texte)) { ajouterMessage("user", texte); annulerTout(); return; }
+    }
+
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      ajouterMessage("user", texte);
+      ajouterMessage("assistant", "Pas de connexion internet pour le moment : l'assistant a besoin du réseau pour répondre.", { erreur: true });
+      return;
+    }
+
+    const historique = [...messages.filter((m) => !m.erreur), { role: "user", content: texte }]
+      .map((m) => ({ role: m.role, content: m.content }));
+    ajouterMessage("user", texte);
+    setChargement(true);
+    try {
+      const { reply, actions: nouvelles } = await appelerAssistant(historique);
+      ajouterMessage("assistant", reply);
+      if (Array.isArray(nouvelles) && nouvelles.length > 0) setActions((liste) => [...liste, ...nouvelles]);
+      parler(reply);
+    } catch (e) {
+      ajouterMessage("assistant", String(e?.message || e), { erreur: true });
+    } finally {
+      setChargement(false);
+    }
+  };
+  envoyerRef.current = envoyer;
+
+  // Question dictée avec le bouton micro flottant, depuis un autre onglet.
+  // Le numéro de la demande évite de l'envoyer deux fois.
+  const demandeTraitee = useRef(null);
+  useEffect(() => {
+    if (!texteAEnvoyer || demandeTraitee.current === texteAEnvoyer.id) return;
+    demandeTraitee.current = texteAEnvoyer.id;
+    onTexteEnvoye?.();
+    envoyerRef.current?.(texteAEnvoyer.texte);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [texteAEnvoyer]);
+
+  const demarrerEcoute = () => {
+    if (!Reconnaissance) return;
+    debloquerVoix();
+    if (syntheseDispo) window.speechSynthesis.cancel();
+    if (ecoute) {
+      reconnaissanceRef.current?.stop();
+      return;
+    }
+    setInfoMicro("");
+    transcriptionRef.current = "";
+    const rec = new Reconnaissance();
+    rec.lang = "fr-FR";
+    rec.interimResults = true;
+    rec.continuous = false;
+    rec.onresult = (ev) => {
+      let texte = "";
+      for (let i = 0; i < ev.results.length; i++) texte += ev.results[i][0].transcript;
+      transcriptionRef.current = texte;
+      setSaisie(texte);
+    };
+    rec.onerror = (ev) => {
+      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+        setInfoMicro("Le micro est bloqué : autorise-le pour ce site dans les réglages du navigateur.");
+      } else if (ev.error === "no-speech") {
+        setInfoMicro("Je n'ai rien entendu, réessaie.");
+      }
+    };
+    rec.onend = () => {
+      setEcoute(false);
+      const texte = transcriptionRef.current.trim();
+      transcriptionRef.current = "";
+      if (texte) envoyerRef.current?.(texte);
+    };
+    reconnaissanceRef.current = rec;
+    try {
+      rec.start();
+      setEcoute(true);
+    } catch (e) {
+      setEcoute(false);
+    }
+  };
+
+  const nouvelleConversation = () => {
+    if (syntheseDispo) window.speechSynthesis.cancel();
+    setMessages([]);
+    setActions([]);
+  };
+
+  return (
+    <div className="assistant">
+      <header className="page-head row-between">
+        <div>
+          <h1>Assistant</h1>
+          <p>Pose une question ou donne une consigne, à l'écrit ou à la voix</p>
+        </div>
+        <div className="assistant-head-actions">
+          {syntheseDispo && (
+            <button className="btn-ghost small" onClick={basculerVoix} title={voixActive ? "Couper la voix" : "Activer la voix"}>
+              <Icon name={voixActive ? "volume" : "volumeOff"} size={16} /> {voixActive ? "Voix activée" : "Voix coupée"}
+            </button>
+          )}
+          {messages.length > 0 && (
+            <button className="btn-ghost small" onClick={nouvelleConversation}>Nouvelle conversation</button>
+          )}
+        </div>
+      </header>
+
+      <div className="assistant-fil">
+        {messages.length === 0 && (
+          <div className="card assistant-accueil">
+            <p>Je peux consulter ton planning, tes rappels, tes clients, tes rapports, tes devis et ta facturation, et ajouter des rappels, des interventions ou des devis à faire après ta validation.</p>
+            <div className="assistant-suggestions">
+              {SUGGESTIONS_ASSISTANT.map((s) => (
+                <button key={s} className="assistant-suggestion" onClick={() => envoyer(s)}>{s}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {messages.map((m) => (
+          <div key={m.id} className={"assistant-bulle " + (m.role === "user" ? "bulle-moi" : "bulle-assistant") + (m.erreur ? " bulle-erreur" : "")}>
+            {m.erreur && <span className="bulle-icone"><Icon name="alert" size={14} /></span>}{m.content}
+          </div>
+        ))}
+
+        {chargement && <div className="assistant-bulle bulle-assistant assistant-attente"><span /><span /><span /></div>}
+
+        {actions.length > 0 && (
+          <div className="card assistant-actions">
+            <div className="assistant-actions-titre">À valider</div>
+            {actions.map((a) => (
+              <div key={a.id} className="assistant-action">
+                <div className="assistant-action-texte">{a.resume}</div>
+                <div className="assistant-action-boutons">
+                  <button className="btn-ghost small" onClick={() => annulerAction(a)}>Annuler</button>
+                  <button className="btn-small btn-valide" onClick={() => validerAction(a)}><Icon name="check" size={13} /> Valider</button>
+                </div>
+              </div>
+            ))}
+            {actions.length > 1 && (
+              <button className="btn-primary assistant-tout-valider" onClick={validerTout}>Tout valider</button>
+            )}
+          </div>
+        )}
+        <div ref={finRef} />
+      </div>
+
+      <div className="assistant-saisie">
+        {infoMicro && <div className="hint assistant-info-micro">{infoMicro}</div>}
+        <div className="assistant-saisie-ligne">
+          <textarea
+            rows={1}
+            value={saisie}
+            onChange={(e) => setSaisie(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); envoyer(); }
+            }}
+            placeholder={ecoute ? "Je t'écoute…" : "Écris ou parle…"}
+          />
+          {Reconnaissance && (
+            <button
+              className={"assistant-micro" + (ecoute ? " en-ecoute" : "")}
+              onClick={demarrerEcoute}
+              disabled={chargement}
+              aria-label={ecoute ? "Arrêter l'écoute" : "Parler à l'assistant"}
+              title={ecoute ? "Arrêter l'écoute" : "Parler à l'assistant"}
+            >
+              <Icon name="mic" size={22} />
+            </button>
+          )}
+          <button className="assistant-envoyer" onClick={() => envoyer()} disabled={chargement || !saisie.trim()} aria-label="Envoyer" title="Envoyer">
+            <Icon name="send" size={20} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ---------- Rappels ---------- */
@@ -6149,6 +6667,58 @@ textarea { resize: vertical; }
   .print-only, .print-only * { visibility: visible; }
   .print-only { position: absolute; left: 0; top: 0; width: 100%; display: block; padding: 20px; font-family: 'Inter', sans-serif; }
   .print-only h1 { font-family: 'Barlow Condensed', sans-serif; }
+}
+
+/* ---------- Assistant IA ---------- */
+.assistant { display: flex; flex-direction: column; min-height: calc(100vh - 64px); }
+.assistant-head-actions { display: flex; flex-wrap: wrap; align-items: center; }
+.assistant-head-actions .btn-ghost.small { margin-top: 0; }
+.assistant-fil { flex: 1; display: flex; flex-direction: column; gap: 10px; padding-bottom: 12px; }
+.assistant-accueil p { margin: 0 0 14px; color: var(--encre-2); font-size: 14px; line-height: 1.5; }
+.assistant-suggestions { display: flex; flex-wrap: wrap; gap: 8px; }
+.assistant-suggestion { background: var(--bleu-clair); color: var(--bleu-fonce); border: 1px solid var(--bleu-clair-2); border-radius: 18px; padding: 8px 14px; font-size: 13.5px; cursor: pointer; text-align: left; }
+.assistant-suggestion:hover { background: var(--bleu-clair-2); }
+.assistant-bulle { max-width: 82%; padding: 11px 14px; border-radius: 14px; font-size: 14.5px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+.bulle-moi { align-self: flex-end; background: var(--bleu); color: #fff; border-bottom-right-radius: 4px; }
+.bulle-assistant { align-self: flex-start; background: var(--carte); color: var(--encre); border: 1px solid var(--trait); border-bottom-left-radius: 4px; }
+.bulle-erreur { background: var(--rouge-clair); color: var(--rouge-fonce); border-color: var(--rouge-clair-2); }
+.bulle-icone { display: inline-flex; vertical-align: -2px; margin-right: 6px; }
+.assistant-attente { display: inline-flex; gap: 5px; padding: 14px 16px; }
+.assistant-attente span { width: 7px; height: 7px; border-radius: 50%; background: var(--encre-4); animation: assistantPoint 1.2s infinite ease-in-out; }
+.assistant-attente span:nth-child(2) { animation-delay: 0.15s; }
+.assistant-attente span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes assistantPoint { 0%, 80%, 100% { opacity: 0.3; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+.assistant-actions { margin-bottom: 0; border-color: var(--vert); background: var(--vert-clair); padding: 14px 16px; }
+.assistant-actions-titre { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vert-fonce); margin-bottom: 6px; }
+.assistant-action { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--trait-clair); }
+.assistant-action:first-of-type { border-top: none; }
+.assistant-action-texte { font-size: 14px; color: var(--encre); }
+.assistant-action-boutons { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.assistant-action-boutons .btn-ghost.small { margin: 0; background: var(--carte); }
+.assistant-action-boutons .btn-small { display: inline-flex; align-items: center; gap: 4px; }
+.assistant-tout-valider { margin-top: 8px; width: 100%; justify-content: center; }
+.assistant-saisie { position: sticky; bottom: 0; background: var(--fond); padding: 10px 0 calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--trait-clair); }
+.assistant-info-micro { margin: 0 0 6px; color: var(--orange-fonce); }
+.assistant-saisie-ligne { display: flex; align-items: flex-end; gap: 8px; }
+.assistant-saisie-ligne textarea { flex: 1; resize: none; min-height: 46px; max-height: 140px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--trait); background: var(--carte); color: var(--encre); font: inherit; font-size: 15px; }
+.assistant-micro, .assistant-envoyer { width: 46px; height: 46px; flex-shrink: 0; border-radius: 50%; border: none; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.assistant-micro { background: var(--bleu); color: #fff; }
+.assistant-micro.en-ecoute { background: var(--rouge); animation: assistantPulse 1.4s infinite; }
+@keyframes assistantPulse { 0% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0.45); } 70% { box-shadow: 0 0 0 12px rgba(192, 57, 43, 0); } 100% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0); } }
+.assistant-envoyer { background: var(--carte); color: var(--bleu); border: 1px solid var(--trait); }
+.assistant-micro:disabled, .assistant-envoyer:disabled { opacity: 0.45; cursor: default; }
+@media (max-width: 780px) { .app .main { padding-bottom: 100px; } }
+.micro-flottant { position: fixed; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 55; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; pointer-events: none; }
+.micro-flottant-btn { pointer-events: auto; width: 60px; height: 60px; border-radius: 50%; border: none; background: var(--bleu); color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 6px 18px rgba(27, 39, 51, 0.28); }
+.micro-flottant-btn:hover { background: var(--bleu-fonce); }
+.micro-flottant-btn.en-ecoute { background: var(--rouge); animation: assistantPulse 1.4s infinite; }
+.micro-flottant-bulle { pointer-events: auto; max-width: min(300px, calc(100vw - 36px)); background: var(--carte); color: var(--encre); border: 1px solid var(--trait); border-radius: 14px; border-bottom-right-radius: 4px; padding: 10px 14px; font-size: 14px; line-height: 1.45; box-shadow: 0 6px 18px rgba(27, 39, 51, 0.16); }
+@media (max-width: 780px) {
+  .assistant { min-height: calc(100vh - 120px); }
+  .assistant-bulle { max-width: 90%; }
+  .assistant-action { flex-direction: column; align-items: stretch; }
+  .assistant-action-boutons { justify-content: flex-end; }
+  .assistant-head-actions { width: 100%; justify-content: space-between; }
 }
 
 @media (max-width: 860px) {
