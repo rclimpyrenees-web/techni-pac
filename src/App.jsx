@@ -1216,7 +1216,12 @@ function debloquerSyntheseVocale() {
   }
 }
 
+// Numéro de la lecture en cours : une lecture interrompue ne doit pas
+// déclencher la suite prévue (reprise de l'écoute, par exemple).
+let numeroLecture = 0;
+
 function arreterLecture() {
+  numeroLecture += 1;
   if (!syntheseVocaleDisponible()) return;
   phrasesEnCours = [];
   try { window.speechSynthesis.cancel(); } catch (e) { /* ignoré */ }
@@ -1226,7 +1231,7 @@ function arreterLecture() {
 // d'une quinzaine de secondes.
 function decouperPourLecture(texte) {
   const morceaux = [];
-  textepourVoix(texte).split(/(?<=[.!?;:])\s+/).forEach((phrase) => {
+  textepourVoix(texte).split(/(?<=[.!?;])\s+/).forEach((phrase) => {
     let reste = phrase.trim();
     while (reste.length > 180) {
       const coupe = reste.lastIndexOf(",", 180) > 60 ? reste.lastIndexOf(",", 180) + 1 : reste.lastIndexOf(" ", 180);
@@ -1238,12 +1243,26 @@ function decouperPourLecture(texte) {
   return morceaux;
 }
 
-function lireAVoixHaute(texte) {
-  if (!syntheseVocaleDisponible() || !texte) return;
+// onFin est appelé une seule fois, quand la lecture est terminée (jamais si
+// elle a été interrompue). Certains navigateurs oublient de signaler la fin
+// d'une lecture : une minuterie de secours, calée sur la longueur du texte,
+// prend alors le relais.
+function lireAVoixHaute(texte, onFin) {
+  const morceaux = syntheseVocaleDisponible() && texte ? decouperPourLecture(texte) : [];
+  if (morceaux.length === 0) { if (onFin) setTimeout(onFin, 0); return; }
   const synth = window.speechSynthesis;
-  const morceaux = decouperPourLecture(texte);
-  if (morceaux.length === 0) return;
+  const pretPourAnnuler = synth.speaking || synth.pending;
+  if (pretPourAnnuler) arreterLecture();
+  numeroLecture += 1;
+  const numero = numeroLecture;
+  let termine = false;
+  const terminer = () => {
+    if (termine || numero !== numeroLecture) return;
+    termine = true;
+    if (onFin) onFin();
+  };
   const lancer = () => {
+    if (numero !== numeroLecture) return;
     try {
       synth.resume();
       const voix = choisirVoixFrancaise();
@@ -1255,19 +1274,20 @@ function lireAVoixHaute(texte) {
         u.volume = 1;
         return u;
       });
+      const derniere = phrasesEnCours[phrasesEnCours.length - 1];
+      derniere.onend = terminer;
+      derniere.onerror = terminer;
       phrasesEnCours.forEach((u) => synth.speak(u));
+      const dureeEstimee = morceaux.join(" ").length * 85 + 2500;
+      setTimeout(terminer, dureeEstimee);
     } catch (e) {
-      // Ignoré : la réponse reste affichée.
+      terminer();
     }
   };
   // Une lecture lancée juste après une annulation est parfois ignorée par
   // Chrome et Safari : on laisse un court délai.
-  if (synth.speaking || synth.pending) {
-    arreterLecture();
-    setTimeout(lancer, 150);
-  } else {
-    lancer();
-  }
+  if (pretPourAnnuler) setTimeout(lancer, 150);
+  else lancer();
 }
 
 // Onglet d'ouverture demandé dans l'adresse, par exemple par un raccourci
@@ -1382,23 +1402,54 @@ const SUGGESTIONS_ASSISTANT = [
   "Qu'est-ce qui reste à facturer ?",
 ];
 
+const ASSISTANT_MODE_KEY = "techni-pac-assistant-mode";
+
+function modeTexteEnregistre() {
+  try {
+    return localStorage.getItem(ASSISTANT_MODE_KEY) === "texte";
+  } catch (e) {
+    return false;
+  }
+}
+
+/* L'assistant a deux présentations :
+   - le mode vocal (par défaut) : un grand bouton, on parle, il répond à voix
+     haute puis se remet à écouter quelques secondes (mode conversation) ;
+   - le mode texte : le fil de la conversation, avec saisie au clavier.
+   Les propositions à valider s'affichent dans les deux modes. */
 function Assistant({ messages, setMessages, actions, setActions, onAppliquerAction, texteAEnvoyer, onTexteEnvoye }) {
   const [saisie, setSaisie] = useState("");
   const [chargement, setChargement] = useState(false);
   const [ecoute, setEcoute] = useState(false);
+  const [parle, setParle] = useState(false);
   const [voixActive, setVoixActive] = useState(voixActiveEnregistree);
+  const [modeTexte, setModeTexte] = useState(modeTexteEnregistre);
   const [infoMicro, setInfoMicro] = useState("");
+  const [transcription, setTranscription] = useState("");
+  const [derniereQuestion, setDerniereQuestion] = useState("");
+  const [conversation, setConversation] = useState(false);
+  const [attenteAppui, setAttenteAppui] = useState(false);
   const reconnaissanceRef = useRef(null);
   const transcriptionRef = useRef("");
   const finRef = useRef(null);
   const envoyerRef = useRef(null);
+  const ecouterRef = useRef(null);
+  const ecouteRef = useRef(false);
+  const conversationRef = useRef(false);
+  const modeTexteRef = useRef(modeTexte);
+  modeTexteRef.current = modeTexte;
 
   const Reconnaissance = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
-  const syntheseDispo = typeof window !== "undefined" && "speechSynthesis" in window;
+  const syntheseDispo = syntheseVocaleDisponible();
+
+  const changerConversation = (active) => {
+    conversationRef.current = active;
+    setConversation(active);
+  };
 
   useEffect(() => {
-    finRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, actions, chargement]);
+    if (modeTexte) finRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, actions, chargement, modeTexte]);
 
   // La liste des voix se charge en différé sur certains navigateurs.
   useEffect(() => {
@@ -1409,26 +1460,48 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     return () => {
       window.speechSynthesis.removeEventListener?.("voiceschanged", recharger);
       arreterLecture();
+      conversationRef.current = false;
       reconnaissanceRef.current?.abort?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-    const debloquerVoix = debloquerSyntheseVocale;
-
-  const parler = (texte) => {
-    if (!voixActive) return;
+  // Lit une réponse. En mode vocal, si la conversation est en cours, l'écoute
+  // reprend toute seule à la fin de la lecture.
+  const parler = (texte, { relancer = true } = {}) => {
+    const reprendre = () => {
+      setParle(false);
+      if (relancer && conversationRef.current && !modeTexteRef.current) {
+        setTimeout(() => ecouterRef.current?.({ auto: true }), 350);
+      }
+    };
+    if (!voixActive || !syntheseDispo) {
+      // Sans voix, l'écoute ne reprend pas toute seule : rien ne
+      // signalerait à l'utilisateur qu'il peut répondre.
+      changerConversation(false);
+      return;
+    }
+    setParle(true);
     // Le micro vient parfois de se libérer : sur iPhone, parler tout de suite
     // après l'écoute peut rester muet.
-    setTimeout(() => lireAVoixHaute(texte), 250);
+    setTimeout(() => lireAVoixHaute(texte, reprendre), 250);
   };
 
   const basculerVoix = () => {
     const nouvelle = !voixActive;
     setVoixActive(nouvelle);
     try { localStorage.setItem(ASSISTANT_VOIX_KEY, nouvelle ? "true" : "false"); } catch (e) { /* ignoré */ }
-    if (!nouvelle) arreterLecture();
+    if (!nouvelle) { arreterLecture(); setParle(false); changerConversation(false); }
     else { debloquerSyntheseVocale(); lireAVoixHaute("Voix activée."); }
+  };
+
+  const basculerMode = () => {
+    const texte = !modeTexte;
+    setModeTexte(texte);
+    try { localStorage.setItem(ASSISTANT_MODE_KEY, texte ? "texte" : "vocal"); } catch (e) { /* ignoré */ }
+    changerConversation(false);
+    setAttenteAppui(false);
+    if (texte) setSaisie("");
   };
 
   const ajouterMessage = (role, content, extra = {}) => {
@@ -1460,11 +1533,18 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     parler(texte);
   };
 
+  const signalerErreur = (message) => {
+    ajouterMessage("assistant", message, { erreur: true });
+    changerConversation(false);
+    if (!modeTexteRef.current) parler("Désolé, je n'ai pas pu te répondre. Le détail est affiché à l'écran.", { relancer: false });
+  };
+
   const envoyer = async (texteBrut) => {
     const texte = String(texteBrut ?? saisie).trim();
     if (!texte || chargement) return;
-    debloquerVoix();
+    debloquerSyntheseVocale();
     setSaisie("");
+    setDerniereQuestion(texte);
 
     // Réponse courte à une proposition en attente : traitée sur place, sans
     // repasser par l'assistant.
@@ -1475,7 +1555,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
 
     if (typeof navigator !== "undefined" && navigator.onLine === false) {
       ajouterMessage("user", texte);
-      ajouterMessage("assistant", "Pas de connexion internet pour le moment : l'assistant a besoin du réseau pour répondre.", { erreur: true });
+      signalerErreur("Pas de connexion internet pour le moment : l'assistant a besoin du réseau pour répondre.");
       return;
     }
 
@@ -1487,36 +1567,51 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       const { reply, actions: nouvelles } = await appelerAssistant(historique);
       ajouterMessage("assistant", reply);
       if (Array.isArray(nouvelles) && nouvelles.length > 0) setActions((liste) => [...liste, ...nouvelles]);
+      setChargement(false);
       parler(reply);
     } catch (e) {
-      ajouterMessage("assistant", String(e?.message || e), { erreur: true });
-    } finally {
       setChargement(false);
+      signalerErreur(String(e?.message || e));
     }
   };
   envoyerRef.current = envoyer;
 
   // Question dictée avec le bouton micro flottant, depuis un autre onglet.
-  // Le numéro de la demande évite de l'envoyer deux fois.
+  // Le numéro de la demande évite de l'envoyer deux fois. En mode vocal, la
+  // conversation continue ensuite à la voix.
   const demandeTraitee = useRef(null);
   useEffect(() => {
     if (!texteAEnvoyer || demandeTraitee.current === texteAEnvoyer.id) return;
     demandeTraitee.current = texteAEnvoyer.id;
     onTexteEnvoye?.();
+    if (!modeTexteRef.current) changerConversation(true);
     envoyerRef.current?.(texteAEnvoyer.texte);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [texteAEnvoyer]);
 
-  const demarrerEcoute = () => {
+  // Lance l'écoute. auto = reprise automatique après une réponse (sans geste
+  // de l'utilisateur) : si le navigateur la refuse, le bouton clignote pour
+  // inviter à appuyer, et le silence met fin à la conversation sans message.
+  const ecouter = ({ auto = false } = {}) => {
     if (!Reconnaissance) return;
-    arreterLecture();
-    debloquerVoix();
-    if (ecoute) {
-      reconnaissanceRef.current?.stop();
+    if (!auto) {
+      arreterLecture();
+      setParle(false);
+      debloquerSyntheseVocale();
+      setAttenteAppui(false);
+      if (ecouteRef.current) {
+        reconnaissanceRef.current?.stop();
+        return;
+      }
+      if (!modeTexteRef.current) changerConversation(true);
+    } else if (!conversationRef.current || ecouteRef.current) {
       return;
     }
+
     setInfoMicro("");
+    setTranscription("");
     transcriptionRef.current = "";
+    let refusee = false;
     const rec = new Reconnaissance();
     rec.lang = "fr-FR";
     rec.interimResults = true;
@@ -1525,128 +1620,220 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       let texte = "";
       for (let i = 0; i < ev.results.length; i++) texte += ev.results[i][0].transcript;
       transcriptionRef.current = texte;
-      setSaisie(texte);
+      setTranscription(texte);
+      if (modeTexteRef.current) setSaisie(texte);
     };
     rec.onerror = (ev) => {
       if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
-        setInfoMicro("Le micro est bloqué : autorise-le pour ce site dans les réglages du navigateur.");
-      } else if (ev.error === "no-speech") {
+        if (auto) {
+          refusee = true;
+        } else {
+          setInfoMicro("Le micro est bloqué : autorise-le pour ce site dans les réglages du navigateur.");
+          changerConversation(false);
+        }
+      } else if (ev.error === "no-speech" && !auto) {
         setInfoMicro("Je n'ai rien entendu, réessaie.");
       }
     };
     rec.onend = () => {
+      ecouteRef.current = false;
       setEcoute(false);
       const texte = transcriptionRef.current.trim();
       transcriptionRef.current = "";
-      if (texte) envoyerRef.current?.(texte);
+      if (texte) {
+        envoyerRef.current?.(texte);
+      } else if (refusee) {
+        setAttenteAppui(true);
+      } else {
+        // Silence : la conversation se met en veille.
+        changerConversation(false);
+      }
     };
     reconnaissanceRef.current = rec;
     try {
       rec.start();
+      ecouteRef.current = true;
       setEcoute(true);
     } catch (e) {
+      ecouteRef.current = false;
       setEcoute(false);
+      if (auto) setAttenteAppui(true);
     }
+  };
+  ecouterRef.current = ecouter;
+
+  const terminerConversation = () => {
+    changerConversation(false);
+    setAttenteAppui(false);
+    arreterLecture();
+    setParle(false);
+    reconnaissanceRef.current?.abort?.();
   };
 
   const nouvelleConversation = () => {
-    arreterLecture();
+    terminerConversation();
     setMessages([]);
     setActions([]);
+    setDerniereQuestion("");
   };
 
+  // Appui sur le grand bouton du mode vocal : pendant une réponse, on coupe
+  // la parole et on écoute aussitôt.
+  const appuiGrandBouton = () => {
+    if (chargement) return;
+    ecouter();
+  };
+
+  const etat = ecoute ? "ecoute" : chargement ? "reflexion" : parle ? "parole" : attenteAppui ? "attente" : "veille";
+  const libelleEtat = {
+    ecoute: "Je t'écoute…",
+    reflexion: "Je réfléchis…",
+    parole: "Je te réponds…",
+    attente: "Appuie pour répondre",
+    veille: Reconnaissance ? "Appuie pour parler" : "La reconnaissance vocale n'est pas disponible sur ce navigateur",
+  }[etat];
+  const derniereReponse = [...messages].reverse().find((m) => m.role === "assistant");
+  const derniereErreur = derniereReponse && derniereReponse.erreur ? derniereReponse.content : "";
+
+  const carteActions = actions.length > 0 && (
+    <div className="card assistant-actions">
+      <div className="assistant-actions-titre">À valider</div>
+      {actions.map((a) => (
+        <div key={a.id} className="assistant-action">
+          <div className="assistant-action-texte">{a.resume}</div>
+          <div className="assistant-action-boutons">
+            <button className="btn-ghost small" onClick={() => annulerAction(a)}>Annuler</button>
+            <button className="btn-small btn-valide" onClick={() => validerAction(a)}><Icon name="check" size={13} /> Valider</button>
+          </div>
+        </div>
+      ))}
+      {actions.length > 1 && (
+        <button className="btn-primary assistant-tout-valider" onClick={validerTout}>Tout valider</button>
+      )}
+    </div>
+  );
+
   return (
-    <div className="assistant">
+    <div className={"assistant" + (modeTexte ? "" : " assistant-mode-vocal")}>
       <header className="page-head row-between">
         <div>
           <h1>Assistant</h1>
-          <p>Pose une question ou donne une consigne, à l'écrit ou à la voix</p>
+          <p>{modeTexte ? "Pose une question ou donne une consigne, à l'écrit ou à la voix" : "Parle-lui comme à ta secrétaire"}</p>
         </div>
         <div className="assistant-head-actions">
+          <button className="btn-ghost small" onClick={basculerMode}>
+            {modeTexte ? <><Icon name="mic" size={15} /> Mode vocal</> : "Afficher la conversation"}
+          </button>
           {syntheseDispo && (
             <button className="btn-ghost small" onClick={basculerVoix} title={voixActive ? "Couper la voix" : "Activer la voix"}>
               <Icon name={voixActive ? "volume" : "volumeOff"} size={16} /> {voixActive ? "Voix activée" : "Voix coupée"}
             </button>
           )}
-          {messages.length > 0 && (
+          {modeTexte && messages.length > 0 && (
             <button className="btn-ghost small" onClick={nouvelleConversation}>Nouvelle conversation</button>
           )}
         </div>
       </header>
 
-      <div className="assistant-fil">
-        {messages.length === 0 && (
-          <div className="card assistant-accueil">
-            <p>Je peux consulter ton planning, tes rappels, tes clients, tes rapports, tes devis et ta facturation, et ajouter des rappels, des interventions ou des devis à faire après ta validation.</p>
-            <div className="assistant-suggestions">
-              {SUGGESTIONS_ASSISTANT.map((s) => (
-                <button key={s} className="assistant-suggestion" onClick={() => envoyer(s)}>{s}</button>
-              ))}
+      {!modeTexte && (
+        <div className="vocal">
+          <div className="vocal-zone">
+            <div className={"vocal-etat vocal-etat-" + etat}>{libelleEtat}</div>
+            <div className="vocal-texte">
+              {etat === "ecoute" ? transcription : derniereQuestion ? `« ${derniereQuestion} »` : ""}
             </div>
-          </div>
-        )}
-
-        {messages.map((m) => (
-          <div key={m.id} className={"assistant-bulle " + (m.role === "user" ? "bulle-moi" : "bulle-assistant") + (m.erreur ? " bulle-erreur" : "")}>
-            {m.erreur && <span className="bulle-icone"><Icon name="alert" size={14} /></span>}{m.content}
-            {m.role === "assistant" && !m.erreur && syntheseDispo && (
-              <button className="bulle-ecouter" onClick={() => { syntheseVocaleDebloquee = true; lireAVoixHaute(m.content); }} title="Écouter cette réponse">
-                <Icon name="volume" size={13} /> Écouter
-              </button>
+            <button
+              className={"vocal-bouton vocal-bouton-" + etat}
+              onClick={appuiGrandBouton}
+              disabled={!Reconnaissance || chargement}
+              aria-label={etat === "ecoute" ? "Arrêter l'écoute" : "Parler à l'assistant"}
+            >
+              <span className="vocal-onde" />
+              <Icon name={etat === "parole" ? "volume" : "mic"} size={52} />
+            </button>
+            <div className="vocal-sous-bouton">
+              {conversation || etat === "attente" ? (
+                <button className="vocal-lien" onClick={terminerConversation}>Terminer la conversation</button>
+              ) : messages.length === 0 ? (
+                <button className="vocal-lien" onClick={() => { changerConversation(true); envoyer(SUGGESTIONS_ASSISTANT[0]); }}>
+                  Ou appuie ici pour ton briefing du jour
+                </button>
+              ) : (
+                <button className="vocal-lien" onClick={nouvelleConversation}>Nouvelle conversation</button>
+              )}
+            </div>
+            {infoMicro && <div className="vocal-info">{infoMicro}</div>}
+            {derniereErreur && etat !== "reflexion" && (
+              <div className="vocal-erreur"><Icon name="alert" size={14} /> {derniereErreur}</div>
+            )}
+            {!voixActive && derniereReponse && !derniereReponse.erreur && etat !== "reflexion" && (
+              <div className="vocal-reponse-ecrite">{derniereReponse.content}</div>
             )}
           </div>
-        ))}
+          {carteActions}
+        </div>
+      )}
 
-        {chargement && <div className="assistant-bulle bulle-assistant assistant-attente"><span /><span /><span /></div>}
-
-        {actions.length > 0 && (
-          <div className="card assistant-actions">
-            <div className="assistant-actions-titre">À valider</div>
-            {actions.map((a) => (
-              <div key={a.id} className="assistant-action">
-                <div className="assistant-action-texte">{a.resume}</div>
-                <div className="assistant-action-boutons">
-                  <button className="btn-ghost small" onClick={() => annulerAction(a)}>Annuler</button>
-                  <button className="btn-small btn-valide" onClick={() => validerAction(a)}><Icon name="check" size={13} /> Valider</button>
+      {modeTexte && (
+        <>
+          <div className="assistant-fil">
+            {messages.length === 0 && (
+              <div className="card assistant-accueil">
+                <p>Je peux consulter ton planning, tes rappels, tes clients, tes rapports, tes devis et ta facturation, et ajouter des rappels, des interventions ou des devis à faire après ta validation.</p>
+                <div className="assistant-suggestions">
+                  {SUGGESTIONS_ASSISTANT.map((s) => (
+                    <button key={s} className="assistant-suggestion" onClick={() => envoyer(s)}>{s}</button>
+                  ))}
                 </div>
               </div>
-            ))}
-            {actions.length > 1 && (
-              <button className="btn-primary assistant-tout-valider" onClick={validerTout}>Tout valider</button>
             )}
-          </div>
-        )}
-        <div ref={finRef} />
-      </div>
 
-      <div className="assistant-saisie">
-        {infoMicro && <div className="hint assistant-info-micro">{infoMicro}</div>}
-        <div className="assistant-saisie-ligne">
-          <textarea
-            rows={1}
-            value={saisie}
-            onChange={(e) => setSaisie(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); envoyer(); }
-            }}
-            placeholder={ecoute ? "Je t'écoute…" : "Écris ou parle…"}
-          />
-          {Reconnaissance && (
-            <button
-              className={"assistant-micro" + (ecoute ? " en-ecoute" : "")}
-              onClick={demarrerEcoute}
-              disabled={chargement}
-              aria-label={ecoute ? "Arrêter l'écoute" : "Parler à l'assistant"}
-              title={ecoute ? "Arrêter l'écoute" : "Parler à l'assistant"}
-            >
-              <Icon name="mic" size={22} />
-            </button>
-          )}
-          <button className="assistant-envoyer" onClick={() => envoyer()} disabled={chargement || !saisie.trim()} aria-label="Envoyer" title="Envoyer">
-            <Icon name="send" size={20} />
-          </button>
-        </div>
-      </div>
+            {messages.map((m) => (
+              <div key={m.id} className={"assistant-bulle " + (m.role === "user" ? "bulle-moi" : "bulle-assistant") + (m.erreur ? " bulle-erreur" : "")}>
+                {m.erreur && <span className="bulle-icone"><Icon name="alert" size={14} /></span>}{m.content}
+                {m.role === "assistant" && !m.erreur && syntheseDispo && (
+                  <button className="bulle-ecouter" onClick={() => { syntheseVocaleDebloquee = true; lireAVoixHaute(m.content); }} title="Écouter cette réponse">
+                    <Icon name="volume" size={13} /> Écouter
+                  </button>
+                )}
+              </div>
+            ))}
+
+            {chargement && <div className="assistant-bulle bulle-assistant assistant-attente"><span /><span /><span /></div>}
+            {carteActions}
+            <div ref={finRef} />
+          </div>
+
+          <div className="assistant-saisie">
+            {infoMicro && <div className="hint assistant-info-micro">{infoMicro}</div>}
+            <div className="assistant-saisie-ligne">
+              <textarea
+                rows={1}
+                value={saisie}
+                onChange={(e) => setSaisie(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); envoyer(); }
+                }}
+                placeholder={ecoute ? "Je t'écoute…" : "Écris ou parle…"}
+              />
+              {Reconnaissance && (
+                <button
+                  className={"assistant-micro" + (ecoute ? " en-ecoute" : "")}
+                  onClick={() => ecouter()}
+                  disabled={chargement}
+                  aria-label={ecoute ? "Arrêter l'écoute" : "Parler à l'assistant"}
+                  title={ecoute ? "Arrêter l'écoute" : "Parler à l'assistant"}
+                >
+                  <Icon name="mic" size={22} />
+                </button>
+              )}
+              <button className="assistant-envoyer" onClick={() => envoyer()} disabled={chargement || !saisie.trim()} aria-label="Envoyer" title="Envoyer">
+                <Icon name="send" size={20} />
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -6781,6 +6968,36 @@ textarea { resize: vertical; }
 .assistant-envoyer { background: var(--carte); color: var(--bleu); border: 1px solid var(--trait); }
 .assistant-micro:disabled, .assistant-envoyer:disabled { opacity: 0.45; cursor: default; }
 @media (max-width: 780px) { .app .main { padding-bottom: 100px; } }
+/* Mode vocal de l'assistant */
+.vocal { display: flex; flex-direction: column; gap: 18px; }
+.vocal-zone { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 28px 12px 8px; min-height: 52vh; justify-content: center; }
+.vocal-etat { font-family: 'Barlow Condensed', sans-serif; font-size: 26px; font-weight: 600; color: var(--encre); letter-spacing: 0.2px; }
+.vocal-etat-ecoute { color: var(--rouge); }
+.vocal-etat-attente { color: var(--orange-fonce); }
+.vocal-texte { min-height: 48px; max-width: 520px; margin: 8px 0 26px; font-size: 15px; line-height: 1.45; color: var(--encre-3); font-style: italic; }
+.vocal-bouton { position: relative; width: 148px; height: 148px; border-radius: 50%; border: none; background: var(--bleu); color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 10px 30px rgba(47, 111, 163, 0.35); transition: background 0.2s, transform 0.15s; -webkit-tap-highlight-color: transparent; }
+.vocal-bouton:active { transform: scale(0.96); }
+.vocal-bouton:disabled { cursor: default; }
+.vocal-bouton svg { position: relative; z-index: 1; }
+.vocal-onde { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; }
+.vocal-bouton-ecoute { background: var(--rouge); box-shadow: 0 10px 30px rgba(192, 57, 43, 0.35); }
+.vocal-bouton-ecoute .vocal-onde { animation: vocalEcoute 1.4s infinite; }
+@keyframes vocalEcoute { 0% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0.5); } 70% { box-shadow: 0 0 0 28px rgba(192, 57, 43, 0); } 100% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0); } }
+.vocal-bouton-reflexion { background: var(--bleu-fonce); }
+.vocal-bouton-reflexion .vocal-onde { inset: -10px; border: 4px solid transparent; border-top-color: var(--bleu); border-right-color: var(--bleu-clair-2); animation: vocalTourne 1s linear infinite; }
+@keyframes vocalTourne { to { transform: rotate(360deg); } }
+.vocal-bouton-parole .vocal-onde { animation: vocalParole 1.1s ease-in-out infinite; }
+@keyframes vocalParole { 0%, 100% { box-shadow: 0 0 0 6px rgba(47, 111, 163, 0.25), 0 0 0 14px rgba(47, 111, 163, 0.12); } 50% { box-shadow: 0 0 0 12px rgba(47, 111, 163, 0.3), 0 0 0 26px rgba(47, 111, 163, 0.1); } }
+.vocal-bouton-attente { background: var(--orange); box-shadow: 0 10px 30px rgba(217, 118, 43, 0.35); }
+.vocal-bouton-attente .vocal-onde { animation: vocalAttente 1.6s infinite; }
+@keyframes vocalAttente { 0%, 100% { box-shadow: 0 0 0 0 rgba(217, 118, 43, 0.5); } 50% { box-shadow: 0 0 0 18px rgba(217, 118, 43, 0); } }
+.vocal-sous-bouton { margin-top: 26px; min-height: 24px; }
+.vocal-lien { background: none; border: none; color: var(--bleu); font-size: 14px; cursor: pointer; padding: 6px 10px; text-decoration: underline; text-underline-offset: 3px; }
+.vocal-info { margin-top: 12px; font-size: 13px; color: var(--orange-fonce); }
+.vocal-erreur { margin-top: 14px; max-width: 520px; display: flex; gap: 6px; align-items: flex-start; text-align: left; background: var(--rouge-clair); color: var(--rouge-fonce); border: 1px solid var(--rouge-clair-2); border-radius: 10px; padding: 10px 12px; font-size: 13.5px; line-height: 1.45; }
+.vocal-erreur svg { flex-shrink: 0; margin-top: 2px; }
+.vocal-reponse-ecrite { margin-top: 16px; max-width: 520px; background: var(--carte); border: 1px solid var(--trait); border-radius: 12px; padding: 12px 14px; font-size: 14.5px; line-height: 1.5; text-align: left; white-space: pre-wrap; }
+@media (prefers-reduced-motion: reduce) { .vocal-onde { animation: none !important; } }
 .micro-flottant { position: fixed; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 55; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; pointer-events: none; }
 .micro-flottant-btn { pointer-events: auto; width: 60px; height: 60px; border-radius: 50%; border: none; background: var(--bleu); color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 6px 18px rgba(27, 39, 51, 0.28); }
 .micro-flottant-btn:hover { background: var(--bleu-fonce); }
