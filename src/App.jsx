@@ -1219,7 +1219,11 @@ function choisirVoixFrancaise() {
   return voix.find((v) => v.lang === "fr-FR") || voix[0];
 }
 
-const REPONSE_OUI = /^(oui|ouais|ok|okay|d'accord|valide|valider|vas-y|vas y|go|confirme|confirmer|c'est bon|parfait|exact|c'est ça)\b/i;
+const REPONSE_OUI = /^(oui|ouais|ok|okay|d'accord|je valide|valide|valider|vas-y|vas y|go|confirme|confirmer|c'est bon|parfait|exact|c'est ça|yes|tu peux y aller|enregistre|enregistre-le)\b/i;
+// « Envoie » n'est une validation que s'il constitue toute la réponse :
+// « envoie un mail à Julien » est une nouvelle demande, pas un oui.
+const REPONSE_ENVOI = /^(oui,? )?(envoie|envoies|envoyer|envoie-le|envoie-la|envoie le|envoie la|tu peux envoyer|tu peux l'envoyer|tu peux l'envoyer maintenant|envoie maintenant)$/i;
+const estUnOui = (t) => REPONSE_OUI.test(t) || REPONSE_ENVOI.test(t);
 const REPONSE_NON = /^(non|annule|annuler|laisse tomber|stop|pas maintenant)\b/i;
 
 /* ---------- Lecture à voix haute ----------
@@ -1612,8 +1616,10 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     // Réponse courte à une proposition en attente : traitée sur place, sans
     // repasser par l'assistant.
     if (actions.length > 0 && texte.split(/\s+/).length <= 4) {
-      if (REPONSE_OUI.test(texte)) { ajouterMessage("user", texte); validerTout(); return; }
-      if (REPONSE_NON.test(texte)) { ajouterMessage("user", texte); annulerTout(); return; }
+      // La dictée de l'iPhone écrit souvent « d’accord » avec une apostrophe courbe.
+      const reponse = texte.replace(/[’‘]/g, "'").replace(/[.!,]+$/, "");
+      if (estUnOui(reponse)) { ajouterMessage("user", texte); validerTout(); return; }
+      if (REPONSE_NON.test(reponse)) { ajouterMessage("user", texte); annulerTout(); return; }
     }
 
     if (typeof navigator !== "undefined" && navigator.onLine === false) {
