@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Confidentialité — Techni-Pac</title>
+<style>
+  :root { --fond: #EEF2F1; --carte: #FFFFFF; --encre: #1B2733; --encre-2: #4A5860; --trait: #D7DEDD; --bleu: #2F6FA3; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fond: #131A21; --carte: #1C2530; --encre: #E7ECEB; --encre-2: #A9B4B9; --trait: #2C3743; --bleu: #6FA7D6; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fond); color: var(--encre); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 24px 16px; }
+  main { max-width: 760px; margin: 0 auto; background: var(--carte); border: 1px solid var(--trait); border-radius: 12px; padding: 28px 24px; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  h2 { font-size: 18px; margin: 26px 0 8px; }
+  p, li { color: var(--encre-2); }
+  a { color: var(--bleu); }
+  .maj { font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Règles de confidentialité de Techni-Pac</h1>
+  <p class="maj">Dernière mise à jour : 3 octobre 2026</p>
+
+  <p>Techni-Pac est le logiciel de gestion interne de l'entreprise RCLIM PYRÉNÉES (climatisation et pompes à chaleur). Il est réservé à l'usage de l'entreprise et n'est pas proposé au public.</p>
+
+  <h2>Données utilisées</h2>
+  <p>Le logiciel gère les données nécessaires à l'activité : fiches clients et matériel installé, planning, rapports d'intervention, devis, facturation et fournisseurs.</p>
+  <p>Lorsque la boîte Gmail de l'entreprise est connectée, l'assistant intégré peut, à la demande de l'utilisateur :</p>
+  <ul>
+    <li>lire les e-mails et leurs pièces jointes, afin de les résumer ou d'en extraire des informations (par exemple le prix d'un devis fournisseur) ;</li>
+    <li>classer des e-mails avec des libellés ou les archiver ;</li>
+    <li>envoyer un e-mail, uniquement après validation explicite de l'utilisateur.</li>
+  </ul>
+  <p>Aucun e-mail n'est supprimé par le logiciel.</p>
+
+  <h2>Utilisation des données Google</h2>
+  <p>L'utilisation et le transfert vers d'autres applications des informations reçues des API Google respectent les <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">règles relatives aux données utilisateur des services d'API Google</a>, y compris les exigences d'utilisation limitée.</p>
+  <ul>
+    <li>Les données Gmail ne servent qu'à rendre les services demandés par l'utilisateur dans Techni-Pac.</li>
+    <li>Elles ne sont ni vendues, ni partagées à des fins publicitaires, ni utilisées pour entraîner des modèles d'intelligence artificielle.</li>
+    <li>Le contenu nécessaire à une demande est transmis de façon sécurisée au service d'intelligence artificielle utilisé par l'assistant, uniquement pour produire la réponse demandée.</li>
+  </ul>
+
+  <h2>Stockage et sécurité</h2>
+  <p>Les données sont hébergées chez Supabase (Union européenne, Francfort). Le code d'accès à Gmail est conservé côté serveur et n'est jamais accessible depuis le navigateur. L'accès au logiciel est réservé aux comptes de l'entreprise.</p>
+
+  <h2>Révocation de l'accès</h2>
+  <p>L'accès à Gmail peut être retiré à tout moment depuis Techni-Pac (Paramètres → Gmail → Déconnecter) ou depuis la page <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Applications tierces de votre compte Google</a>.</p>
+
+  <h2>Contact</h2>
+  <p>Pour toute question : <a href="mailto:rclimpyrenees@gmail.com">rclimpyrenees@gmail.com</a></p>
+</main>
+</body>
+</html>
