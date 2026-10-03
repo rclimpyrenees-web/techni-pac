@@ -96,6 +96,8 @@ const initialDevisEnCours = [];
 
 const initialFacturation = [];
 
+const initialFournisseurs = [];
+
 /* ---------- Icônes simples (SVG inline, pas de dépendance) ---------- */
 const Icon = ({ name, size = 18 }) => {
   const paths = {
@@ -127,6 +129,8 @@ const Icon = ({ name, size = 18 }) => {
     volume: "M11 5L6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 010 7M19 5a10 10 0 010 14",
     volumeOff: "M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6M17 9l6 6",
     send: "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z",
+    mail: "M3 5h18v14H3V5zm0 0l9 7 9-7",
+    truck: "M1 4h14v12H1V4zm14 4h4l4 4v4h-8V8zM5.5 19a2 2 0 100-4 2 2 0 000 4zm13 0a2 2 0 100-4 2 2 0 000 4z",
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -322,6 +326,9 @@ export default function App() {
   const { items: devisEnCours, upsert: upsertDevisEnCours, remove: removeDevisEnCours, loading: loadingDevisEnCours } = useSyncedCollection("devis_en_cours", initialDevisEnCours);
   const { items: facturation, upsert: upsertFacturation, remove: removeFacturation, loading: loadingFacturation } = useSyncedCollection("facturation", initialFacturation);
   const { settings, saveSettings, loading: loadingSettings } = useSyncedSettings(defaultSettings);
+  // Hors du chargement initial : tant que la table n'existe pas (script SQL
+  // pas encore lancé), le reste de l'application fonctionne normalement.
+  const { items: fournisseurs, upsert: upsertFournisseur, remove: removeFournisseur, error: erreurFournisseurs } = useSyncedCollection("fournisseurs", initialFournisseurs);
 
   const dataLoading = loadingClients || loadingReports || loadingPlanning || loadingDevisAFaire || loadingDevisEnCours || loadingFacturation || loadingSettings;
 
@@ -370,9 +377,13 @@ export default function App() {
       upsertPlanning({ ...tache, fait: true });
       return true;
     }
-    if (action.type === "devis_a_faire" && action.item) {
+    if ((action.type === "devis_a_faire" || action.type === "devis_a_faire_maj") && action.item) {
       upsertDevisAFaire(action.item);
       return true;
+    }
+    // L'envoi d'un e-mail se fait côté serveur, là où se trouve l'accès Gmail.
+    if (action.type === "email" && action.item) {
+      return appelerAssistantExecution(action).then(() => true);
     }
     return false;
   };
@@ -401,6 +412,7 @@ export default function App() {
     { id: "planning", label: "Planning", icon: "calendar" },
     { id: "rappels", label: "Rappels", icon: "bell" },
     { id: "devis", label: "Devis", icon: "quote" },
+    { id: "fournisseurs", label: "Fournisseurs", icon: "truck" },
     { id: "facturation", label: "Facturation", icon: "invoice" },
     { id: "parametres", label: "Paramètres", icon: "settings" },
   ];
@@ -936,6 +948,15 @@ export default function App() {
           />
         )}
 
+        {tab === "fournisseurs" && (
+          <Fournisseurs
+            fournisseurs={fournisseurs}
+            erreur={erreurFournisseurs}
+            onSave={(f) => upsertFournisseur(f)}
+            onDelete={(id) => removeFournisseur(id)}
+          />
+        )}
+
         {tab === "facturation" && (
           <Facturation
             clients={clients}
@@ -1147,6 +1168,23 @@ async function appelerAssistant(messages) {
   return data;
 }
 
+// Exécute côté serveur une action validée (envoi d'un e-mail).
+async function appelerAssistantExecution(action) {
+  const { data, error } = await supabase.functions.invoke("assistant", { body: { executer: action } });
+  if (error) {
+    let detail = error.message;
+    try {
+      if (error.context && typeof error.context.json === "function") {
+        const body = await error.context.json();
+        if (body?.error) detail = body.error;
+      }
+    } catch (_e) { /* message générique */ }
+    throw new Error(detail || "Envoi impossible.");
+  }
+  if (!data?.ok) throw new Error(data?.error || "Envoi impossible.");
+  return data;
+}
+
 const ASSISTANT_VOIX_KEY = "techni-pac-assistant-voix";
 
 function voixActiveEnregistree() {
@@ -1292,7 +1330,7 @@ function lireAVoixHaute(texte, onFin) {
 
 // Onglet d'ouverture demandé dans l'adresse, par exemple par un raccourci
 // Siri : techni-pac.vercel.app/?onglet=assistant
-const ONGLETS_VALIDES = ["dashboard", "assistant", "rapports", "clients", "planning", "rappels", "devis", "facturation", "parametres"];
+const ONGLETS_VALIDES = ["dashboard", "assistant", "rapports", "clients", "planning", "rappels", "devis", "fournisseurs", "facturation", "parametres"];
 function ongletDepuisAdresse() {
   try {
     const demande = new URLSearchParams(window.location.search).get("onglet");
@@ -1508,9 +1546,25 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     setMessages((liste) => [...liste, { id: "m" + Date.now() + Math.random().toString(16).slice(2, 6), role, content, ...extra }]);
   };
 
-  const validerAction = (action) => {
-    const ok = onAppliquerAction(action);
+  // Une action peut être immédiate (planning, devis) ou passer par le
+  // serveur (e-mail) : on attend le résultat dans les deux cas.
+  const executerAction = async (action) => {
+    try {
+      return !!(await onAppliquerAction(action));
+    } catch (e) {
+      ajouterMessage("assistant", `${action.type === "email" ? "L'e-mail n'a pas pu partir" : "Enregistrement impossible"} : ${e?.message || e}`, { erreur: true });
+      return false;
+    }
+  };
+
+  const [actionsEnCours, setActionsEnCours] = useState(false);
+
+  const validerAction = async (action) => {
+    setActionsEnCours(true);
+    const ok = await executerAction(action);
+    setActionsEnCours(false);
     setActions((liste) => liste.filter((a) => a.id !== action.id));
+    if (ok && action.type === "email") ajouterMessage("assistant", "E-mail envoyé.");
     return ok;
   };
 
@@ -1518,10 +1572,19 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     setActions((liste) => liste.filter((a) => a.id !== action.id));
   };
 
-  const validerTout = () => {
-    const nb = actions.filter((a) => onAppliquerAction(a)).length;
+  const validerTout = async () => {
+    const aFaire = actions;
+    setActionsEnCours(true);
+    let nb = 0;
+    for (const a of aFaire) if (await executerAction(a)) nb++;
+    setActionsEnCours(false);
     setActions([]);
-    const texte = nb > 1 ? `C'est enregistré, ${nb} éléments ajoutés.` : nb === 1 ? "C'est enregistré." : "Je n'ai rien pu enregistrer, l'élément n'existe plus.";
+    const avecEmail = aFaire.some((a) => a.type === "email");
+    const texte = nb === 0
+      ? "Je n'ai rien pu enregistrer."
+      : nb < aFaire.length
+        ? `C'est fait pour ${nb} sur ${aFaire.length}. Le détail du problème est affiché.`
+        : avecEmail && aFaire.length === 1 ? "C'est envoyé." : nb > 1 ? `C'est fait, ${nb} éléments traités.` : "C'est enregistré.";
     ajouterMessage("assistant", texte);
     parler(texte);
   };
@@ -1700,15 +1763,20 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       <div className="assistant-actions-titre">À valider</div>
       {actions.map((a) => (
         <div key={a.id} className="assistant-action">
-          <div className="assistant-action-texte">{a.resume}</div>
+          <div className="assistant-action-texte">
+            {a.resume}
+            {a.apercu && <div className="assistant-action-apercu">{a.apercu}</div>}
+          </div>
           <div className="assistant-action-boutons">
-            <button className="btn-ghost small" onClick={() => annulerAction(a)}>Annuler</button>
-            <button className="btn-small btn-valide" onClick={() => validerAction(a)}><Icon name="check" size={13} /> Valider</button>
+            <button className="btn-ghost small" onClick={() => annulerAction(a)} disabled={actionsEnCours}>Annuler</button>
+            <button className="btn-small btn-valide" onClick={() => validerAction(a)} disabled={actionsEnCours}>
+              <Icon name={a.type === "email" ? "send" : "check"} size={13} /> {a.type === "email" ? (actionsEnCours ? "Envoi…" : "Envoyer") : "Valider"}
+            </button>
           </div>
         </div>
       ))}
       {actions.length > 1 && (
-        <button className="btn-primary assistant-tout-valider" onClick={validerTout}>Tout valider</button>
+        <button className="btn-primary assistant-tout-valider" onClick={validerTout} disabled={actionsEnCours}>Tout valider</button>
       )}
     </div>
   );
@@ -2067,6 +2135,232 @@ function NotificationsSection() {
   );
 }
 
+/* ---------- Connexion Gmail (Paramètres) ----------
+   La connexion passe par la fonction Supabase « gmail-connexion » : Google
+   renvoie vers elle, elle enregistre l'accès côté serveur, puis ramène ici.
+   Le code d'accès n'est jamais visible dans le navigateur. */
+async function appelerGmailConnexion(action, extra = {}) {
+  const { data, error } = await supabase.functions.invoke("gmail-connexion", { body: { action, ...extra } });
+  if (error) {
+    let detail = error.message;
+    try {
+      if (error.context?.status === 404) detail = "La fonction « gmail-connexion » n'est pas encore déployée dans Supabase.";
+      else if (error.context && typeof error.context.json === "function") {
+        const body = await error.context.json();
+        if (body?.error) detail = body.error;
+      }
+    } catch (_e) {
+      // Corps illisible : message générique.
+    }
+    throw new Error(detail || "Erreur de connexion à la fonction Gmail.");
+  }
+  if (!data?.ok) throw new Error(data?.error || "Réponse inattendue de la fonction Gmail.");
+  return data;
+}
+
+function GmailSection() {
+  const [etat, setEtat] = useState(null); // null = chargement
+  const [enCours, setEnCours] = useState(false);
+  const [message, setMessage] = useState(null);
+
+  const charger = () => {
+    appelerGmailConnexion("etat")
+      .then((d) => setEtat(d))
+      .catch((e) => { setEtat({ connecte: false }); setMessage({ type: "erreur", texte: String(e.message || e) }); });
+  };
+  useEffect(charger, []);
+
+  const connecter = async () => {
+    setEnCours(true);
+    setMessage(null);
+    try {
+      const { url } = await appelerGmailConnexion("lien", { retour: window.location.origin });
+      window.location.href = url;
+    } catch (e) {
+      setMessage({ type: "erreur", texte: String(e.message || e) });
+      setEnCours(false);
+    }
+  };
+
+  const deconnecter = async () => {
+    setEnCours(true);
+    setMessage(null);
+    try {
+      await appelerGmailConnexion("deconnecter");
+      setEtat({ connecte: false });
+      setMessage({ type: "ok", texte: "Gmail est déconnecté : l'assistant n'a plus accès à la boîte." });
+    } catch (e) {
+      setMessage({ type: "erreur", texte: String(e.message || e) });
+    }
+    setEnCours(false);
+  };
+
+  return (
+    <section className="card">
+      <h3>Gmail</h3>
+      <p className="hint">
+        Reliez la boîte Gmail de l'entreprise à l'assistant : il pourra faire le point sur les mails, lire les devis
+        fournisseurs en pièce jointe et préparer des e-mails, toujours envoyés après votre validation. Une seule connexion
+        suffit pour tous les appareils : faites-la de préférence depuis l'ordinateur.
+      </p>
+
+      {message && (
+        <div className={"entretien-annuel-badge " + (message.type === "ok" ? "ok" : "late")}>
+          <Icon name={message.type === "ok" ? "check" : "alert"} size={14} /> {message.texte}
+        </div>
+      )}
+
+      <div className="notif-actions">
+        {etat === null ? (
+          <span className="hint">Vérification…</span>
+        ) : etat.connecte ? (
+          <>
+            <span className="pill pill-ok"><Icon name="check" size={13} /> Connecté{etat.email ? ` : ${etat.email}` : ""}</span>
+            <DeleteButton label="Déconnecter" onConfirm={deconnecter} />
+          </>
+        ) : (
+          <button className="btn-primary" onClick={connecter} disabled={enCours}>
+            <Icon name="mail" size={16} /> {enCours ? "Ouverture de Google…" : "Connecter Gmail"}
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/* ---------- Fournisseurs ----------
+   Utilisés par l'assistant pour les demandes de prix : à qui écrire, et
+   quelles marques chaque fournisseur distribue. */
+function FournisseurForm({ initial, onCancel, onSubmit }) {
+  const [nom, setNom] = useState(initial?.nom || "");
+  const [contact, setContact] = useState(initial?.contact || "");
+  const [email, setEmail] = useState(initial?.email || "");
+  const [tel, setTel] = useState(initial?.tel || "");
+  const [marques, setMarques] = useState(initial?.marques || "");
+  const [notes, setNotes] = useState(initial?.notes || "");
+
+  const emailValide = !email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+  const enregistrer = () => {
+    if (!nom.trim() || !emailValide) return;
+    onSubmit({
+      id: initial?.id || "fo" + Date.now(),
+      nom: nom.trim(),
+      contact: contact.trim(),
+      email: email.trim(),
+      tel,
+      marques: marques.trim(),
+      notes: notes.trim(),
+    });
+  };
+
+  return (
+    <div className="card form-card">
+      <div className="form-grid">
+        <label>Nom du fournisseur<input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ex : Clim Distribution Perpignan" /></label>
+        <label>Contact<input value={contact} onChange={(e) => setContact(e.target.value)} placeholder="Ex : Julien, comptoir" /></label>
+        <label>E-mail pour les devis
+          <input type="email" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="devis@fournisseur.fr" />
+          {!emailValide && <span className="hint alerte"><Icon name="alert" size={13} /> Adresse e-mail invalide</span>}
+        </label>
+        <label>Téléphone
+          <input value={tel} onChange={(e) => setTel(formaterTelephone(e.target.value))} inputMode="tel" placeholder="04 00 00 00 00" />
+        </label>
+        <label className="grid-full">Marques et produits
+          <input value={marques} onChange={(e) => setMarques(e.target.value)} placeholder="Ex : Daikin, Mitsubishi, pièces détachées, fluides" />
+          <span className="hint">L'assistant s'en sert pour choisir à qui demander un prix.</span>
+        </label>
+        <label className="grid-full">Notes
+          <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ex : compte client n° 1234, livraison le lendemain avant 10h" />
+        </label>
+      </div>
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Annuler</button>
+        <button className="btn-primary" onClick={enregistrer} disabled={!nom.trim() || !emailValide}>
+          {initial ? "Enregistrer les modifications" : "Ajouter le fournisseur"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Fournisseurs({ fournisseurs, erreur, onSave, onDelete }) {
+  const [edition, setEdition] = useState(null); // null, "nouveau" ou le fournisseur modifié
+  const [recherche, setRecherche] = useState("");
+
+  const sansAccent = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const mots = sansAccent(recherche).split(/\s+/).filter(Boolean);
+  const affiches = [...fournisseurs]
+    .sort((a, b) => String(a.nom || "").localeCompare(String(b.nom || ""), "fr"))
+    .filter((f) => {
+      const botte = sansAccent([f.nom, f.contact, f.email, f.tel, f.marques, f.notes].join(" "));
+      return mots.every((m) => botte.includes(m));
+    });
+
+  return (
+    <div>
+      <header className="page-head row-between">
+        <div>
+          <h1>Fournisseurs</h1>
+          <p>Vos fournisseurs habituels : l'assistant s'en sert pour les demandes de prix</p>
+        </div>
+        <button className="btn-primary" onClick={() => setEdition(edition === "nouveau" ? null : "nouveau")}>
+          <Icon name="plus" size={16} /> Nouveau fournisseur
+        </button>
+      </header>
+
+      {erreur && (
+        <div className="card">
+          <p className="hint alerte"><Icon name="alert" size={13} /> La liste des fournisseurs n'est pas encore disponible : le script SQL de création de la table « fournisseurs » doit être lancé dans Supabase.</p>
+        </div>
+      )}
+
+      {edition && (
+        <FournisseurForm
+          key={edition === "nouveau" ? "nouveau" : edition.id}
+          initial={edition === "nouveau" ? null : edition}
+          onCancel={() => setEdition(null)}
+          onSubmit={(f) => { onSave(f); setEdition(null); }}
+        />
+      )}
+
+      <section className="card">
+        {fournisseurs.length > 3 && (
+          <div className="recherche-client">
+            <input value={recherche} onChange={(e) => setRecherche(e.target.value)} placeholder="Rechercher : nom, marque, produit..." />
+            {recherche && (
+              <button type="button" className="icon-btn" onClick={() => setRecherche("")} title="Effacer la recherche">
+                <Icon name="close" size={15} />
+              </button>
+            )}
+          </div>
+        )}
+        <ul className="list">
+          {fournisseurs.length === 0 && <li className="empty">Aucun fournisseur pour l'instant. Ajoutez ceux à qui vous demandez des prix.</li>}
+          {fournisseurs.length > 0 && affiches.length === 0 && <li className="empty">Aucun fournisseur ne correspond à cette recherche.</li>}
+          {affiches.map((f) => (
+            <li key={f.id} className="row">
+              <div className="fournisseur-infos">
+                <div className="row-title">{f.nom}{f.contact ? <span className="fournisseur-contact"> · {f.contact}</span> : null}</div>
+                {f.marques && <div className="row-sub">{f.marques}</div>}
+                <div className="fournisseur-liens">
+                  {f.email && <a className="telephone-lien" href={`mailto:${f.email}`}><Icon name="mail" size={13} /><span>{f.email}</span></a>}
+                  <TelephoneLien numero={f.tel} />
+                </div>
+                {f.notes && <div className="row-sub fournisseur-notes">{f.notes}</div>}
+              </div>
+              <div className="fournisseur-actions">
+                <button className="icon-btn" onClick={() => setEdition(f)} title="Modifier ce fournisseur"><Icon name="edit" size={15} /></button>
+                <DeleteButton onConfirm={() => onDelete(f.id)} />
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  );
+}
+
 /* ---------- Paramètres ---------- */
 function Parametres({ settings, setSettings, theme, setTheme }) {
   const [draft, setDraft] = useState(settings);
@@ -2227,6 +2521,7 @@ function Parametres({ settings, setSettings, theme, setTheme }) {
       </section>
 
       <NotificationsSection />
+      <GmailSection />
 
       <section className="card">
         <h3>Facturation Pennylane</h3>
@@ -6940,6 +7235,13 @@ textarea { resize: vertical; }
 .bulle-moi { align-self: flex-end; background: var(--bleu); color: #fff; border-bottom-right-radius: 4px; }
 .bulle-assistant { align-self: flex-start; background: var(--carte); color: var(--encre); border: 1px solid var(--trait); border-bottom-left-radius: 4px; }
 .bulle-erreur { background: var(--rouge-clair); color: var(--rouge-fonce); border-color: var(--rouge-clair-2); }
+.assistant-action-apercu { margin-top: 8px; padding: 10px 12px; background: var(--carte); border: 1px solid var(--trait); border-radius: 8px; font-size: 13.5px; line-height: 1.5; color: var(--encre-2); white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
+.fournisseur-infos { min-width: 0; flex: 1; }
+.fournisseur-contact { font-weight: 400; color: var(--encre-3); }
+.fournisseur-liens { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; }
+.fournisseur-notes { margin-top: 4px; font-style: italic; }
+.fournisseur-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.fournisseur-actions .btn-ghost.small { margin: 0; }
 .bulle-ecouter { display: flex; align-items: center; gap: 5px; margin-top: 8px; padding: 4px 10px; border-radius: 14px; border: 1px solid var(--trait); background: var(--fond-doux); color: var(--encre-3); font-size: 12px; cursor: pointer; }
 .bulle-ecouter:hover { color: var(--bleu); border-color: var(--bleu-clair-2); }
 .bulle-icone { display: inline-flex; vertical-align: -2px; margin-right: 6px; }
