@@ -2473,30 +2473,6 @@ function Parametres({ settings, setSettings, theme, setTheme }) {
       </div>
 
       <section className="card">
-        <h3>Modèles de tableaux</h3>
-        <p className="hint">Créez des trames de tableau réutilisables (ex : relevés de pressions). Elles seront proposées lors de la création d'un rapport de mise en service — vous pourrez toujours les modifier librement une fois insérées.</p>
-        {(draft.tableaux || []).length === 0 && <p className="empty">Aucun modèle créé pour le moment.</p>}
-        {(draft.tableaux || []).map((t) => (
-          <div key={t.id} className="card machine-editor-card">
-            <TemplateTableEditor template={t} onChange={(next) => updateTableau(t.id, next)} onRemove={() => removeTableau(t.id)} />
-          </div>
-        ))}
-        <button type="button" className="btn-ghost small" onClick={addTableau}><Icon name="plus" size={14} /> Ajouter un modèle de tableau</button>
-      </section>
-
-      <section className="card">
-        <h3>Modèles de checklist</h3>
-        <p className="hint">Créez des checklists réutilisables. Elles seront proposées dans les rapports du type choisi — vous pourrez toujours les modifier librement une fois insérées.</p>
-        {(draft.checklists || []).length === 0 && <p className="empty">Aucun modèle créé pour le moment.</p>}
-        {(draft.checklists || []).map((t) => (
-          <div key={t.id} className="card machine-editor-card">
-            <ChecklistTemplateEditor template={t} onChange={(next) => updateChecklistTpl(t.id, next)} onRemove={() => removeChecklistTpl(t.id)} />
-          </div>
-        ))}
-        <button type="button" className="btn-ghost small" onClick={addChecklistTpl}><Icon name="plus" size={14} /> Ajouter un modèle de checklist</button>
-      </section>
-
-      <section className="card">
         <h3>Apparence</h3>
         <p className="hint">
           Le mode sombre repose les yeux en atelier et le soir ; le mode clair reste plus lisible
@@ -2545,6 +2521,30 @@ function Parametres({ settings, setSettings, theme, setTheme }) {
             <span className="hint">Valeur pré-sélectionnée dans chaque rapport — vous pouvez toujours choisir un autre taux directement sur un rapport si besoin.</span>
           </label>
         )}
+      </section>
+
+      <section className="card">
+        <h3>Modèles de tableaux</h3>
+        <p className="hint">Créez des trames de tableau réutilisables (ex : relevés de pressions). Elles seront proposées lors de la création d'un rapport de mise en service — vous pourrez toujours les modifier librement une fois insérées.</p>
+        {(draft.tableaux || []).length === 0 && <p className="empty">Aucun modèle créé pour le moment.</p>}
+        {(draft.tableaux || []).map((t) => (
+          <div key={t.id} className="card machine-editor-card">
+            <TemplateTableEditor template={t} onChange={(next) => updateTableau(t.id, next)} onRemove={() => removeTableau(t.id)} />
+          </div>
+        ))}
+        <button type="button" className="btn-ghost small" onClick={addTableau}><Icon name="plus" size={14} /> Ajouter un modèle de tableau</button>
+      </section>
+
+      <section className="card">
+        <h3>Modèles de checklist</h3>
+        <p className="hint">Créez des checklists réutilisables. Elles seront proposées dans les rapports du type choisi — vous pourrez toujours les modifier librement une fois insérées.</p>
+        {(draft.checklists || []).length === 0 && <p className="empty">Aucun modèle créé pour le moment.</p>}
+        {(draft.checklists || []).map((t) => (
+          <div key={t.id} className="card machine-editor-card">
+            <ChecklistTemplateEditor template={t} onChange={(next) => updateChecklistTpl(t.id, next)} onRemove={() => removeChecklistTpl(t.id)} />
+          </div>
+        ))}
+        <button type="button" className="btn-ghost small" onClick={addChecklistTpl}><Icon name="plus" size={14} /> Ajouter un modèle de checklist</button>
       </section>
 
       <div className="form-actions">
