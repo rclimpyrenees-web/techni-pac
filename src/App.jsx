@@ -386,7 +386,7 @@ export default function App() {
     }
     // E-mail, rangement d'une pièce jointe dans OneDrive, règle de
     // classement : exécutés côté serveur, là où se trouvent les accès.
-    if (["email", "classer_pj", "regle"].includes(action.type) && action.item) {
+    if (["email", "classer_pj", "regle", "dossier"].includes(action.type) && action.item) {
       return appelerAssistantExecution(action).then(() => true);
     }
     return false;
@@ -1560,7 +1560,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     try {
       return !!(await onAppliquerAction(action));
     } catch (e) {
-      const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : "Enregistrement impossible";
+      const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : action.type === "dossier" ? "Le dossier n'a pas pu être créé" : "Enregistrement impossible";
       ajouterMessage("assistant", `${quoi} : ${e?.message || e}`, { erreur: true });
       return false;
     }
@@ -1576,6 +1576,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     if (ok && action.type === "email") ajouterMessage("assistant", "E-mail envoyé.");
     if (ok && action.type === "classer_pj") ajouterMessage("assistant", "Fichier rangé dans OneDrive.");
     if (ok && action.type === "regle") ajouterMessage("assistant", "Règle de classement ajoutée.");
+    if (ok && action.type === "dossier") ajouterMessage("assistant", (action.item?.chemins?.length || 0) > 1 ? "Dossiers créés dans OneDrive." : "Dossier créé dans OneDrive.");
     return ok;
   };
 
