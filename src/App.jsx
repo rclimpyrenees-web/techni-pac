@@ -384,8 +384,9 @@ export default function App() {
       upsertDevisAFaire(action.item);
       return true;
     }
-    // L'envoi d'un e-mail se fait côté serveur, là où se trouve l'accès Gmail.
-    if (action.type === "email" && action.item) {
+    // E-mail, rangement d'une pièce jointe dans OneDrive, règle de
+    // classement : exécutés côté serveur, là où se trouvent les accès.
+    if (["email", "classer_pj", "regle"].includes(action.type) && action.item) {
       return appelerAssistantExecution(action).then(() => true);
     }
     return false;
@@ -1559,7 +1560,8 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     try {
       return !!(await onAppliquerAction(action));
     } catch (e) {
-      ajouterMessage("assistant", `${action.type === "email" ? "L'e-mail n'a pas pu partir" : "Enregistrement impossible"} : ${e?.message || e}`, { erreur: true });
+      const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : "Enregistrement impossible";
+      ajouterMessage("assistant", `${quoi} : ${e?.message || e}`, { erreur: true });
       return false;
     }
   };
@@ -1572,6 +1574,8 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     setActionsEnCours(false);
     setActions((liste) => liste.filter((a) => a.id !== action.id));
     if (ok && action.type === "email") ajouterMessage("assistant", "E-mail envoyé.");
+    if (ok && action.type === "classer_pj") ajouterMessage("assistant", "Fichier rangé dans OneDrive.");
+    if (ok && action.type === "regle") ajouterMessage("assistant", "Règle de classement ajoutée.");
     return ok;
   };
 
@@ -2660,10 +2664,20 @@ function OneDriveSection({ etat, onChange }) {
   );
 }
 
+// Mêmes règles par défaut que dans la fonction assistant.
+const REGLES_CLASSEMENT_PAR_DEFAUT = `Factures fournisseurs → Bureau/RCLIM PYRENEES/FOURNISSEURS/1-FACTURES FOURNISSEURS/[ANNÉE]/[MOIS ANNÉE en majuscules sans accent, ex. AOUT 2026] — mois et année de la facture (pas de la réception). Nom du fichier : [FOURNISSEUR en majuscules] [MM.AA], ex. WURTH 08.26 ; s'il y en a déjà une ce mois-là, le numéro est ajouté automatiquement (PARTEDIS 2 08.26).
+Documents d'un client (devis signé, bon de commande, photos, plans…) → Bureau/RCLIM PYRENEES/CLIENTS/[dossier du client]/[DEVIS, FACTURES, RAPPORTS, CONTRAT ou PHOTOS]. Nom du fichier : [NOM] [JJ.MM.AA] [TYPE], ex. BERNADET 03.10.26 DEVIS SIGNE.`;
+
 /* ---------- Paramètres ---------- */
 function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);
+  // Une règle ajoutée depuis l'assistant apparaît ici tout de suite, tant
+  // que le champ n'est pas en cours de modification.
+  const reglesModifiees = useRef(false);
+  useEffect(() => {
+    if (!reglesModifiees.current) setDraft((d) => ({ ...d, reglesClassement: settings.reglesClassement }));
+  }, [settings.reglesClassement]);
 
   const updateTechnicien = (patch) => { setDraft((s) => ({ ...s, technicien: { ...s.technicien, ...patch } })); setSaved(false); };
   const updateEntreprise = (patch) => { setDraft((s) => ({ ...s, entreprise: { ...s.entreprise, ...patch } })); setSaved(false); };
@@ -2698,6 +2712,7 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
   const handleSave = () => {
     setSettings(draft);
     setSaved(true);
+    reglesModifiees.current = false;
   };
 
   return (
@@ -2798,6 +2813,22 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
       <NotificationsSection />
       <GmailSection />
       {oneDrive && <OneDriveSection etat={oneDrive.etat} onChange={oneDrive.rafraichir} />}
+
+      <section className="card">
+        <h3>Règles de classement</h3>
+        <p className="hint">
+          Où l'assistant range les fichiers reçus par e-mail (factures fournisseurs, documents clients…), écrit en langage
+          courant, une règle par ligne. Il les suit et vous demande quand aucune ne convient. Vous pouvez aussi lui dire
+          « à l'avenir, range les factures X dans… » : il proposera d'ajouter la règle.
+        </p>
+        <textarea
+          className="regles-classement"
+          rows={8}
+          value={draft.reglesClassement ?? REGLES_CLASSEMENT_PAR_DEFAUT}
+          onChange={(e) => { reglesModifiees.current = true; setDraft((d) => ({ ...d, reglesClassement: e.target.value })); setSaved(false); }}
+        />
+        <span className="hint">Pensez à cliquer sur « Enregistrer les modifications » en bas de la page.</span>
+      </section>
 
       <section className="card">
         <h3>Facturation Pennylane</h3>
@@ -7541,6 +7572,7 @@ textarea { resize: vertical; }
 .bulle-moi { align-self: flex-end; background: var(--bleu); color: #fff; border-bottom-right-radius: 4px; }
 .bulle-assistant { align-self: flex-start; background: var(--carte); color: var(--encre); border: 1px solid var(--trait); border-bottom-left-radius: 4px; }
 .bulle-erreur { background: var(--rouge-clair); color: var(--rouge-fonce); border-color: var(--rouge-clair-2); }
+.regles-classement { width: 100%; margin: 6px 0 4px; font: inherit; font-size: 13.5px; line-height: 1.55; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--trait); background: var(--carte); color: var(--encre); resize: vertical; }
 .pill-onedrive { background: var(--bleu-clair); color: var(--bleu-fonce); }
 .onedrive-dossier { margin-top: 12px; line-height: 1.6; }
 .onedrive-dossier svg { color: var(--vert); vertical-align: -2px; margin-right: 4px; }
