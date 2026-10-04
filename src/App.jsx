@@ -2664,9 +2664,191 @@ function OneDriveSection({ etat, onChange }) {
   );
 }
 
-// Mêmes règles par défaut que dans la fonction assistant.
-const REGLES_CLASSEMENT_PAR_DEFAUT = `Factures fournisseurs → Bureau/RCLIM PYRENEES/FOURNISSEURS/1-FACTURES FOURNISSEURS/[ANNÉE]/[MOIS ANNÉE en majuscules sans accent, ex. AOUT 2026] — mois et année de la facture (pas de la réception). Nom du fichier : [FOURNISSEUR en majuscules] [MM.AA], ex. WURTH 08.26 ; s'il y en a déjà une ce mois-là, le numéro est ajouté automatiquement (PARTEDIS 2 08.26).
-Documents d'un client (devis signé, bon de commande, photos, plans…) → Bureau/RCLIM PYRENEES/CLIENTS/[dossier du client]/[DEVIS, FACTURES, RAPPORTS, CONTRAT ou PHOTOS]. Nom du fichier : [NOM] [JJ.MM.AA] [TYPE], ex. BERNADET 03.10.26 DEVIS SIGNE.`;
+/* ---------- Règles de classement ----------
+   Chaque règle dit où l'assistant range un type de document reçu par
+   e-mail : le dossier est choisi dans un explorateur du OneDrive, puis on
+   indique les sous-dossiers à créer et la façon de nommer le fichier. Le
+   texte lu par l'assistant (settings.reglesClassement) est produit à partir
+   de cette liste à l'enregistrement. */
+
+const SOUS_DOSSIERS_REGLE = [
+  { id: "aucun", libelle: "Directement dans ce dossier" },
+  { id: "annee", libelle: "Un sous-dossier par année (2026)" },
+  { id: "annee_mois", libelle: "Par année puis par mois (2026 / AOUT 2026)" },
+  { id: "client", libelle: "Dans le dossier du client (DEVIS, FACTURES…)" },
+];
+
+const NOMMAGES_REGLE = [
+  { id: "fournisseur_mois", libelle: "FOURNISSEUR MM.AA (ex. WURTH 08.26)" },
+  { id: "nom_date_type", libelle: "NOM JJ.MM.AA TYPE (ex. BERNADET 03.10.26 DEVIS)" },
+  { id: "origine", libelle: "Garder le nom d'origine" },
+  { id: "libre", libelle: "Autre (à préciser)" },
+];
+
+const REGLES_CLASSEMENT_DEFAUT_LISTE = [
+  { id: "rg1", quoi: "Factures fournisseurs", dossier: "Bureau/RCLIM PYRENEES/FOURNISSEURS/1-FACTURES FOURNISSEURS", sousDossiers: "annee_mois", nommage: "fournisseur_mois", nommageLibre: "" },
+  { id: "rg2", quoi: "Documents d'un client (devis signé, bon de commande, photos, plans…)", dossier: "Bureau/RCLIM PYRENEES/CLIENTS", sousDossiers: "client", nommage: "nom_date_type", nommageLibre: "" },
+];
+
+// Même mise en forme que dans la fonction assistant (texte lu par l'IA).
+function texteReglesClassement(liste) {
+  return (liste || [])
+    .filter((r) => r.quoi && r.quoi.trim() && r.dossier && r.dossier.trim())
+    .map((r) => {
+      const sous = {
+        aucun: "",
+        annee: "/[ANNÉE]",
+        annee_mois: "/[ANNÉE]/[MOIS ANNÉE en majuscules sans accent, ex. AOUT 2026] — mois et année du document, pas de la réception",
+        client: "/[dossier du client]/[DEVIS, FACTURES, RAPPORTS, CONTRAT ou PHOTOS selon le document]",
+      }[r.sousDossiers || "aucun"] || "";
+      const nom = {
+        fournisseur_mois: "[FOURNISSEUR en majuscules] [MM.AA], ex. WURTH 08.26 (s'il en existe déjà, le numéro est ajouté automatiquement : PARTEDIS 2 08.26)",
+        nom_date_type: "[NOM] [JJ.MM.AA] [TYPE], ex. BERNADET 03.10.26 DEVIS SIGNE",
+        origine: "garder le nom d'origine du fichier",
+        libre: r.nommageLibre || "garder le nom d'origine du fichier",
+      }[r.nommage || "origine"];
+      return `${r.quoi.trim()} → ${r.dossier.trim()}${sous}. Nom du fichier : ${nom}.`;
+    })
+    .join("\n");
+}
+
+function ExplorateurOneDrive({ depart, onChoisir, onFermer }) {
+  const [chemin, setChemin] = useState(depart || "");
+  const [contenu, setContenu] = useState(null);
+  const [erreur, setErreur] = useState("");
+
+  useEffect(() => {
+    let actif = true;
+    setContenu(null);
+    setErreur("");
+    appelerOneDrive("parcourir", { chemin })
+      .then((res) => {
+        if (!actif) return;
+        if (!res.existe) {
+          // Dossier disparu (renommé, supprimé) : on remonte d'un cran.
+          if (chemin) setChemin(chemin.split("/").slice(0, -1).join("/"));
+          else setContenu([]);
+          return;
+        }
+        setContenu((res.contenu || []).filter((x) => x.type === "dossier"));
+      })
+      .catch((e) => { if (actif) setErreur(String(e.message || e)); });
+    return () => { actif = false; };
+  }, [chemin]);
+
+  const segments = chemin ? chemin.split("/") : [];
+
+  return (
+    <div className="pdf-modal-overlay" onClick={onFermer}>
+      <div className="pdf-modal-box explorateur" onClick={(e) => e.stopPropagation()}>
+        <div className="pdf-modal-toolbar">
+          <span className="pdf-modal-title"><Icon name="folder" size={16} /> Choisir un dossier OneDrive</span>
+          <button className="icon-btn" onClick={onFermer} aria-label="Fermer"><Icon name="close" size={18} /></button>
+        </div>
+
+        <div className="explorateur-chemin" role="navigation" aria-label="Emplacement">
+          <button className="explorateur-segment" onClick={() => setChemin("")}>OneDrive</button>
+          {segments.map((seg, i) => (
+            <React.Fragment key={i}>
+              <Icon name="chevronRight" size={14} />
+              <button className="explorateur-segment" onClick={() => setChemin(segments.slice(0, i + 1).join("/"))}>{seg}</button>
+            </React.Fragment>
+          ))}
+        </div>
+
+        <div className="explorateur-liste">
+          {erreur && <p className="hint alerte"><Icon name="alert" size={13} /> {erreur}</p>}
+          {!erreur && contenu === null && <p className="hint">Chargement…</p>}
+          {contenu && contenu.length === 0 && <p className="hint">Aucun sous-dossier ici.</p>}
+          {contenu && contenu.map((d) => (
+            <button key={d.id} className="explorateur-dossier" onClick={() => setChemin(chemin ? `${chemin}/${d.nom}` : d.nom)}>
+              <Icon name="folder" size={18} />
+              <span>{d.nom}</span>
+              <Icon name="chevronRight" size={16} />
+            </button>
+          ))}
+        </div>
+
+        <div className="explorateur-pied">
+          <span className="explorateur-choix">{chemin || "Racine du OneDrive"}</span>
+          <div className="explorateur-boutons">
+            <button className="btn-ghost" onClick={onFermer}>Annuler</button>
+            <button className="btn-primary" onClick={() => onChoisir(chemin)} disabled={!chemin}>Choisir ce dossier</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReglesClassement({ liste, onChange, oneDriveConnecte }) {
+  const [explorateurPour, setExplorateurPour] = useState(null); // id de la règle
+
+  const modifier = (id, patch) => onChange(liste.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const ajouter = () => onChange([...liste, { id: "rg" + Date.now(), quoi: "", dossier: "", sousDossiers: "aucun", nommage: "origine", nommageLibre: "" }]);
+  const supprimer = (id) => onChange(liste.filter((r) => r.id !== id));
+  const regleOuverte = liste.find((r) => r.id === explorateurPour);
+
+  return (
+    <section className="card">
+      <h3>Règles de classement</h3>
+      <p className="hint">
+        Où l'assistant range les fichiers reçus par e-mail. Pour chaque type de document, choisissez le dossier dans votre
+        OneDrive. Quand aucune règle ne convient, l'assistant vous demande ; vous pouvez aussi lui dire « à l'avenir,
+        range les factures X dans… » et il proposera d'ajouter la règle.
+      </p>
+      {!oneDriveConnecte && <p className="hint alerte"><Icon name="alert" size={13} /> Connectez d'abord OneDrive (section au-dessus) pour pouvoir choisir les dossiers.</p>}
+
+      <div className="regles-liste">
+        {liste.map((r) => (
+          <div key={r.id} className="regle">
+            <label>Type de document
+              <input value={r.quoi} onChange={(e) => modifier(r.id, { quoi: e.target.value })} placeholder="Ex : Notices et documentations techniques" />
+            </label>
+            <div className="field-col">
+              Dossier
+              <button type="button" className={"regle-dossier" + (r.dossier ? "" : " vide")} onClick={() => setExplorateurPour(r.id)} disabled={!oneDriveConnecte}>
+                <Icon name="folder" size={16} />
+                <span>{r.dossier || "Choisir le dossier…"}</span>
+              </button>
+            </div>
+            <div className="regle-options">
+              <label>Rangement dans le dossier
+                <select value={r.sousDossiers} onChange={(e) => modifier(r.id, { sousDossiers: e.target.value })}>
+                  {SOUS_DOSSIERS_REGLE.map((o) => <option key={o.id} value={o.id}>{o.libelle}</option>)}
+                </select>
+              </label>
+              <label>Nom du fichier
+                <select value={r.nommage} onChange={(e) => modifier(r.id, { nommage: e.target.value })}>
+                  {NOMMAGES_REGLE.map((o) => <option key={o.id} value={o.id}>{o.libelle}</option>)}
+                </select>
+              </label>
+            </div>
+            {r.nommage === "libre" && (
+              <label>Nom à donner
+                <input value={r.nommageLibre} onChange={(e) => modifier(r.id, { nommageLibre: e.target.value })} placeholder="Ex : MARQUE MODELE NOTICE" />
+              </label>
+            )}
+            <div className="regle-actions">
+              <DeleteButton label="Supprimer la règle" onConfirm={() => supprimer(r.id)} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <button type="button" className="btn-ghost" onClick={ajouter}><Icon name="plus" size={15} /> Ajouter une règle</button>
+      <p className="hint">Pensez à cliquer sur le bouton d'enregistrement en bas de la page.</p>
+
+      {regleOuverte && (
+        <ExplorateurOneDrive
+          depart={regleOuverte.dossier || "Bureau/RCLIM PYRENEES"}
+          onFermer={() => setExplorateurPour(null)}
+          onChoisir={(chemin) => { modifier(regleOuverte.id, { dossier: chemin }); setExplorateurPour(null); }}
+        />
+      )}
+    </section>
+  );
+}
 
 /* ---------- Paramètres ---------- */
 function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
@@ -2676,8 +2858,8 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
   // que le champ n'est pas en cours de modification.
   const reglesModifiees = useRef(false);
   useEffect(() => {
-    if (!reglesModifiees.current) setDraft((d) => ({ ...d, reglesClassement: settings.reglesClassement }));
-  }, [settings.reglesClassement]);
+    if (!reglesModifiees.current) setDraft((d) => ({ ...d, reglesClassementListe: settings.reglesClassementListe, reglesClassement: settings.reglesClassement }));
+  }, [settings.reglesClassementListe, settings.reglesClassement]);
 
   const updateTechnicien = (patch) => { setDraft((s) => ({ ...s, technicien: { ...s.technicien, ...patch } })); setSaved(false); };
   const updateEntreprise = (patch) => { setDraft((s) => ({ ...s, entreprise: { ...s.entreprise, ...patch } })); setSaved(false); };
@@ -2710,7 +2892,9 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
   };
 
   const handleSave = () => {
-    setSettings(draft);
+    // Le texte lu par l'assistant est reconstruit à partir des règles.
+    const liste = draft.reglesClassementListe || REGLES_CLASSEMENT_DEFAUT_LISTE;
+    setSettings({ ...draft, reglesClassementListe: liste, reglesClassement: texteReglesClassement(liste) });
     setSaved(true);
     reglesModifiees.current = false;
   };
@@ -2814,21 +2998,11 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
       <GmailSection />
       {oneDrive && <OneDriveSection etat={oneDrive.etat} onChange={oneDrive.rafraichir} />}
 
-      <section className="card">
-        <h3>Règles de classement</h3>
-        <p className="hint">
-          Où l'assistant range les fichiers reçus par e-mail (factures fournisseurs, documents clients…), écrit en langage
-          courant, une règle par ligne. Il les suit et vous demande quand aucune ne convient. Vous pouvez aussi lui dire
-          « à l'avenir, range les factures X dans… » : il proposera d'ajouter la règle.
-        </p>
-        <textarea
-          className="regles-classement"
-          rows={8}
-          value={draft.reglesClassement ?? REGLES_CLASSEMENT_PAR_DEFAUT}
-          onChange={(e) => { reglesModifiees.current = true; setDraft((d) => ({ ...d, reglesClassement: e.target.value })); setSaved(false); }}
-        />
-        <span className="hint">Pensez à cliquer sur « Enregistrer les modifications » en bas de la page.</span>
-      </section>
+      <ReglesClassement
+        liste={draft.reglesClassementListe || REGLES_CLASSEMENT_DEFAUT_LISTE}
+        onChange={(liste) => { reglesModifiees.current = true; setDraft((d) => ({ ...d, reglesClassementListe: liste })); setSaved(false); }}
+        oneDriveConnecte={!!oneDrive?.etat?.connecte}
+      />
 
       <section className="card">
         <h3>Facturation Pennylane</h3>
@@ -7572,7 +7746,32 @@ textarea { resize: vertical; }
 .bulle-moi { align-self: flex-end; background: var(--bleu); color: #fff; border-bottom-right-radius: 4px; }
 .bulle-assistant { align-self: flex-start; background: var(--carte); color: var(--encre); border: 1px solid var(--trait); border-bottom-left-radius: 4px; }
 .bulle-erreur { background: var(--rouge-clair); color: var(--rouge-fonce); border-color: var(--rouge-clair-2); }
-.regles-classement { width: 100%; margin: 6px 0 4px; font: inherit; font-size: 13.5px; line-height: 1.55; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--trait); background: var(--carte); color: var(--encre); resize: vertical; }
+.regles-liste { display: flex; flex-direction: column; gap: 12px; margin: 12px 0; }
+.regle { border: 1px solid var(--trait); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--fond-doux); }
+.regle label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--encre-2); }
+.regle-options { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 10px; }
+.regle label, .regle .field-col { min-width: 0; }
+.regle input, .regle select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; text-overflow: ellipsis; }
+.regle-dossier { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--trait); background: var(--carte); color: var(--encre); font: inherit; font-size: 13.5px; cursor: pointer; word-break: break-word; }
+.regle-dossier svg { color: var(--bleu); flex-shrink: 0; }
+.regle-dossier.vide { color: var(--encre-4); border-style: dashed; }
+.regle-dossier:disabled { cursor: default; opacity: 0.6; }
+.regle-actions { display: flex; justify-content: flex-end; }
+.regle-actions .btn-ghost.small { margin: 0; }
+.explorateur { height: auto; max-height: 85vh; max-width: 560px; }
+.explorateur-chemin { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 2px; padding: 10px 14px; border-bottom: 1px solid var(--trait-clair); color: var(--encre-4); }
+.explorateur-segment { background: none; border: none; padding: 4px 6px; border-radius: 6px; color: var(--bleu); font: inherit; font-size: 13.5px; cursor: pointer; }
+.explorateur-segment:hover { background: var(--bleu-clair); }
+.explorateur-liste { flex: 1; overflow-y: auto; padding: 6px 8px; min-height: 200px; }
+.explorateur-dossier { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 10px; border: none; background: none; border-radius: 8px; color: var(--encre); font: inherit; font-size: 14.5px; text-align: left; cursor: pointer; }
+.explorateur-dossier:hover { background: var(--survol); }
+.explorateur-dossier > svg:first-child { color: var(--jaune); flex-shrink: 0; }
+.explorateur-dossier span { flex: 1; word-break: break-word; }
+.explorateur-dossier > svg:last-child { color: var(--encre-5); }
+.explorateur-pied { border-top: 1px solid var(--trait); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.explorateur-choix { font-size: 12.5px; color: var(--encre-3); word-break: break-word; }
+.explorateur-boutons { display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 780px) { .regle-options { grid-template-columns: minmax(0,1fr); } .pdf-modal-overlay { padding: 12px; } }
 .pill-onedrive { background: var(--bleu-clair); color: var(--bleu-fonce); }
 .onedrive-dossier { margin-top: 12px; line-height: 1.6; }
 .onedrive-dossier svg { color: var(--vert); vertical-align: -2px; margin-right: 4px; }
