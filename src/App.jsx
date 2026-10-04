@@ -3227,7 +3227,12 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
             prefillPlanningTaskId={!editingReport ? prefillTaskId : undefined}
             prefillAdresseSite={!editingReport ? prefillAdresse : undefined}
             onCancel={closeForm}
-            onSubmit={(r) => { editingReport ? onUpdate(r) : onAdd(r); closeForm(); }}
+            onSubmit={(r) => {
+              editingReport ? onUpdate(r) : onAdd(r);
+              closeForm();
+              // Retour en haut de la page une fois le rapport enregistré.
+              requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+            }}
             onPreview={onPrint}
           />
         </div>
