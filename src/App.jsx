@@ -130,6 +130,7 @@ const Icon = ({ name, size = 18 }) => {
     volumeOff: "M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6M17 9l6 6",
     send: "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z",
     mail: "M3 5h18v14H3V5zm0 0l9 7 9-7",
+    folder: "M3 6a1 1 0 011-1h5l2 2h9a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V6z",
     truck: "M1 4h14v12H1V4zm14 4h4l4 4v4h-8V8zM5.5 19a2 2 0 100-4 2 2 0 000 4zm13 0a2 2 0 100-4 2 2 0 000 4z",
   };
   return (
@@ -329,6 +330,8 @@ export default function App() {
   // Hors du chargement initial : tant que la table n'existe pas (script SQL
   // pas encore lancé), le reste de l'application fonctionne normalement.
   const { items: fournisseurs, upsert: upsertFournisseur, remove: removeFournisseur, error: erreurFournisseurs } = useSyncedCollection("fournisseurs", initialFournisseurs);
+  // Rangement automatique des rapports validés et des contrats dans OneDrive.
+  const oneDrive = useRangementOneDrive({ reports: reportsRaw, clients, settings, upsertReport, upsertClient });
 
   const dataLoading = loadingClients || loadingReports || loadingPlanning || loadingDevisAFaire || loadingDevisEnCours || loadingFacturation || loadingSettings;
 
@@ -979,7 +982,7 @@ export default function App() {
           />
         )}
 
-        {tab === "parametres" && <Parametres settings={settings} setSettings={saveSettings} loading={loadingSettings} theme={theme} setTheme={setTheme} />}
+        {tab === "parametres" && <Parametres settings={settings} setSettings={saveSettings} loading={loadingSettings} theme={theme} setTheme={setTheme} oneDrive={oneDrive} />}
       </main>
 
       {tab !== "assistant" && (
@@ -2367,8 +2370,298 @@ function Fournisseurs({ fournisseurs, erreur, onSave, onDelete }) {
   );
 }
 
+/* ---------- OneDrive : rangement automatique des documents ----------
+   Chaque rapport validé est converti en PDF dans l'application, puis envoyé
+   par la fonction Supabase « onedrive-connexion » dans le dossier du client :
+   CLIENTS/<NOM Prénom>/RAPPORTS/<NOM JJ.MM.AA TYPE>.pdf. Les contrats ajoutés
+   à une fiche client vont dans CLIENTS/<NOM Prénom>/CONTRAT/.
+   N'importe quel appareil ouvert (téléphone ou ordinateur) s'en charge : un
+   rapport fait hors connexion part dès que le réseau revient. */
+async function appelerOneDrive(action, extra = {}) {
+  const { data, error } = await supabase.functions.invoke("onedrive-connexion", { body: { action, ...extra } });
+  if (error) {
+    let detail = error.message;
+    try {
+      if (error.context?.status === 404) detail = "La fonction « onedrive-connexion » n'est pas encore déployée dans Supabase.";
+      else if (error.context && typeof error.context.json === "function") {
+        const body = await error.context.json();
+        if (body?.error) detail = body.error;
+      }
+    } catch (_e) {
+      // Corps illisible : message générique.
+    }
+    throw new Error(detail || "Erreur de connexion à la fonction OneDrive.");
+  }
+  if (!data?.ok) throw new Error(data?.error || "Réponse inattendue de la fonction OneDrive.");
+  return data;
+}
+
+// Empreinte d'un document : sert à savoir s'il a changé depuis son envoi.
+function empreinte(valeur) {
+  const texte = JSON.stringify(valeur);
+  let h = 2166136261;
+  for (let i = 0; i < texte.length; i++) {
+    h ^= texte.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36) + "-" + texte.length.toString(36);
+}
+
+function empreinteRapport(r) {
+  const { onedrive, ...reste } = r; // eslint-disable-line no-unused-vars
+  return empreinte(reste);
+}
+
+function empreinteContrat(contrat) {
+  return empreinte([contrat?.nom, contrat?.dateAjout, contrat?.ajouteLe, String(contrat?.data || "").length, String(contrat?.data || "").slice(-64)]);
+}
+
+// « 03/10/2026 » ou « 2026-10-03 » → « 03.10.26 », comme dans tes fichiers.
+function datePourFichier(date) {
+  const t = String(date || "");
+  let m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[1].padStart(2, "0")}.${m[2].padStart(2, "0")}.${m[3].slice(2)}`;
+  m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}.${m[2]}.${m[1].slice(2)}`;
+  const d = new Date();
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getFullYear()).slice(2)}`;
+}
+
+const TYPE_POUR_FICHIER = { mise_en_service: "MISE EN SERVICE", entretien: "ENTRETIEN", diagnostic: "DEPANNAGE" };
+
+// Variante du rapport imprimable, mise en page pour un PDF A4 : les règles
+// générales (corps de page, titres) sont limitées au rapport, pour ne pas
+// déteindre sur l'application pendant la conversion.
+function htmlRapportPourPdf(html) {
+  const style = (html.match(/<style>([\s\S]*?)<\/style>/) || [])[1] || "";
+  const corps = (html.match(/<div class="pdf-page">([\s\S]*)<\/div>\s*<\/body>/) || [])[1] || "";
+  const styleCible = style
+    .replace(/@import[^;]+;/g, "")
+    .replace(/@media print\s*\{[\s\S]*?\}\s*\}/, "")
+    .replace(/(^|\})\s*\*\s*\{/g, "$1 .pdf-rendu * {")
+    .replace(/(^|\})\s*body\s*\{/g, "$1 .pdf-rendu {")
+    .replace(/(^|\})\s*h1\s*\{/g, "$1 .pdf-rendu h1 {")
+    .replace(/(^|\})\s*p\s*\{/g, "$1 .pdf-rendu p {");
+  return `<style>${styleCible}
+    .pdf-rendu { background: #fff; width: 700px; }
+    .pdf-rendu .pdf-page { box-shadow: none; margin: 0; max-width: none; padding: 0; border-radius: 0; }
+    /* Photos : jamais coupées, deux par page naturellement ; pas de saut de
+       page forcé (mal compté par la conversion, il isolait des photos et
+       laissait une page blanche à la fin). */
+    .pdf-rendu .pdf-photo-item, .pdf-rendu .pdf-photo-item:nth-child(2n) { page-break-after: auto; break-after: auto; margin-bottom: 20px; }
+  </style><div class="pdf-page">${corps}</div>`;
+}
+
+async function genererPdfBase64(html) {
+  const { default: html2pdf } = await import("html2pdf.js");
+  // L'enveloppe est placée hors de l'écran pour que la conversion ne se voie
+  // pas ; seul son contenu est converti (le décalage n'est pas recopié).
+  const enveloppe = document.createElement("div");
+  enveloppe.style.cssText = "position:fixed;left:-10000px;top:0;width:700px;";
+  const conteneur = document.createElement("div");
+  conteneur.className = "pdf-rendu";
+  conteneur.innerHTML = htmlRapportPourPdf(html);
+  enveloppe.appendChild(conteneur);
+  document.body.appendChild(enveloppe);
+  try {
+    await Promise.all([...conteneur.querySelectorAll("img")].map((img) => (img.complete ? null : new Promise((ok) => { img.onload = ok; img.onerror = ok; }))));
+    if (document.fonts?.ready) await document.fonts.ready;
+    const uri = await html2pdf()
+      .set({
+        margin: [12, 12, 14, 12],
+        image: { type: "jpeg", quality: 0.85 },
+        html2canvas: { scale: 1.6, useCORS: true, backgroundColor: "#ffffff", logging: false },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+        pagebreak: { mode: ["css", "legacy"], avoid: [".pdf-bloc-insecable", ".pdf-checklist li", ".pdf-table tr", ".pdf-photo-item", ".pdf-signatures"] },
+      })
+      .from(conteneur)
+      .outputPdf("datauristring");
+    return String(uri).split(",")[1];
+  } finally {
+    enveloppe.remove();
+  }
+}
+
+// Identifiant de cet appareil, pour qu'un téléphone et l'ordinateur ouverts
+// en même temps n'envoient pas deux fois le même document.
+const ID_APPAREIL = "ap" + Math.random().toString(36).slice(2, 10);
+
+function useRangementOneDrive({ reports, clients, settings, upsertReport, upsertClient }) {
+  const [etat, setEtat] = useState(null);
+  const enCours = useRef(false);
+  const echecs = useRef({}); // id → { nb, prochain }
+
+  // Nouvel essai régulier des envois qui ont échoué (réseau, OneDrive occupé…).
+  const [tic, setTic] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTic((x) => x + 1), 2 * 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  const rafraichir = () => appelerOneDrive("etat").then(setEtat).catch(() => setEtat(null));
+  useEffect(() => { rafraichir(); }, []);
+
+  useEffect(() => {
+    if (!etat?.connecte || !etat?.dossier) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    if (enCours.current) return;
+    const depuis = Date.parse(etat.depuis || "") || Date.now();
+    const maintenant = Date.now();
+    const disponible = (cle) => {
+      const e = echecs.current[cle];
+      return !e || (e.nb < 5 && e.prochain <= maintenant);
+    };
+    const reserveAilleurs = (o) => o?.parAppareil && o.parAppareil !== ID_APPAREIL && maintenant - (o.reserveLe || 0) < 3 * 60000;
+
+    const rapports = reports.filter((r) => {
+      if (!r.valide || !r.client) return false;
+      const cree = Number(String(r.id || "").slice(1));
+      const nouveau = Number.isFinite(cree) && cree >= depuis;
+      if (!nouveau && !r.onedrive?.itemId) return false; // anciens rapports : non renvoyés
+      if (r.onedrive?.signature === empreinteRapport(r)) return false;
+      return !reserveAilleurs(r.onedrive) && disponible(r.id);
+    });
+    const contrats = clients.filter((c) =>
+      c.contrat?.data && (c.contrat.ajouteLe || 0) >= depuis &&
+      c.onedriveContrat?.signature !== empreinteContrat(c.contrat) &&
+      !reserveAilleurs(c.onedriveContrat) && disponible("contrat-" + c.id)
+    );
+    if (rapports.length === 0 && contrats.length === 0) return;
+
+    enCours.current = true;
+    (async () => {
+      for (const r of rapports) {
+        const signature = empreinteRapport(r);
+        upsertReport({ ...r, onedrive: { ...(r.onedrive || {}), parAppareil: ID_APPAREIL, reserveLe: Date.now() } });
+        try {
+          const fiche = clients.find((c) => c.nom === r.client);
+          const contenu = await genererPdfBase64(buildReportHtml(r, settings, clients));
+          const res = await appelerOneDrive("ranger", {
+            client: [r.client, fiche?.raisonSociale, fiche ? libelleClient(fiche) : ""].filter(Boolean),
+            sous_dossier: "RAPPORTS",
+            nom_fichier: `{NOM} ${datePourFichier(r.date)} ${TYPE_POUR_FICHIER[r.type] || "RAPPORT"}.pdf`,
+            contenu,
+            item_id: r.onedrive?.itemId || undefined,
+          });
+          upsertReport({ ...r, onedrive: { itemId: res.item_id, chemin: res.chemin, nom: res.nom, signature, envoyeLe: new Date().toISOString() } });
+          delete echecs.current[r.id];
+        } catch (e) {
+          const nb = (echecs.current[r.id]?.nb || 0) + 1;
+          echecs.current[r.id] = { nb, prochain: Date.now() + nb * 2 * 60000 };
+          upsertReport({ ...r, onedrive: { ...(r.onedrive || {}), parAppareil: null, erreur: String(e?.message || e) } });
+        }
+      }
+      for (const c of contrats) {
+        const signature = empreinteContrat(c.contrat);
+        upsertClient({ ...c, onedriveContrat: { ...(c.onedriveContrat || {}), parAppareil: ID_APPAREIL, reserveLe: Date.now() } });
+        try {
+          const extension = (String(c.contrat.nom || "").match(/\.([a-z0-9]{2,5})$/i) || [, "pdf"])[1].toLowerCase();
+          const res = await appelerOneDrive("ranger", {
+            client: [c.nom, c.raisonSociale, libelleClient(c)].filter(Boolean),
+            sous_dossier: "CONTRAT",
+            nom_fichier: `{NOM} ${datePourFichier(c.contrat.dateAjout)} CONTRAT.${extension}`,
+            contenu: c.contrat.data,
+            item_id: c.onedriveContrat?.itemId || undefined,
+          });
+          upsertClient({ ...c, onedriveContrat: { itemId: res.item_id, chemin: res.chemin, signature, envoyeLe: new Date().toISOString() } });
+          delete echecs.current["contrat-" + c.id];
+        } catch (e) {
+          const nb = (echecs.current["contrat-" + c.id]?.nb || 0) + 1;
+          echecs.current["contrat-" + c.id] = { nb, prochain: Date.now() + nb * 2 * 60000 };
+          upsertClient({ ...c, onedriveContrat: { ...(c.onedriveContrat || {}), parAppareil: null, erreur: String(e?.message || e) } });
+        }
+      }
+      enCours.current = false;
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reports, clients, etat, tic]);
+
+  // Nouvel essai au retour du réseau.
+  useEffect(() => {
+    const relancer = () => { echecs.current = {}; rafraichir(); };
+    window.addEventListener("online", relancer);
+    return () => window.removeEventListener("online", relancer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return { etat, rafraichir };
+}
+
+function OneDriveSection({ etat, onChange }) {
+  const [enCours, setEnCours] = useState(false);
+  const [message, setMessage] = useState(null);
+  const [chemin, setChemin] = useState("");
+
+  const executer = async (fn) => {
+    setEnCours(true);
+    setMessage(null);
+    try { await fn(); } catch (e) { setMessage({ type: "erreur", texte: String(e.message || e) }); }
+    setEnCours(false);
+  };
+
+  const connecter = () => executer(async () => {
+    const { url } = await appelerOneDrive("lien", { retour: window.location.origin });
+    window.location.href = url;
+  });
+
+  const deconnecter = () => executer(async () => {
+    await appelerOneDrive("deconnecter");
+    setMessage({ type: "ok", texte: "OneDrive est déconnecté : plus aucun document n'y sera rangé." });
+    onChange();
+  });
+
+  const choisirDossier = () => executer(async () => {
+    const res = await appelerOneDrive("dossier", { chemin });
+    setMessage({ type: "ok", texte: `Dossier des clients trouvé : ${res.dossier}` });
+    onChange();
+  });
+
+  return (
+    <section className="card">
+      <h3>OneDrive</h3>
+      <p className="hint">
+        Chaque rapport validé est enregistré en PDF dans le dossier OneDrive du client (RAPPORTS), et chaque contrat ajouté
+        à une fiche client dans son dossier CONTRAT. Le classement se fait tout seul, depuis le téléphone comme depuis
+        l'ordinateur, même s'il est éteint. Les rapports antérieurs à la connexion ne sont pas renvoyés.
+      </p>
+
+      {message && (
+        <div className={"entretien-annuel-badge " + (message.type === "ok" ? "ok" : "late")}>
+          <Icon name={message.type === "ok" ? "check" : "alert"} size={14} /> {message.texte}
+        </div>
+      )}
+
+      {etat?.connecte ? (
+        <>
+          <div className="notif-actions">
+            <span className="pill pill-ok"><Icon name="check" size={13} /> Connecté{etat.email ? ` : ${etat.email}` : ""}</span>
+            <DeleteButton label="Déconnecter" onConfirm={deconnecter} />
+          </div>
+          {etat.dossier ? (
+            <p className="hint onedrive-dossier"><Icon name="check" size={13} /> Dossier des clients : <strong>{etat.dossier}</strong></p>
+          ) : (
+            <div className="onedrive-chemin">
+              <p className="hint alerte"><Icon name="alert" size={13} /> Dossier des clients introuvable automatiquement. Indiquez son emplacement dans OneDrive :</p>
+              <div className="onedrive-chemin-ligne">
+                <input value={chemin} onChange={(e) => setChemin(e.target.value)} placeholder="Ex : Bureau/RCLIM PYRENEES/CLIENTS" />
+                <button className="btn-primary" onClick={choisirDossier} disabled={enCours || !chemin.trim()}>Vérifier</button>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="notif-actions">
+          <button className="btn-primary" onClick={connecter} disabled={enCours || etat === undefined}>
+            <Icon name="folder" size={16} /> {enCours ? "Ouverture de Microsoft…" : "Connecter OneDrive"}
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 /* ---------- Paramètres ---------- */
-function Parametres({ settings, setSettings, theme, setTheme }) {
+function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);
 
@@ -2504,6 +2797,7 @@ function Parametres({ settings, setSettings, theme, setTheme }) {
 
       <NotificationsSection />
       <GmailSection />
+      {oneDrive && <OneDriveSection etat={oneDrive.etat} onChange={oneDrive.rafraichir} />}
 
       <section className="card">
         <h3>Facturation Pennylane</h3>
@@ -2767,6 +3061,12 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
           <div className="row-sub">{r.installation} · {r.date}</div>
         </div>
         {r.valide && <span className="pill pill-ok"><Icon name="check" size={13} /> Validé</span>}
+        {r.onedrive?.chemin && r.onedrive.signature === empreinteRapport(r) && (
+          <span className="pill pill-onedrive" title={`Rangé dans OneDrive : ${r.onedrive.chemin}`}><Icon name="folder" size={13} /> OneDrive</span>
+        )}
+        {r.onedrive?.erreur && !(r.onedrive.chemin && r.onedrive.signature === empreinteRapport(r)) && (
+          <span className="pill pill-alert" title={r.onedrive.erreur}><Icon name="alert" size={13} /> OneDrive</span>
+        )}
         <span className="chevron">{open ? "−" : "+"}</span>
       </div>
       {open && (
@@ -5031,7 +5331,7 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const base64 = String(ev.target.result).split(",")[1];
-      setContrat({ nom: file.name, data: base64, dateAjout: new Date().toLocaleDateString("fr-FR") });
+      setContrat({ nom: file.name, data: base64, dateAjout: new Date().toLocaleDateString("fr-FR"), ajouteLe: Date.now() });
     };
     reader.readAsDataURL(file);
   };
@@ -7241,6 +7541,13 @@ textarea { resize: vertical; }
 .bulle-moi { align-self: flex-end; background: var(--bleu); color: #fff; border-bottom-right-radius: 4px; }
 .bulle-assistant { align-self: flex-start; background: var(--carte); color: var(--encre); border: 1px solid var(--trait); border-bottom-left-radius: 4px; }
 .bulle-erreur { background: var(--rouge-clair); color: var(--rouge-fonce); border-color: var(--rouge-clair-2); }
+.pill-onedrive { background: var(--bleu-clair); color: var(--bleu-fonce); }
+.onedrive-dossier { margin-top: 12px; line-height: 1.6; }
+.onedrive-dossier svg { color: var(--vert); vertical-align: -2px; margin-right: 4px; }
+.onedrive-dossier strong { color: var(--encre-2); word-break: break-word; }
+.onedrive-chemin { margin-top: 12px; }
+.onedrive-chemin-ligne { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.onedrive-chemin-ligne input { flex: 1; min-width: 220px; }
 .assistant-action-apercu { margin-top: 8px; padding: 10px 12px; background: var(--carte); border: 1px solid var(--trait); border-radius: 8px; font-size: 13.5px; line-height: 1.5; color: var(--encre-2); white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
 .fournisseur-infos { min-width: 0; flex: 1; }
 .fournisseur-contact { font-weight: 400; color: var(--encre-3); }
