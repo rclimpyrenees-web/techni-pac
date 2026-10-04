@@ -1994,12 +1994,28 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
 }
 
 /* ---------- Notifications push ----------
-   Deux envois par jour (9h et 19h) rappelant les rappels du jour et les devis
-   à faire. Techniquement : le navigateur crée un abonnement auprès de son
-   propre service de notification, et on enregistre cet abonnement dans
-   Supabase pour que la fonction planifiée puisse envoyer le message. */
+   Deux envois par jour, aux heures choisies ici (8h et 19h par défaut, heure
+   de Paris) : la journée le matin, le lendemain le soir. Techniquement : le navigateur crée un abonnement
+   auprès de son propre service de notification (Apple, Google…), on
+   l'enregistre dans Supabase, et la fonction « notifications » envoie les
+   résumés. La clé de l'application est fournie par cette fonction. */
 
-const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";
+async function appelerNotifications(action, extra = {}) {
+  const { data, error } = await supabase.functions.invoke("notifications", { body: { action, ...extra } });
+  if (error) {
+    let detail = error.message;
+    try {
+      if (error.context?.status === 404) detail = "La fonction « notifications » n'est pas encore déployée dans Supabase.";
+      else if (error.context && typeof error.context.json === "function") {
+        const body = await error.context.json();
+        if (body?.error) detail = body.error;
+      }
+    } catch (_e) { /* message par défaut */ }
+    throw new Error(detail);
+  }
+  if (!data?.ok) throw new Error(data?.error || "Réponse inattendue.");
+  return data;
+}
 
 // La clé publique est transmise au format base64 « URL-safe » : le navigateur
 // exige, lui, un tableau d'octets.
@@ -2008,6 +2024,12 @@ function base64UrlEnOctets(base64) {
   const normalise = (base64 + padding).replace(/-/g, "+").replace(/_/g, "/");
   const brut = window.atob(normalise);
   return Uint8Array.from([...brut].map((c) => c.charCodeAt(0)));
+}
+
+function memesOctets(a, b) {
+  if (!a || !b) return false;
+  const x = new Uint8Array(a), y = new Uint8Array(b);
+  return x.length === y.length && x.every((v, i) => v === y[i]);
 }
 
 // Sur iPhone, les notifications n'existent que si l'application a été ajoutée
@@ -2031,24 +2053,29 @@ async function activerNotifications() {
   if (!notificationsDisponibles()) {
     throw new Error("Cet appareil ou ce navigateur ne gère pas les notifications.");
   }
-  if (!VAPID_PUBLIC_KEY) {
-    throw new Error("Clé de notification absente : ajoutez la variable VITE_VAPID_PUBLIC_KEY dans Vercel, puis redéployez.");
+
+  // Sur iPhone, la demande d'autorisation doit partir tout de suite après
+  // l'appui sur le bouton : on la fait avant tout échange avec le serveur.
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    throw new Error("Notifications refusées. Tu peux les réautoriser dans les réglages du téléphone (Notifications → TECHNI-PAC).");
   }
+
+  const { cle } = await appelerNotifications("cle_publique");
+  const cleOctets = base64UrlEnOctets(cle);
 
   const registration = await navigator.serviceWorker.register("/sw.js");
   await navigator.serviceWorker.ready;
 
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") {
-    throw new Error("Notifications refusées. Vous pouvez les réautoriser dans les réglages de votre téléphone.");
-  }
-
   let abonnement = await registration.pushManager.getSubscription();
+  // Un ancien abonnement créé avec une autre clé ne recevrait rien.
+  if (abonnement && !memesOctets(abonnement.options?.applicationServerKey, cleOctets)) {
+    await supabase.from("push_subscriptions").delete().eq("endpoint", abonnement.endpoint);
+    await abonnement.unsubscribe();
+    abonnement = null;
+  }
   if (!abonnement) {
-    abonnement = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: base64UrlEnOctets(VAPID_PUBLIC_KEY),
-    });
+    abonnement = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: cleOctets });
   }
 
   const infos = abonnement.toJSON();
@@ -2063,7 +2090,11 @@ async function activerNotifications() {
     },
     { onConflict: "endpoint" }
   );
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (/push_subscriptions/.test(error.message)) throw new Error("La table des notifications n'existe pas encore : lance le script SQL des notifications dans Supabase.");
+    throw new Error(error.message);
+  }
+  return infos.endpoint;
 }
 
 async function desactiverNotifications() {
@@ -2075,57 +2106,92 @@ async function desactiverNotifications() {
   }
 }
 
-async function abonnementActif() {
-  if (!notificationsDisponibles()) return false;
+async function abonnementActuel() {
+  if (!notificationsDisponibles()) return null;
+  if (Notification.permission !== "granted") return null;
   const registration = await navigator.serviceWorker.getRegistration();
-  if (!registration) return false;
-  const abonnement = await registration.pushManager.getSubscription();
-  return !!abonnement;
+  if (!registration) return null;
+  return await registration.pushManager.getSubscription();
 }
 
-function NotificationsSection() {
+const HEURES_NOTIF_DEFAUT = { matin: "08:00", soir: "19:00" };
+
+// Créneaux proposés, de quart d'heure en quart d'heure (la fonction est
+// réveillée toutes les 15 minutes).
+function quartsDHeure(debut, fin) {
+  const liste = [];
+  for (let m = debut * 60; m <= fin * 60; m += 15) liste.push(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
+  return liste;
+}
+const HEURES_MATIN = quartsDHeure(5, 12);
+const HEURES_SOIR = quartsDHeure(15, 22);
+const afficherHeure = (hhmm) => hhmm.replace(":", "h").replace(/^0/, "").replace(/h00$/, "h");
+
+function NotificationsSection({ heures, onChangeHeures }) {
+  const matin = heures?.matin === "" ? "" : heures?.matin || HEURES_NOTIF_DEFAUT.matin;
+  const soir = heures?.soir === "" ? "" : heures?.soir || HEURES_NOTIF_DEFAUT.soir;
   const [actif, setActif] = useState(false);
   const [enCours, setEnCours] = useState(false);
   const [message, setMessage] = useState(null);
 
   useEffect(() => {
-    abonnementActif().then(setActif).catch(() => setActif(false));
+    abonnementActuel().then((ab) => setActif(!!ab)).catch(() => setActif(false));
   }, []);
 
-  const activer = async () => {
+  const lancer = async (travail, reussite) => {
     setEnCours(true);
     setMessage(null);
     try {
-      await activerNotifications();
-      setActif(true);
-      setMessage({ type: "ok", texte: "Notifications activées sur cet appareil." });
+      await travail();
+      setMessage({ type: "ok", texte: reussite });
     } catch (e) {
       setMessage({ type: "erreur", texte: String(e.message || e) });
     }
     setEnCours(false);
   };
 
-  const desactiver = async () => {
-    setEnCours(true);
-    setMessage(null);
-    try {
-      await desactiverNotifications();
-      setActif(false);
-      setMessage({ type: "ok", texte: "Notifications désactivées sur cet appareil." });
-    } catch (e) {
-      setMessage({ type: "erreur", texte: String(e.message || e) });
-    }
-    setEnCours(false);
-  };
+  const activer = () => lancer(async () => {
+    const endpoint = await activerNotifications();
+    setActif(true);
+    await appelerNotifications("test", { endpoint });
+  }, "Notifications activées : une notification d'essai vient d'être envoyée sur cet appareil.");
+
+  const tester = () => lancer(async () => {
+    const ab = await abonnementActuel();
+    if (!ab) throw new Error("Cet appareil n'est plus abonné : réactive les notifications.");
+    await appelerNotifications("test", { endpoint: ab.endpoint });
+  }, "Notification d'essai envoyée. Elle arrive en quelques secondes.");
+
+  const desactiver = () => lancer(async () => {
+    await desactiverNotifications();
+    setActif(false);
+  }, "Notifications désactivées sur cet appareil.");
 
   return (
     <section className="card">
       <h3>Notifications sur le téléphone</h3>
       <p className="hint">
-        Deux fois par jour, à 9h et à 19h, vous recevez un résumé de vos rappels du jour et de vos devis à faire.
-        L'activation se fait appareil par appareil : refaites-la sur chaque téléphone ou ordinateur concerné.
-        Sur iPhone, l'application doit d'abord être ajoutée à l'écran d'accueil, puis ouverte depuis son icône.
+        Le matin, le résumé de ta journée (interventions, rappels, devis à faire). Le soir, ce qui t'attend demain, les
+        rappels en retard et les interventions à marquer « fait » (rien n'est envoyé le soir s'il n'y a rien à dire).
+        L'activation se fait appareil par appareil. Sur iPhone, l'application doit être ouverte depuis son icône sur
+        l'écran d'accueil.
       </p>
+
+      <div className="notif-heures">
+        <label>Résumé du matin
+          <select value={matin} onChange={(e) => onChangeHeures({ matin: e.target.value, soir })}>
+            {HEURES_MATIN.map((h) => <option key={h} value={h}>{afficherHeure(h)}</option>)}
+            <option value="">Pas de résumé le matin</option>
+          </select>
+        </label>
+        <label>Résumé du soir
+          <select value={soir} onChange={(e) => onChangeHeures({ matin, soir: e.target.value })}>
+            {HEURES_SOIR.map((h) => <option key={h} value={h}>{afficherHeure(h)}</option>)}
+            <option value="">Pas de résumé le soir</option>
+          </select>
+        </label>
+      </div>
+      <p className="hint">Les heures valent pour tous tes appareils. Pense à enregistrer en bas de la page.</p>
 
       {message && (
         <div className={"entretien-annuel-badge " + (message.type === "ok" ? "ok" : "late")}>
@@ -2137,6 +2203,7 @@ function NotificationsSection() {
         {actif ? (
           <>
             <span className="pill pill-ok"><Icon name="check" size={13} /> Activées sur cet appareil</span>
+            <button className="btn-ghost small" onClick={tester} disabled={enCours}><Icon name="bell" size={14} /> Envoyer un essai</button>
             <button className="btn-ghost small" onClick={desactiver} disabled={enCours}>Désactiver</button>
           </>
         ) : (
@@ -2995,7 +3062,10 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
         </div>
       </section>
 
-      <NotificationsSection />
+      <NotificationsSection
+        heures={draft.notifications}
+        onChangeHeures={(h) => { setDraft((d) => ({ ...d, notifications: h })); setSaved(false); }}
+      />
       <GmailSection />
       {oneDrive && <OneDriveSection etat={oneDrive.etat} onChange={oneDrive.rafraichir} />}
 
@@ -7752,6 +7822,10 @@ textarea { resize: vertical; }
 .bulle-moi { align-self: flex-end; background: var(--bleu); color: #fff; border-bottom-right-radius: 4px; }
 .bulle-assistant { align-self: flex-start; background: var(--carte); color: var(--encre); border: 1px solid var(--trait); border-bottom-left-radius: 4px; }
 .bulle-erreur { background: var(--rouge-clair); color: var(--rouge-fonce); border-color: var(--rouge-clair-2); }
+.notif-heures { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 12px; margin: 12px 0 4px; }
+.notif-heures label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--encre-2); min-width: 0; }
+.notif-heures select { width: 100%; min-width: 0; }
+@media (max-width: 480px) { .notif-heures { grid-template-columns: minmax(0,1fr); } }
 .regles-liste { display: flex; flex-direction: column; gap: 12px; margin: 12px 0; }
 .regle { border: 1px solid var(--trait); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--fond-doux); }
 .regle label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--encre-2); }
