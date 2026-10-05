@@ -2159,13 +2159,13 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
                 <div className="grow">
                   <div className="row-title">{p.titre}</div>
                   <div className="row-sub">{nomAffiche(p.client, clients)} {p.heure !== "—" && `· ${p.heure}`}</div>
-                  <div className="tache-actions">
-                    <button type="button" className="btn-action principal" onClick={() => openEditForm(p)}>
-                      <Icon name="edit" size={15} /> Modifier
-                    </button>
-                  </div>
                 </div>
-                <DeleteButton onConfirm={() => onDelete(p.id)} label="" />
+                <span className="groupe-modifier">
+                  <button type="button" className="btn-action modifier" onClick={() => openEditForm(p)}>
+                    <Icon name="edit" size={15} /> Modifier
+                  </button>
+                  <DeleteButton onConfirm={() => onDelete(p.id)} label="" />
+                </span>
                 <button className="pill pill-clickable pill-warm" onClick={() => onToggleRappel(p.id)}>
                   <Icon name="bell" size={13} /> Désactiver le rappel
                 </button>
@@ -6130,15 +6130,17 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
                       );
                     })()}
                     <div className="tache-actions">
-                      <button type="button" className="btn-action principal" onClick={(e) => { e.stopPropagation(); openEditTaskForm(p); }}>
-                        <Icon name="edit" size={15} /> Modifier
-                      </button>
                       <button type="button" className="btn-action" onClick={(e) => { e.stopPropagation(); onCreateReport(p); }}>
                         <Icon name="report" size={15} /> Rapport
                       </button>
                     </div>
                   </div>
-                  <span onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDelete(p.id)} label="" /></span>
+                  <span className="groupe-modifier" onClick={(e) => e.stopPropagation()}>
+                    <button type="button" className="btn-action modifier" onClick={() => openEditTaskForm(p)}>
+                      <Icon name="edit" size={15} /> Modifier
+                    </button>
+                    <DeleteButton onConfirm={() => onDelete(p.id)} label="" />
+                  </span>
                   <button className={"pill pill-clickable " + (p.rappel ? "pill-warm" : "pill-muted")} onClick={(e) => { e.stopPropagation(); onToggleRappel(p.id); }}>
                     <Icon name="bell" size={13} /> {p.rappel ? "Rappel actif" : "Sans rappel"}
                   </button>
@@ -8043,6 +8045,9 @@ textarea { resize: vertical; }
 .btn-action:hover { background: var(--survol); }
 .btn-action.principal { border-color: var(--bleu); color: var(--bleu); }
 .btn-action.principal:hover { background: var(--bleu-clair); }
+.btn-action.modifier { min-height: 34px; padding: 5px 12px; font-size: 13.5px; border-color: var(--violet); color: var(--violet); flex-shrink: 0; }
+.btn-action.modifier:hover { background: var(--violet-clair); }
+.groupe-modifier { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .micro-flottant-astuce { margin-top: 4px; font-size: 11.5px; opacity: 0.7; }
 .incidents { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .incidents li { border: 1px solid var(--trait); border-radius: 8px; padding: 8px 10px; word-break: break-word; }
