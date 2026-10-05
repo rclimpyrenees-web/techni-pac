@@ -491,7 +491,7 @@ function AppContenu() {
     }
     // E-mail, rangement d'une pièce jointe dans OneDrive, règle de
     // classement : exécutés côté serveur, là où se trouvent les accès.
-    if (["email", "classer_pj", "regle", "dossier"].includes(action.type) && action.item) {
+    if (["email", "classer_pj", "regle", "dossier", "pennylane_fournisseur"].includes(action.type) && action.item) {
       return appelerAssistantExecution(action).then(() => true);
     }
     return false;
@@ -579,6 +579,8 @@ function AppContenu() {
         // tous les types d'intervention, plutôt que "Entretien — 08/09/2026".
         label: `Suivant rapport d'intervention du ${r.date}`,
         vatRate: r.tva || settings.pennylane?.tvaParDefaut || "FR_200",
+        // Titre de la section de la facture : l'objet de l'intervention.
+        section: r.intro || "",
       });
       upsertFacturation({
         ...facturationEntry,
@@ -1741,7 +1743,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     try {
       return !!(await onAppliquerAction(action));
     } catch (e) {
-      const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : action.type === "dossier" ? "Le dossier n'a pas pu être créé" : "Enregistrement impossible";
+      const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : action.type === "dossier" ? "Le dossier n'a pas pu être créé" : action.type === "pennylane_fournisseur" ? "La facture n'a pas pu être envoyée dans Pennylane" : "Enregistrement impossible";
       ajouterMessage("assistant", `${quoi} : ${e?.message || e}`, { erreur: true });
       return false;
     }
@@ -1757,6 +1759,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     if (ok && action.type === "email") ajouterMessage("assistant", "E-mail envoyé.");
     if (ok && action.type === "classer_pj") ajouterMessage("assistant", "Fichier rangé dans OneDrive.");
     if (ok && action.type === "regle") ajouterMessage("assistant", "Règle de classement ajoutée.");
+    if (ok && action.type === "pennylane_fournisseur") ajouterMessage("assistant", "Facture envoyée dans Pennylane.");
     if (ok && action.type === "dossier") ajouterMessage("assistant", (action.item?.chemins?.length || 0) > 1 ? "Dossiers créés dans OneDrive." : "Dossier créé dans OneDrive.");
     return ok;
   };
