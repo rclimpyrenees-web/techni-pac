@@ -311,9 +311,114 @@ function Jauge({ value, max, label, onClick }) {
   );
 }
 
+/* ---------- Journal des incidents ----------
+   Garde sur l'appareil la trace des derniers incidents (erreur d'affichage,
+   erreur inattendue, fermeture brutale pendant la création d'un PDF), pour
+   pouvoir en trouver la cause. Visible dans Paramètres → Incidents. */
+const CLE_JOURNAL = "techni-pac-incidents";
+const CLE_PDF_EN_COURS = "techni-pac-pdf-en-cours";
+const CLE_PDF_A_EVITER = "techni-pac-pdf-a-eviter";
+
+function lireStockage(cle, defaut) {
+  try { const v = localStorage.getItem(cle); return v ? JSON.parse(v) : defaut; } catch (_e) { return defaut; }
+}
+function ecrireStockage(cle, valeur) {
+  try {
+    if (valeur === null) localStorage.removeItem(cle);
+    else localStorage.setItem(cle, JSON.stringify(valeur));
+  } catch (_e) { /* stockage indisponible : tant pis */ }
+}
+function lireIncidents() { return lireStockage(CLE_JOURNAL, []); }
+function noterIncident(type, message, detail = "") {
+  const liste = lireIncidents();
+  liste.unshift({ quand: new Date().toISOString(), type, message: String(message || "").slice(0, 300), detail: String(detail || "").slice(0, 1500), page: String(window.location.search || "") });
+  ecrireStockage(CLE_JOURNAL, liste.slice(0, 15));
+}
+
+if (typeof window !== "undefined" && !window.__journalIncidents) {
+  window.__journalIncidents = true;
+  window.addEventListener("error", (e) => noterIncident("erreur", e.message, e.error?.stack || `${e.filename}:${e.lineno}`));
+  window.addEventListener("unhandledrejection", (e) => {
+    const r = e.reason;
+    // Coupures réseau courantes : pas un plantage.
+    if (/Failed to fetch|NetworkError|Load failed|AbortError/i.test(String(r?.message || r))) return;
+    noterIncident("erreur", r?.message || String(r), r?.stack || "");
+  });
+  // L'application s'était fermée en pleine création d'un PDF (sur iPhone,
+  // c'est le signe que la mémoire a manqué) : on le note, et cet appareil ne
+  // retentera plus ce rapport (un autre appareil, comme le PC, s'en chargera).
+  const pdf = lireStockage(CLE_PDF_EN_COURS, null);
+  if (pdf?.id) {
+    noterIncident("fermeture", `L'application s'est fermée pendant la création du PDF du rapport « ${pdf.client || pdf.id} » pour OneDrive.`);
+    const aEviter = lireStockage(CLE_PDF_A_EVITER, []);
+    if (!aEviter.includes(pdf.id)) ecrireStockage(CLE_PDF_A_EVITER, [...aEviter, pdf.id].slice(-50));
+    ecrireStockage(CLE_PDF_EN_COURS, null);
+  }
+}
+
+// Erreur d'affichage : au lieu d'une page blanche, un message et un bouton
+// pour relancer l'application.
+class ProtectionAffichage extends React.Component {
+  constructor(props) { super(props); this.state = { erreur: null }; }
+  static getDerivedStateFromError(erreur) { return { erreur }; }
+  componentDidCatch(erreur, info) { noterIncident("affichage", erreur?.message || String(erreur), (erreur?.stack || "") + "\n" + (info?.componentStack || "")); }
+  render() {
+    if (!this.state.erreur) return this.props.children;
+    const e = this.state.erreur;
+    return (
+      <div style={{ minHeight: "100vh", padding: "48px 20px", fontFamily: "-apple-system, system-ui, sans-serif", background: "#EEF2F1", color: "#1B2733" }}>
+        <div style={{ maxWidth: 520, margin: "0 auto", background: "#fff", borderRadius: 14, padding: 22, boxShadow: "0 4px 18px rgba(0,0,0,0.08)" }}>
+          <h2 style={{ marginTop: 0 }}>Oups, un problème d'affichage</h2>
+          <p>Tes données ne sont pas perdues. Fais une capture de cet écran pour Claude, puis appuie sur « Relancer ».</p>
+          <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, background: "#F4F6F6", padding: 12, borderRadius: 8, maxHeight: 260, overflow: "auto" }}>
+            {String(e?.message || e)}{"\n"}{String(e?.stack || "").split("\n").slice(0, 6).join("\n")}
+          </pre>
+          <button onClick={() => window.location.reload()} style={{ marginTop: 8, padding: "12px 20px", borderRadius: 10, border: 0, background: "#2F6FA3", color: "#fff", fontSize: 16, fontWeight: 600 }}>
+            Relancer
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
+function IncidentsSection() {
+  const [liste, setListe] = useState(lireIncidents);
+  return (
+    <section className="card">
+      <h3>Incidents</h3>
+      <p className="hint">Derniers problèmes rencontrés sur cet appareil. En cas de souci, fais une capture de cette liste pour Claude.</p>
+      {liste.length === 0 ? (
+        <p className="empty">Aucun incident enregistré.</p>
+      ) : (
+        <>
+          <ul className="incidents">
+            {liste.map((x, i) => (
+              <li key={i}>
+                <strong>{new Date(x.quand).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })}</strong> · {x.type}
+                <div>{x.message}</div>
+                {x.detail && <div className="incident-detail">{x.detail.split("\n").slice(0, 3).join(" ← ")}</div>}
+              </li>
+            ))}
+          </ul>
+          <button className="btn-ghost small" onClick={() => { ecrireStockage(CLE_JOURNAL, []); setListe([]); }}>Effacer la liste</button>
+        </>
+      )}
+    </section>
+  );
+}
+
 /* ---------- App principale ---------- */
 
 export default function App() {
+  return (
+    <ProtectionAffichage>
+      <AppContenu />
+    </ProtectionAffichage>
+  );
+}
+
+function AppContenu() {
   const [tab, setTab] = useState(ongletDepuisAdresse);
   const [theme, setTheme] = useState(themeEnregistre);
 
@@ -1359,6 +1464,93 @@ function ongletDepuisAdresse() {
    dans le geste lui-même, condition imposée par Safari pour accéder au micro.
    Sans reconnaissance vocale sur l'appareil, le bouton ouvre simplement
    l'onglet Assistant. */
+/* ---------- Écoute « patiente » ----------
+   Par défaut, la reconnaissance vocale s'arrête au premier blanc. Ici, on
+   continue d'écouter tant que la personne n'est pas restée silencieuse
+   SILENCE_FIN_MS d'affilée : on peut chercher ses mots sans que la demande
+   parte à moitié. Un appui sur le bouton envoie tout de suite.
+   Si le navigateur coupe l'écoute de lui-même pendant une pause (Safari le
+   fait), on la relance et on ajoute la suite au texte déjà dicté. */
+const SILENCE_FIN_MS = 5000;
+
+// Assemble les morceaux dictés. Selon le navigateur, chaque résultat contient
+// soit un nouveau morceau, soit toute la phrase depuis le début (Safari en
+// écoute continue) : on évite ainsi les répétitions.
+function assemblerDictee(resultats) {
+  let texte = "";
+  for (let i = 0; i < resultats.length; i++) {
+    const morceau = resultats[i][0].transcript.trim();
+    if (!morceau) continue;
+    const debut = texte.toLowerCase();
+    if (debut && morceau.toLowerCase().startsWith(debut)) texte = morceau;
+    else texte = texte ? `${texte} ${morceau}` : morceau;
+  }
+  return texte;
+}
+
+function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin }) {
+  let dejaDicte = "";      // texte des écoutes précédentes (après relance)
+  let enCours = "";        // texte de l'écoute en cours
+  let minuterie = null;
+  let rec = null;
+  let fini = false;
+  let annule = false;
+  let entendu = false;
+
+  const texteComplet = () => [dejaDicte, enCours].filter(Boolean).join(" ").trim();
+
+  const terminer = (erreur) => {
+    if (fini) return;
+    fini = true;
+    clearTimeout(minuterie);
+    try { rec?.stop(); } catch (_e) { /* déjà arrêtée */ }
+    onFin(annule ? "" : texteComplet(), erreur);
+  };
+
+  const armerSilence = () => {
+    clearTimeout(minuterie);
+    minuterie = setTimeout(() => terminer(), SILENCE_FIN_MS);
+  };
+
+  const demarrer = () => {
+    rec = new Reconnaissance();
+    rec.lang = "fr-FR";
+    rec.interimResults = true;
+    rec.continuous = true;
+    enCours = "";
+    rec.onresult = (ev) => {
+      entendu = true;
+      enCours = assemblerDictee(ev.results);
+      onPartiel(texteComplet());
+      armerSilence();
+    };
+    rec.onerror = (ev) => {
+      if (ev.error === "no-speech" || ev.error === "aborted") return;
+      onErreur?.(ev.error);
+      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") terminer(ev.error);
+    };
+    rec.onend = () => {
+      if (fini) return;
+      // Coupure par le navigateur pendant une pause : on reprend l'écoute,
+      // la minuterie de silence décidera de la fin.
+      if (entendu) {
+        dejaDicte = texteComplet();
+        enCours = "";
+        try { demarrer(); return; } catch (_e) { /* relance refusée */ }
+      }
+      terminer();
+    };
+    rec.start();
+  };
+
+  demarrer(); // peut lever une erreur : à l'appelant de la gérer
+  onDebut?.();
+  return {
+    envoyer: () => terminer(),
+    annuler: () => { annule = true; terminer(); try { rec?.abort(); } catch (_e) { /* rien */ } },
+  };
+}
+
 function BoutonMicroFlottant({ onTexte, onOuvrir }) {
   const [ecoute, setEcoute] = useState(false);
   const [transcription, setTranscription] = useState("");
@@ -1366,7 +1558,7 @@ function BoutonMicroFlottant({ onTexte, onOuvrir }) {
   const recRef = useRef(null);
   const texteRef = useRef("");
 
-  useEffect(() => () => recRef.current?.abort?.(), []);
+  useEffect(() => () => recRef.current?.annuler?.(), []);
 
   const Reconnaissance = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 
@@ -1376,39 +1568,27 @@ function BoutonMicroFlottant({ onTexte, onOuvrir }) {
     arreterLecture();
     debloquerSyntheseVocale();
     if (!Reconnaissance) { onOuvrir(); return; }
-    if (ecoute) { recRef.current?.stop(); return; }
+    // Pendant l'écoute, un appui envoie tout de suite ce qui a été dit.
+    if (ecoute) { recRef.current?.envoyer(); return; }
 
     setInfo("");
     setTranscription("");
     texteRef.current = "";
-    const rec = new Reconnaissance();
-    rec.lang = "fr-FR";
-    rec.interimResults = true;
-    rec.continuous = false;
-    rec.onresult = (ev) => {
-      let texte = "";
-      for (let i = 0; i < ev.results.length; i++) texte += ev.results[i][0].transcript;
-      texteRef.current = texte;
-      setTranscription(texte);
-    };
-    rec.onerror = (ev) => {
-      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
-        setInfo("Micro bloqué : autorise-le dans les réglages du navigateur.");
-      } else if (ev.error === "no-speech") {
-        setInfo("Je n'ai rien entendu.");
-      }
-    };
-    rec.onend = () => {
-      setEcoute(false);
-      const texte = texteRef.current.trim();
-      texteRef.current = "";
-      setTranscription("");
-      if (texte) onTexte(texte);
-    };
-    recRef.current = rec;
     try {
-      rec.start();
-      setEcoute(true);
+      recRef.current = ecoutePatiente(Reconnaissance, {
+        onDebut: () => setEcoute(true),
+        onPartiel: (texte) => { texteRef.current = texte; setTranscription(texte); },
+        onErreur: (erreur) => {
+          if (erreur === "not-allowed" || erreur === "service-not-allowed") setInfo("Micro bloqué : autorise-le dans les réglages du navigateur.");
+        },
+        onFin: (texte, erreur) => {
+          setEcoute(false);
+          setTranscription("");
+          texteRef.current = "";
+          if (texte) onTexte(texte);
+          else if (!erreur) setInfo("Je n'ai rien entendu.");
+        },
+      });
     } catch (e) {
       setEcoute(false);
       onOuvrir();
@@ -1427,6 +1607,7 @@ function BoutonMicroFlottant({ onTexte, onOuvrir }) {
       {(ecoute || info) && (
         <div className="micro-flottant-bulle">
           {info || transcription || "Je t'écoute…"}
+          {!info && transcription && <div className="micro-flottant-astuce">Appuie sur le micro pour envoyer</div>}
         </div>
       )}
       <button
@@ -1507,7 +1688,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       window.speechSynthesis.removeEventListener?.("voiceschanged", recharger);
       arreterLecture();
       conversationRef.current = false;
-      reconnaissanceRef.current?.abort?.();
+      reconnaissanceRef.current?.annuler?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1677,7 +1858,8 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       debloquerSyntheseVocale();
       setAttenteAppui(false);
       if (ecouteRef.current) {
-        reconnaissanceRef.current?.stop();
+        // Appui pendant l'écoute : on envoie tout de suite ce qui a été dit.
+        reconnaissanceRef.current?.envoyer();
         return;
       }
       if (!modeTexteRef.current) changerConversation(true);
@@ -1689,48 +1871,39 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     setTranscription("");
     transcriptionRef.current = "";
     let refusee = false;
-    const rec = new Reconnaissance();
-    rec.lang = "fr-FR";
-    rec.interimResults = true;
-    rec.continuous = false;
-    rec.onresult = (ev) => {
-      let texte = "";
-      for (let i = 0; i < ev.results.length; i++) texte += ev.results[i][0].transcript;
-      transcriptionRef.current = texte;
-      setTranscription(texte);
-      if (modeTexteRef.current) setSaisie(texte);
-    };
-    rec.onerror = (ev) => {
-      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
-        if (auto) {
-          refusee = true;
-        } else {
-          setInfoMicro("Le micro est bloqué : autorise-le pour ce site dans les réglages du navigateur.");
-          changerConversation(false);
-        }
-      } else if (ev.error === "no-speech" && !auto) {
-        setInfoMicro("Je n'ai rien entendu, réessaie.");
-      }
-    };
-    rec.onend = () => {
-      ecouteRef.current = false;
-      setEcoute(false);
-      const texte = transcriptionRef.current.trim();
-      transcriptionRef.current = "";
-      if (texte) {
-        envoyerRef.current?.(texte);
-      } else if (refusee) {
-        setAttenteAppui(true);
-      } else {
-        // Silence : la conversation se met en veille.
-        changerConversation(false);
-      }
-    };
-    reconnaissanceRef.current = rec;
     try {
-      rec.start();
-      ecouteRef.current = true;
-      setEcoute(true);
+      reconnaissanceRef.current = ecoutePatiente(Reconnaissance, {
+        onDebut: () => { ecouteRef.current = true; setEcoute(true); },
+        onPartiel: (texte) => {
+          transcriptionRef.current = texte;
+          setTranscription(texte);
+          if (modeTexteRef.current) setSaisie(texte);
+        },
+        onErreur: (erreur) => {
+          if (erreur === "not-allowed" || erreur === "service-not-allowed") {
+            if (auto) {
+              refusee = true;
+            } else {
+              setInfoMicro("Le micro est bloqué : autorise-le pour ce site dans les réglages du navigateur.");
+              changerConversation(false);
+            }
+          }
+        },
+        onFin: (texte, erreur) => {
+          ecouteRef.current = false;
+          setEcoute(false);
+          transcriptionRef.current = "";
+          if (texte) {
+            envoyerRef.current?.(texte);
+          } else if (refusee) {
+            setAttenteAppui(true);
+          } else {
+            if (!auto && !erreur) setInfoMicro("Je n'ai rien entendu, réessaie.");
+            // Silence : la conversation se met en veille.
+            changerConversation(false);
+          }
+        },
+      });
     } catch (e) {
       ecouteRef.current = false;
       setEcoute(false);
@@ -1744,7 +1917,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     setAttenteAppui(false);
     arreterLecture();
     setParle(false);
-    reconnaissanceRef.current?.abort?.();
+    reconnaissanceRef.current?.annuler?.();
   };
 
   const nouvelleConversation = () => {
@@ -1763,7 +1936,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
 
   const etat = ecoute ? "ecoute" : chargement ? "reflexion" : parle ? "parole" : attenteAppui ? "attente" : "veille";
   const libelleEtat = {
-    ecoute: "Je t'écoute…",
+    ecoute: transcription ? "Je t'écoute… (appuie pour envoyer)" : "Je t'écoute…",
     reflexion: "Je réfléchis…",
     parole: "Je te réponds…",
     attente: "Appuie pour répondre",
@@ -1933,6 +2106,10 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
   const openNewForm = () => { setEditingTask(null); setShowForm(!showForm || !!editingTask); };
   const openEditForm = (task) => { setEditingTask(task); setShowForm(true); };
   const closeForm = () => { setShowForm(false); setEditingTask(null); };
+  const formulaireRef = useRef(null);
+  useEffect(() => {
+    if (showForm && editingTask) formulaireRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [showForm, editingTask]);
 
   return (
     <div>
@@ -1947,7 +2124,9 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
       </header>
 
       {showForm && (
+        <div ref={formulaireRef} className="ancre-formulaire">
         <TaskForm
+          key={editingTask?.id || "nouveau"}
           clients={clients}
           editingTask={editingTask}
           onCancel={closeForm}
@@ -1956,6 +2135,7 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
           hideRappelToggle
           submitLabel={editingTask ? "Enregistrer les modifications" : "Ajouter le rappel"}
         />
+        </div>
       )}
 
       {dates.length === 0 && (
@@ -1976,10 +2156,12 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
                 <div className="grow">
                   <div className="row-title">{p.titre}</div>
                   <div className="row-sub">{nomAffiche(p.client, clients)} {p.heure !== "—" && `· ${p.heure}`}</div>
+                  <div className="tache-actions">
+                    <button type="button" className="btn-action principal" onClick={() => openEditForm(p)}>
+                      <Icon name="edit" size={15} /> Modifier
+                    </button>
+                  </div>
                 </div>
-                <button className="icon-btn" onClick={() => openEditForm(p)} title="Modifier ce rappel">
-                  <Icon name="edit" size={15} />
-                </button>
                 <DeleteButton onConfirm={() => onDelete(p.id)} label="" />
                 <button className="pill pill-clickable pill-warm" onClick={() => onToggleRappel(p.id)}>
                   <Icon name="bell" size={13} /> Désactiver le rappel
@@ -2524,6 +2706,8 @@ function htmlRapportPourPdf(html) {
   </style><div class="pdf-page">${corps}</div>`;
 }
 
+const ESTIME_TELEPHONE = typeof navigator !== "undefined" && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || "");
+
 async function genererPdfBase64(html) {
   const { default: html2pdf } = await import("html2pdf.js");
   // L'enveloppe est placée hors de l'écran pour que la conversion ne se voie
@@ -2542,7 +2726,8 @@ async function genererPdfBase64(html) {
       .set({
         margin: [12, 12, 14, 12],
         image: { type: "jpeg", quality: 0.85 },
-        html2canvas: { scale: 1.6, useCORS: true, backgroundColor: "#ffffff", logging: false },
+        // Sur téléphone, rendu un peu moins fin : beaucoup moins de mémoire.
+        html2canvas: { scale: ESTIME_TELEPHONE ? 1.15 : 1.6, useCORS: true, backgroundColor: "#ffffff", logging: false },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
         pagebreak: { mode: ["css", "legacy"], avoid: [".pdf-bloc-insecable", ".pdf-checklist li", ".pdf-table tr", ".pdf-photo-item", ".pdf-signatures"] },
       })
@@ -2585,8 +2770,10 @@ function useRangementOneDrive({ reports, clients, settings, upsertReport, upsert
     };
     const reserveAilleurs = (o) => o?.parAppareil && o.parAppareil !== ID_APPAREIL && maintenant - (o.reserveLe || 0) < 3 * 60000;
 
+    const aEviter = lireStockage(CLE_PDF_A_EVITER, []);
     const rapports = reports.filter((r) => {
       if (!r.valide || !r.client) return false;
+      if (aEviter.includes(r.id)) return false; // a déjà fait fermer l'appli ici
       const cree = Number(String(r.id || "").slice(1));
       const nouveau = Number.isFinite(cree) && cree >= depuis;
       if (!nouveau && !r.onedrive?.itemId) return false; // anciens rapports : non renvoyés
@@ -2607,7 +2794,13 @@ function useRangementOneDrive({ reports, clients, settings, upsertReport, upsert
         upsertReport({ ...r, onedrive: { ...(r.onedrive || {}), parAppareil: ID_APPAREIL, reserveLe: Date.now() } });
         try {
           const fiche = clients.find((c) => c.nom === r.client);
-          const contenu = await genererPdfBase64(buildReportHtml(r, settings, clients));
+          ecrireStockage(CLE_PDF_EN_COURS, { id: r.id, client: r.client, debut: Date.now() });
+          let contenu;
+          try {
+            contenu = await genererPdfBase64(buildReportHtml(r, settings, clients));
+          } finally {
+            ecrireStockage(CLE_PDF_EN_COURS, null);
+          }
           const res = await appelerOneDrive("ranger", {
             client: [r.client, fiche?.raisonSociale, fiche ? libelleClient(fiche) : ""].filter(Boolean),
             sous_dossier: "RAPPORTS",
@@ -3068,6 +3261,7 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
       />
       <GmailSection />
       {oneDrive && <OneDriveSection etat={oneDrive.etat} onChange={oneDrive.rafraichir} />}
+      <IncidentsSection />
 
       <ReglesClassement
         liste={draft.reglesClassementListe || REGLES_CLASSEMENT_DEFAUT_LISTE}
@@ -4432,7 +4626,9 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   const [facturable, setFacturable] = useState(editingReport?.facturable ?? true);
   const [montant, setMontant] = useState(editingReport?.montant || "");
   const [tva, setTva] = useState(editingReport?.tva || settings.pennylane?.tvaParDefaut || "FR_200");
-  const [marquerEffectue, setMarquerEffectue] = useState(editingReport?.valide ?? true);
+  // Décoché par défaut : l'intervention n'est validée que lorsque le
+  // technicien le décide (case cochée, ou bouton « Valider » sur le rapport).
+  const [marquerEffectue, setMarquerEffectue] = useState(editingReport?.valide ?? false);
   const [devisAEffectuer, setDevisAEffectuer] = useState(editingReport?.devisAEffectuer || "");
   const [photos, setPhotos] = useState(editingReport?.photos || []);
   // Aucune checklist n'est pré-remplie : sur un nouveau rapport, on choisit
@@ -5866,6 +6062,12 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
   const openNewTaskForm = () => { setEditingTask(null); setShowForm(!showForm || !!editingTask); };
   const openEditTaskForm = (task) => { setEditingTask(task); setShowForm(true); };
   const closeTaskForm = () => { setShowForm(false); setEditingTask(null); };
+  const formulaireRef = useRef(null);
+  // Le formulaire s'ouvre en haut de la page : sur téléphone, on y descend
+  // pour qu'il ne reste pas hors de vue.
+  useEffect(() => {
+    if (showForm && editingTask) formulaireRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [showForm, editingTask]);
 
   return (
     <div>
@@ -5880,13 +6082,16 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
       </header>
 
       {showForm && (
+        <div ref={formulaireRef} className="ancre-formulaire">
         <TaskForm
+          key={editingTask?.id || "nouvelle"}
           clients={clients}
           initialDate={selectedDate}
           editingTask={editingTask}
           onCancel={closeTaskForm}
           onSubmit={(t) => { onAdd(t); closeTaskForm(); }}
         />
+        </div>
       )}
 
       <MiniCalendar dateCounts={dateCounts} dateHeures={dateHeures} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
@@ -5921,10 +6126,15 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
                         </>
                       );
                     })()}
+                    <div className="tache-actions">
+                      <button type="button" className="btn-action principal" onClick={(e) => { e.stopPropagation(); openEditTaskForm(p); }}>
+                        <Icon name="edit" size={15} /> Modifier
+                      </button>
+                      <button type="button" className="btn-action" onClick={(e) => { e.stopPropagation(); onCreateReport(p); }}>
+                        <Icon name="report" size={15} /> Rapport
+                      </button>
+                    </div>
                   </div>
-                  <button className="icon-btn" onClick={(e) => { e.stopPropagation(); openEditTaskForm(p); }} title="Modifier cette tâche">
-                    <Icon name="edit" size={15} />
-                  </button>
                   <span onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDelete(p.id)} label="" /></span>
                   <button className={"pill pill-clickable " + (p.rappel ? "pill-warm" : "pill-muted")} onClick={(e) => { e.stopPropagation(); onToggleRappel(p.id); }}>
                     <Icon name="bell" size={13} /> {p.rappel ? "Rappel actif" : "Sans rappel"}
@@ -6070,6 +6280,7 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
   // Téléphone saisi à la main, pour un client qui n'est pas encore au fichier.
   const [tel, setTel] = useState(editingTask?.tel || "");
   const [notes, setNotes] = useState(editingTask?.notes || "");
+  const [erreurTitre, setErreurTitre] = useState(false);
 
   const clientConnu = clients.find((c) => c.nom === client);
   // L'adresse du site l'emporte toujours ; à défaut, on retombe sur celle de la
@@ -6077,10 +6288,10 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
   const adresseNavigation = (adresse && adresse.trim()) || (clientConnu && clientConnu.adresse) || "";
 
   const submit = () => {
-    if (!titre) return;
+    if (!titre.trim()) { setErreurTitre(true); return; }
     onSubmit({
       id: editingTask?.id || ("p" + Date.now()),
-      titre,
+      titre: titre.trim(),
       client,
       date,
       heure,
@@ -6097,7 +6308,9 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
   return (
     <div className="card form-card">
       <div className="form-grid">
-        <label>Intitulé<input value={titre} onChange={(e) => setTitre(e.target.value)} placeholder="Ex : Entretien annuel" /></label>
+        <label>Intitulé<input value={titre} onChange={(e) => { setTitre(e.target.value); setErreurTitre(false); }} placeholder="Ex : Entretien annuel" />
+          {erreurTitre && <span className="hint alerte"><Icon name="alert" size={13} /> Indique un intitulé pour pouvoir enregistrer.</span>}
+        </label>
         <div className="field-col">
           Client
           <ClientSearchSelect
@@ -7822,6 +8035,16 @@ textarea { resize: vertical; }
 .bulle-moi { align-self: flex-end; background: var(--bleu); color: #fff; border-bottom-right-radius: 4px; }
 .bulle-assistant { align-self: flex-start; background: var(--carte); color: var(--encre); border: 1px solid var(--trait); border-bottom-left-radius: 4px; }
 .bulle-erreur { background: var(--rouge-clair); color: var(--rouge-fonce); border-color: var(--rouge-clair-2); }
+.tache-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.btn-action { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--trait); background: var(--carte); color: var(--encre-2); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.btn-action:hover { background: var(--survol); }
+.btn-action.principal { border-color: var(--bleu); color: var(--bleu); }
+.btn-action.principal:hover { background: var(--bleu-clair); }
+.micro-flottant-astuce { margin-top: 4px; font-size: 11.5px; opacity: 0.7; }
+.incidents { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.incidents li { border: 1px solid var(--trait); border-radius: 8px; padding: 8px 10px; word-break: break-word; }
+.incident-detail { margin-top: 4px; font-size: 11.5px; color: var(--encre-4); font-family: ui-monospace, monospace; }
+.ancre-formulaire { scroll-margin-top: 12px; }
 .notif-heures { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 12px; margin: 12px 0 4px; }
 .notif-heures label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--encre-2); min-width: 0; }
 .notif-heures select { width: 100%; min-width: 0; }
@@ -7953,7 +8176,7 @@ textarea { resize: vertical; }
   .row-delete-hover { opacity: 1; }
   /* La barre du haut étant fixe sur mobile, on laisse la place nécessaire
      au-dessus de la carte que l'on fait remonter. */
-  .report-card, .fiche-ancre { scroll-margin-top: calc(70px + env(safe-area-inset-top, 0px)); }
+  .report-card, .fiche-ancre, .ancre-formulaire { scroll-margin-top: calc(70px + env(safe-area-inset-top, 0px)); }
   /* Sur téléphone, le calendrier occupe toute la largeur : les cases restent
      assez grandes pour être visées au doigt. */
   .mini-calendar { max-width: 100%; }
