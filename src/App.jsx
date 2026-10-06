@@ -491,7 +491,7 @@ function AppContenu() {
     }
     // E-mail, rangement d'une pièce jointe dans OneDrive, règle de
     // classement : exécutés côté serveur, là où se trouvent les accès.
-    if (["email", "classer_pj", "regle", "dossier", "pennylane_fournisseur"].includes(action.type) && action.item) {
+    if (["email", "classer_pj", "regle", "dossier", "pennylane_fournisseur", "debrief_valider"].includes(action.type) && action.item) {
       return appelerAssistantExecution(action).then(() => true);
     }
     return false;
@@ -1281,7 +1281,11 @@ async function appelerAssistant(messages) {
 
 // Exécute côté serveur une action validée (envoi d'un e-mail).
 async function appelerAssistantExecution(action) {
-  const { data, error } = await supabase.functions.invoke("assistant", { body: { executer: action } });
+  return appelerAssistantCorps({ executer: action });
+}
+
+async function appelerAssistantCorps(corps) {
+  const { data, error } = await supabase.functions.invoke("assistant", { body: corps });
   if (error) {
     let detail = error.message;
     try {
@@ -1646,6 +1650,148 @@ function modeTexteEnregistre() {
      haute puis se remet à écouter quelques secondes (mode conversation) ;
    - le mode texte : le fil de la conversation, avec saisie au clavier.
    Les propositions à valider s'affichent dans les deux modes. */
+/* ---------- Débrief du matin ----------
+   Préparé chaque matin par l'assistant (heure réglée dans Paramètres →
+   Notifications, 6h30 par défaut) : factures fournisseurs reçues par mail
+   (rangement proposé, ou fait en mode automatique) et mails à traiter. Les
+   propositions se valident ici, ou à la voix avec Siri (« fais-moi le point »). */
+const LIBELLES_STATUT_DEBRIEF = { a_valider: "À valider", fait: "Fait", ignore: "Ignoré", erreur: "Erreur" };
+
+async function lireDernierDebrief() {
+  const { data, error } = await supabase.from("debriefs").select("data").order("id", { ascending: false }).limit(1);
+  if (error) throw new Error(/debriefs/.test(error.message) ? "La table du débrief n'existe pas encore : lance le script SQL du débrief dans Supabase." : error.message);
+  return data && data[0] ? data[0].data : null;
+}
+
+function CarteDebrief() {
+  const [debrief, setDebrief] = useState(undefined); // undefined = chargement, null = aucun
+  const [ouvert, setOuvert] = useState(true);
+  const [enCours, setEnCours] = useState(false);
+  const [preparation, setPreparation] = useState(false);
+  const [message, setMessage] = useState(null);
+
+  const charger = async () => {
+    try {
+      const d = await lireDernierDebrief();
+      setDebrief(d);
+      return d;
+    } catch (e) {
+      setDebrief(null);
+      setMessage({ type: "erreur", texte: String(e.message || e) });
+      return null;
+    }
+  };
+  useEffect(() => {
+    charger().then((d) => setOuvert(!!d && d.date === toLocalISODate(new Date())));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const preparer = async () => {
+    setPreparation(true);
+    setMessage(null);
+    const avant = debrief?.genere_le;
+    try {
+      await appelerAssistantCorps({ debrief: true });
+      // Préparation en arrière-plan (1 à 3 minutes) : on regarde régulièrement.
+      for (let i = 0; i < 30; i++) {
+        await new Promise((ok) => setTimeout(ok, 8000));
+        const d = await lireDernierDebrief().catch(() => null);
+        if (d && d.genere_le !== avant) { setDebrief(d); setOuvert(true); break; }
+      }
+    } catch (e) {
+      setMessage({ type: "erreur", texte: String(e.message || e) });
+    }
+    setPreparation(false);
+  };
+
+  const traiter = async (ids, ignorer = false) => {
+    setEnCours(true);
+    setMessage(null);
+    try {
+      const r = await appelerAssistantCorps({ debrief_valider: { date: debrief.date, ids, ignorer } });
+      if (!ignorer) setMessage({ type: r.erreurs?.length ? "erreur" : "ok", texte: r.erreurs?.length ? `Fait : ${r.faites}. Problème : ${r.erreurs.join(" | ")}` : `C'est fait (${r.faites}).` });
+    } catch (e) {
+      setMessage({ type: "erreur", texte: String(e.message || e) });
+    }
+    await charger();
+    setEnCours(false);
+  };
+
+  if (debrief === undefined) return null;
+  const actions = debrief?.actions || [];
+  const enAttente = actions.filter((a) => a.statut === "a_valider");
+  const estDuJour = debrief && debrief.date === toLocalISODate(new Date());
+
+  return (
+    <section className="card carte-debrief">
+      <div className="carte-debrief-tete">
+        <button type="button" className="carte-debrief-titre" onClick={() => setOuvert(!ouvert)} aria-expanded={ouvert}>
+          <Icon name={ouvert ? "chevronDown" : "chevronRight"} size={16} />
+          <span>
+            <strong>{debrief ? (estDuJour ? "Débrief du jour" : `Dernier débrief : ${new Date(debrief.date + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}`) : "Débrief du matin"}</strong>
+            {enAttente.length > 0 && <span className="pill pill-warm">{enAttente.length} à valider</span>}
+            {debrief && <span className={"pill " + (debrief.mode === "automatique" ? "pill-ok" : "pill-muted")}>{debrief.mode === "automatique" ? "Automatique" : "Semaine de test"}</span>}
+          </span>
+        </button>
+        <span className="carte-debrief-boutons">
+          {debrief?.texte && (
+            <button type="button" className="btn-ghost small" onClick={() => { syntheseVocaleDebloquee = true; lireAVoixHaute(debrief.texte); }}>
+              <Icon name="volume" size={14} /> Écouter
+            </button>
+          )}
+          <button type="button" className="btn-ghost small" onClick={preparer} disabled={preparation}>
+            {preparation ? "Préparation… (1 à 3 min)" : debrief ? "Refaire" : "Préparer maintenant"}
+          </button>
+        </span>
+      </div>
+
+      {message && (
+        <div className={"entretien-annuel-badge " + (message.type === "ok" ? "ok" : "late")}>
+          <Icon name={message.type === "ok" ? "check" : "alert"} size={14} /> {message.texte}
+        </div>
+      )}
+
+      {ouvert && (
+        <>
+          {debrief ? (
+            <>
+              <p className="carte-debrief-texte">{debrief.texte}</p>
+              {actions.length > 0 && (
+                <ul className="carte-debrief-actions">
+                  {actions.map((a) => (
+                    <li key={a.id} className={"debrief-action statut-" + a.statut}>
+                      <div className="debrief-action-texte">
+                        {a.resume}
+                        {a.erreur && <div className="hint alerte">{a.erreur}</div>}
+                      </div>
+                      {a.statut === "a_valider" ? (
+                        <span className="debrief-action-boutons">
+                          <button type="button" className="btn-ghost small" onClick={() => traiter([a.id], true)} disabled={enCours}>Ignorer</button>
+                          <button type="button" className="btn-small btn-valide" onClick={() => traiter([a.id])} disabled={enCours}><Icon name="check" size={13} /> Valider</button>
+                        </span>
+                      ) : (
+                        <span className={"pill " + (a.statut === "fait" ? "pill-ok" : a.statut === "erreur" ? "pill-warm" : "pill-muted")}>{LIBELLES_STATUT_DEBRIEF[a.statut] || a.statut}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {enAttente.length > 1 && (
+                <button type="button" className="btn-primary assistant-tout-valider" onClick={() => traiter(enAttente.map((a) => a.id))} disabled={enCours}>
+                  {enCours ? "En cours…" : `Tout valider (${enAttente.length})`}
+                </button>
+              )}
+              <p className="hint">Préparé le {new Date(debrief.genere_le).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })} · {debrief.nb_mails || 0} mail(s) analysé(s). En voiture, dis à Siri : « fais-moi le point ».</p>
+            </>
+          ) : (
+            <p className="hint">Pas encore de débrief. Il est préparé chaque matin à l'heure réglée dans Paramètres → Notifications (6h30 par défaut), ou tout de suite avec « Préparer maintenant ».</p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function Assistant({ messages, setMessages, actions, setActions, onAppliquerAction, texteAEnvoyer, onTexteEnvoye }) {
   const [saisie, setSaisie] = useState("");
   const [chargement, setChargement] = useState(false);
@@ -1760,6 +1906,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     if (ok && action.type === "classer_pj") ajouterMessage("assistant", "Fichier rangé dans OneDrive.");
     if (ok && action.type === "regle") ajouterMessage("assistant", "Règle de classement ajoutée.");
     if (ok && action.type === "pennylane_fournisseur") ajouterMessage("assistant", "Facture envoyée dans Pennylane.");
+    if (ok && action.type === "debrief_valider") ajouterMessage("assistant", "Propositions du débrief validées.");
     if (ok && action.type === "dossier") ajouterMessage("assistant", (action.item?.chemins?.length || 0) > 1 ? "Dossiers créés dans OneDrive." : "Dossier créé dans OneDrive.");
     return ok;
   };
@@ -1992,6 +2139,8 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
           )}
         </div>
       </header>
+
+      <CarteDebrief />
 
       {!modeTexte && (
         <div className="vocal">
@@ -2317,6 +2466,8 @@ function NotificationsSection({ heures, onChangeHeures }) {
   const soir = heures?.soir === "" ? "" : heures?.soir || HEURES_NOTIF_DEFAUT.soir;
   // Délai du rappel avant une intervention (en minutes, « » = pas de rappel).
   const avance = heures?.avanceRappel === "" ? "" : String(heures?.avanceRappel ?? 30);
+  const debrief = heures?.debrief === "" ? "" : heures?.debrief || "06:30";
+  const debriefAuto = heures?.debriefAuto === true;
   const [actif, setActif] = useState(false);
   const [enCours, setEnCours] = useState(false);
   const [message, setMessage] = useState(null);
@@ -2361,7 +2512,8 @@ function NotificationsSection({ heures, onChangeHeures }) {
         Le matin, le résumé de ta journée (interventions, rappels, devis à faire). Le soir, ce qui t'attend demain, les
         rappels en retard et les interventions à marquer « fait » (rien n'est envoyé le soir s'il n'y a rien à dire).
         Chaque tâche avec « Rappel actif » t'envoie aussi sa propre notification : avant l'heure pour une intervention
-        (avec l'adresse et le téléphone), à l'heure pour un rappel.
+        (avec l'adresse et le téléphone), à l'heure pour un rappel. Chaque matin, l'assistant prépare aussi ton débrief
+        administratif (mails reçus, factures fournisseurs), à écouter avec Siri : « fais-moi le point ».
         L'activation se fait appareil par appareil. Sur iPhone, l'application doit être ouverte depuis son icône sur
         l'écran d'accueil.
       </p>
@@ -2385,6 +2537,21 @@ function NotificationsSection({ heures, onChangeHeures }) {
             <option value="">Pas de notification</option>
           </select>
         </label>
+        <label>Débrief administratif <span className="hint-inline">(mails et factures)</span>
+          <select value={debrief} onChange={(e) => onChangeHeures({ debrief: e.target.value })}>
+            {quartsDHeure(5, 9).map((h) => <option key={h} value={h}>{afficherHeure(h)}</option>)}
+            <option value="">Pas de débrief</option>
+          </select>
+        </label>
+        <label className="check-inline grid-full">
+          <input type="checkbox" checked={debriefAuto} onChange={(e) => onChangeHeures({ debriefAuto: e.target.checked })} />
+          Ranger les factures fournisseurs automatiquement (OneDrive et Pennylane, sans validation)
+        </label>
+        <p className="hint grid-full">
+          {debriefAuto
+            ? "Mode automatique : le débrief range lui-même les factures fournisseurs et te dit ce qu'il a fait. Les mails des clients restent toujours à ta décision."
+            : "Semaine de test : le débrief te propose le rangement des factures fournisseurs, tu valides. Coche la case quand tu es sûr qu'il range bien."}
+        </p>
       </div>
       <p className="hint">Les heures valent pour tous tes appareils. Pense à enregistrer en bas de la page.</p>
 
@@ -8208,6 +8375,18 @@ textarea { resize: vertical; }
 .incidents { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .incidents li { border: 1px solid var(--trait); border-radius: 8px; padding: 8px 10px; word-break: break-word; }
 .incident-detail { margin-top: 4px; font-size: 11.5px; color: var(--encre-4); font-family: ui-monospace, monospace; }
+.carte-debrief { display: flex; flex-direction: column; gap: 10px; }
+.carte-debrief-tete { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.carte-debrief-titre { display: inline-flex; align-items: center; gap: 8px; background: none; border: none; padding: 0; color: var(--encre); font: inherit; font-size: 15px; cursor: pointer; text-align: left; }
+.carte-debrief-titre > span { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.carte-debrief-boutons { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.carte-debrief-texte { margin: 0; white-space: pre-wrap; line-height: 1.55; font-size: 14.5px; color: var(--encre); }
+.carte-debrief-actions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.debrief-action { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--trait); border-radius: 8px; font-size: 13.5px; }
+.debrief-action-texte { flex: 1 1 240px; min-width: 0; word-break: break-word; }
+.debrief-action-boutons, .debrief-action > .pill { margin-left: auto; }
+.debrief-action-boutons { display: inline-flex; gap: 6px; }
+.debrief-action.statut-fait, .debrief-action.statut-ignore { opacity: 0.7; }
 .ancre-formulaire { scroll-margin-top: 12px; }
 .notif-heures { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 12px; margin: 12px 0 4px; }
 .notif-heures .grid-full { grid-column: 1 / -1; }
