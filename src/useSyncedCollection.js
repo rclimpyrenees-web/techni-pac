@@ -2,6 +2,19 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient";
 
 /**
+ * Une ligne sans contenu (ou sans identifiant) ne doit jamais entrer dans une
+ * liste : le reste de l'application suppose que chaque élément a un « id ».
+ * Les lignes de la base sont toujours ramenées à { ...data, id }.
+ */
+function elementValide(row) {
+  const d = row && row.data;
+  if (!d || typeof d !== "object") return null;
+  const id = d.id ?? row.id;
+  return id === undefined || id === null ? null : { ...d, id };
+}
+const sansVides = (liste) => (liste || []).filter((it) => it && it.id !== undefined && it.id !== null);
+
+/**
  * Attend que la session de connexion soit restaurée avant toute lecture.
  *
  * C'était l'origine du bug « plus aucun client au démarrage » : au lancement,
@@ -87,9 +100,9 @@ export function useSyncedCollection(table, seed) {
           const rows = seed.map((item) => ({ id: item.id, data: item }));
           const { error: insertError } = await supabase.from(table).insert(rows);
           if (insertError) setError(insertError.message);
-          setItems(seed);
+          setItems(sansVides(seed));
         } else {
-          setItems(data.map((row) => row.data));
+          setItems((data || []).map(elementValide).filter(Boolean));
           setError(null);
         }
         setLoading(false);
@@ -126,13 +139,22 @@ export function useSyncedCollection(table, seed) {
         "postgres_changes",
         { event: "*", schema: "public", table },
         (payload) => {
+          if (payload.eventType === "DELETE") {
+            const id = payload.old && payload.old.id;
+            if (id !== undefined && id !== null) setItems((prev) => sansVides(prev).filter((it) => it.id !== id));
+            else load();
+            return;
+          }
+          // Pour une ligne volumineuse (rapport avec photos…), l'avis de
+          // changement peut arriver sans son contenu : on relit alors la table
+          // au lieu d'ajouter un élément vide (c'était la cause de l'écran
+          // « undefined is not an object (evaluating 'b.id') »).
+          const incoming = elementValide(payload.new);
+          if (!incoming) { load(); return; }
           setItems((prev) => {
-            if (payload.eventType === "DELETE") {
-              return prev.filter((it) => it.id !== payload.old.id);
-            }
-            const incoming = payload.new.data;
-            const exists = prev.some((it) => it.id === incoming.id);
-            return exists ? prev.map((it) => (it.id === incoming.id ? incoming : it)) : [...prev, incoming];
+            const liste = sansVides(prev);
+            const exists = liste.some((it) => it.id === incoming.id);
+            return exists ? liste.map((it) => (it.id === incoming.id ? incoming : it)) : [...liste, incoming];
           });
         }
       )
@@ -149,9 +171,11 @@ export function useSyncedCollection(table, seed) {
 
   const upsert = useCallback(
     async (item) => {
+      if (!item || item.id === undefined || item.id === null) return;
       setItems((prev) => {
-        const exists = prev.some((it) => it.id === item.id);
-        return exists ? prev.map((it) => (it.id === item.id ? item : it)) : [...prev, item];
+        const liste = sansVides(prev);
+        const exists = liste.some((it) => it.id === item.id);
+        return exists ? liste.map((it) => (it.id === item.id ? item : it)) : [...liste, item];
       });
       const { error: upsertError } = await supabase.from(table).upsert({ id: item.id, data: item });
       if (upsertError) setError(upsertError.message);
@@ -161,7 +185,7 @@ export function useSyncedCollection(table, seed) {
 
   const remove = useCallback(
     async (id) => {
-      setItems((prev) => prev.filter((it) => it.id !== id));
+      setItems((prev) => sansVides(prev).filter((it) => it.id !== id));
       const { error: deleteError } = await supabase.from(table).delete().eq("id", id);
       if (deleteError) setError(deleteError.message);
     },
