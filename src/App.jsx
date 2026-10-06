@@ -506,7 +506,7 @@ function AppContenu() {
   const isoDebutSemaine = toLocalISODate(debutSemaine);
   const isoFinSemaine = toLocalISODate(finSemaine);
   const upcoming = planning.filter(
-    (p) => !p.fait && p.categorie !== "relance" && p.date >= isoDebutSemaine && p.date <= isoFinSemaine
+    (p) => !p.fait && p.categorie !== "relance" && !estVacances(p) && p.date <= isoFinSemaine && finDeTache(p) >= isoDebutSemaine
   ).length;
   const devisAFaireCount = devisAFaire.length;
   const aFacturer = facturation.filter((f) => !f.facture).length;
@@ -1131,7 +1131,7 @@ function AppContenu() {
 /* ---------- Dashboard ---------- */
 function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, reports, rappelsActifs, onToggle, onNavigate, onOpenReport }) {
   const todayIso = toLocalISODate(new Date());
-  const next = planning.filter((p) => !p.fait && p.categorie !== "relance" && p.date === todayIso);
+  const next = planning.filter((p) => !p.fait && p.categorie !== "relance" && !estVacances(p) && couvreJour(p, todayIso));
 
   const now = new Date();
   const moisEnCours = now.getMonth() + 1;
@@ -2315,6 +2315,8 @@ const afficherHeure = (hhmm) => hhmm.replace(":", "h").replace(/^0/, "").replace
 function NotificationsSection({ heures, onChangeHeures }) {
   const matin = heures?.matin === "" ? "" : heures?.matin || HEURES_NOTIF_DEFAUT.matin;
   const soir = heures?.soir === "" ? "" : heures?.soir || HEURES_NOTIF_DEFAUT.soir;
+  // Délai du rappel avant une intervention (en minutes, « » = pas de rappel).
+  const avance = heures?.avanceRappel === "" ? "" : String(heures?.avanceRappel ?? 30);
   const [actif, setActif] = useState(false);
   const [enCours, setEnCours] = useState(false);
   const [message, setMessage] = useState(null);
@@ -2358,21 +2360,29 @@ function NotificationsSection({ heures, onChangeHeures }) {
       <p className="hint">
         Le matin, le résumé de ta journée (interventions, rappels, devis à faire). Le soir, ce qui t'attend demain, les
         rappels en retard et les interventions à marquer « fait » (rien n'est envoyé le soir s'il n'y a rien à dire).
+        Chaque tâche avec « Rappel actif » t'envoie aussi sa propre notification : avant l'heure pour une intervention
+        (avec l'adresse et le téléphone), à l'heure pour un rappel.
         L'activation se fait appareil par appareil. Sur iPhone, l'application doit être ouverte depuis son icône sur
         l'écran d'accueil.
       </p>
 
       <div className="notif-heures">
         <label>Résumé du matin
-          <select value={matin} onChange={(e) => onChangeHeures({ matin: e.target.value, soir })}>
+          <select value={matin} onChange={(e) => onChangeHeures({ matin: e.target.value })}>
             {HEURES_MATIN.map((h) => <option key={h} value={h}>{afficherHeure(h)}</option>)}
             <option value="">Pas de résumé le matin</option>
           </select>
         </label>
         <label>Résumé du soir
-          <select value={soir} onChange={(e) => onChangeHeures({ matin, soir: e.target.value })}>
+          <select value={soir} onChange={(e) => onChangeHeures({ soir: e.target.value })}>
             {HEURES_SOIR.map((h) => <option key={h} value={h}>{afficherHeure(h)}</option>)}
             <option value="">Pas de résumé le soir</option>
+          </select>
+        </label>
+        <label className="grid-full">Rappel avant une intervention <span className="hint-inline">(si « Rappel actif »)</span>
+          <select value={avance} onChange={(e) => onChangeHeures({ avanceRappel: e.target.value === "" ? "" : Number(e.target.value) })}>
+            {[[15, "15 min avant"], [30, "30 min avant"], [45, "45 min avant"], [60, "1 h avant"], [90, "1 h 30 avant"], [120, "2 h avant"]].map(([v, l]) => <option key={v} value={String(v)}>{l}</option>)}
+            <option value="">Pas de notification</option>
           </select>
         </label>
       </div>
@@ -3260,7 +3270,7 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
 
       <NotificationsSection
         heures={draft.notifications}
-        onChangeHeures={(h) => { setDraft((d) => ({ ...d, notifications: h })); setSaved(false); }}
+        onChangeHeures={(h) => { setDraft((d) => ({ ...d, notifications: { ...(d.notifications || {}), ...h } })); setSaved(false); }}
       />
       <GmailSection />
       {oneDrive && <OneDriveSection etat={oneDrive.etat} onChange={oneDrive.rafraichir} />}
@@ -6023,12 +6033,45 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
 }
 
 /* ---------- Planning ---------- */
+/* ---------- Tâches sur plusieurs jours et vacances ----------
+   Une tâche peut avoir une date de fin (dateFin) : elle apparaît alors sur
+   chaque jour, de la date de début à la date de fin. Les vacances sont des
+   tâches de catégorie « vacances » : jours bloqués, en rose sur le calendrier. */
+const MAX_JOURS_TACHE = 62;
+const estVacances = (p) => p?.categorie === "vacances";
+const finDeTache = (p) => (p?.dateFin && p.dateFin > p.date ? p.dateFin : p?.date);
+
+function joursDeTache(p) {
+  if (!p?.date) return [];
+  const fin = finDeTache(p);
+  const jours = [];
+  const d = new Date(p.date + "T12:00:00");
+  for (let i = 0; i < MAX_JOURS_TACHE; i++) {
+    const iso = toLocalISODate(d);
+    if (iso > fin) break;
+    jours.push(iso);
+    d.setDate(d.getDate() + 1);
+  }
+  return jours;
+}
+
+function couvreJour(p, iso) {
+  return !!p?.date && p.date <= iso && iso <= finDeTache(p);
+}
+
+function dateCourte(iso) {
+  if (!iso) return "";
+  return new Date(iso + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
+}
+
 function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, onToggleRappel, onCreateReport, onDelete }) {
-  const interventions = planning.filter((p) => p.categorie !== "relance");
-  const grouped = interventions.reduce((acc, p) => {
-    (acc[p.date] = acc[p.date] || []).push(p);
-    return acc;
-  }, {});
+  const interventions = planning.filter((p) => p.categorie !== "relance" && !estVacances(p));
+  const grouped = {};
+  interventions.forEach((p) => joursDeTache(p).forEach((jour) => (grouped[jour] = grouped[jour] || []).push(p)));
+  Object.values(grouped).forEach((liste) => liste.sort((a, b) => String(a.heure || "99").localeCompare(String(b.heure || "99"))));
+  const vacances = planning.filter(estVacances);
+  const joursVacances = new Set(vacances.flatMap(joursDeTache));
+  const vacancesDuJour = (iso) => vacances.filter((v) => couvreJour(v, iso));
   const dates = Object.keys(grouped).sort();
   const dateCounts = {};
   const dateHeures = {};
@@ -6091,17 +6134,34 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
           clients={clients}
           initialDate={selectedDate}
           editingTask={editingTask}
+          joursVacances={joursVacances}
+          autoriserVacances
           onCancel={closeTaskForm}
           onSubmit={(t) => { onAdd(t); closeTaskForm(); }}
         />
         </div>
       )}
 
-      <MiniCalendar dateCounts={dateCounts} dateHeures={dateHeures} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+      <MiniCalendar dateCounts={dateCounts} dateHeures={dateHeures} joursVacances={joursVacances} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
 
       {selectedDate && (
         <section className="card planning-day">
           <h3>{new Date(selectedDate).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</h3>
+          {vacancesDuJour(selectedDate).map((v) => (
+            <div key={v.id} className="bandeau-vacances">
+              <span className="bandeau-vacances-texte">
+                <strong>🌴 {v.titre || "Vacances"}</strong>
+                <span>{finDeTache(v) !== v.date ? `du ${dateCourte(v.date)} au ${dateCourte(finDeTache(v))}` : dateCourte(v.date)}</span>
+                {v.notes && v.notes.trim() ? <span className="tache-notes">{v.notes}</span> : null}
+              </span>
+              <span className="groupe-modifier">
+                <button type="button" className="btn-action modifier" onClick={() => openEditTaskForm(v)}>
+                  <Icon name="edit" size={15} /> Modifier
+                </button>
+                <DeleteButton onConfirm={() => onDelete(v.id)} label="" />
+              </span>
+            </div>
+          ))}
           {grouped[selectedDate] ? (
             <ul className="list">
               {grouped[selectedDate].map((p) => (
@@ -6116,7 +6176,14 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
                   </button>
                   <div className="grow">
                     <div className="row-title">{p.titre}</div>
-                    <div className="row-sub">{nomAffiche(p.client, clients)} {p.heure !== "—" && `· ${p.heure}`}{p.duree && ` · ${p.duree}`}</div>
+                    <div className="row-sub">
+                      {nomAffiche(p.client, clients)} {p.heure !== "—" && `· ${p.heure}`}{p.duree && ` · ${p.duree}`}
+                      {finDeTache(p) !== p.date && (
+                        <span className="pill pill-plusieurs-jours">
+                          Jour {joursDeTache(p).indexOf(selectedDate) + 1}/{joursDeTache(p).length} · jusqu'au {dateCourte(finDeTache(p))}
+                        </span>
+                      )}
+                    </div>
                     {(() => {
                       const fiche = clients.find((c) => c.nom === p.client);
                       const adresseTache = (p.adresse && p.adresse.trim()) || (fiche && fiche.adresse);
@@ -6148,7 +6215,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
               ))}
             </ul>
           ) : (
-            <p className="empty">Aucune intervention prévue ce jour-là.</p>
+            vacancesDuJour(selectedDate).length === 0 && <p className="empty">Aucune intervention prévue ce jour-là.</p>
           )}
         </section>
       )}
@@ -6157,7 +6224,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
 }
 
 /* ---------- Mini calendrier mensuel interactif (pastilles sur les jours avec intervention) ---------- */
-function MiniCalendar({ dateCounts, dateHeures, selectedDate, onSelectDate }) {
+function MiniCalendar({ dateCounts, dateHeures, joursVacances, selectedDate, onSelectDate }) {
   const todayIso = toLocalISODate(new Date());
   const [cursor, setCursor] = useState(() => {
     const d = new Date();
@@ -6244,11 +6311,13 @@ function MiniCalendar({ dateCounts, dateHeures, selectedDate, onSelectDate }) {
                 "mini-calendar-cell clickable-day" +
                 (hasTask ? " has-task " + classeCharge(count, heures) : "") +
                 (isJourneeDaikin(day) ? " est-daikin" : "") +
+                (joursVacances?.has(iso) ? " est-vacances" : "") +
                 (isToday ? " is-today" : "") +
                 (iso === selectedDate ? " is-selected" : "")
               }
               onClick={() => onSelectDate(iso)}
               title={
+                (joursVacances?.has(iso) ? "Vacances — " : "") +
                 (isJourneeDaikin(day) ? "Journée DAIKIN — " : "") +
                 (hasTask
                   ? `${count} intervention${count > 1 ? "s" : ""}${journeePleine ? " — journée complète" : ""} — voir le détail`
@@ -6266,12 +6335,13 @@ function MiniCalendar({ dateCounts, dateHeures, selectedDate, onSelectDate }) {
         <span><span className="mini-calendar-ech charge-3" /> 3</span>
         <span><span className="mini-calendar-ech charge-4" /> 4+ ou journée pleine</span>
         <span><span className="mini-calendar-ech daikin" /> Mar/Mer (DAIKIN)</span>
+        <span><span className="mini-calendar-ech vacances" /> Vacances</span>
       </div>
     </div>
   );
 }
 
-function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggle, submitLabel, initialDate, editingTask }) {
+function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggle, submitLabel, initialDate, editingTask, joursVacances, autoriserVacances }) {
   const [titre, setTitre] = useState(editingTask?.titre || "");
   const [client, setClient] = useState(editingTask?.client || "");
   const [date, setDate] = useState(editingTask?.date || initialDate || toLocalISODate(new Date()));
@@ -6286,6 +6356,16 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
   const [tel, setTel] = useState(editingTask?.tel || "");
   const [notes, setNotes] = useState(editingTask?.notes || "");
   const [erreurTitre, setErreurTitre] = useState(false);
+  // Plusieurs jours : date de fin facultative (vide = un seul jour).
+  const [dateFin, setDateFin] = useState(editingTask?.dateFin || "");
+  const [vacances, setVacances] = useState(estVacances(editingTask));
+  const [forcer, setForcer] = useState(false);
+  const plusieursJoursPossible = !forceCategorie;
+  const dateFinInvalide = !!dateFin && dateFin < date;
+  // Jours de vacances touchés par cette intervention (hors la tâche elle-même).
+  const conflitVacances = !vacances && joursVacances
+    ? joursDeTache({ date, dateFin }).filter((j) => joursVacances.has(j) && !(estVacances(editingTask) && couvreJour(editingTask, j)))
+    : [];
 
   const clientConnu = clients.find((c) => c.nom === client);
   // L'adresse du site l'emporte toujours ; à défaut, on retombe sur celle de la
@@ -6293,12 +6373,26 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
   const adresseNavigation = (adresse && adresse.trim()) || (clientConnu && clientConnu.adresse) || "";
 
   const submit = () => {
+    if (dateFinInvalide) return;
+    if (vacances) {
+      onSubmit({
+        id: editingTask?.id || ("p" + Date.now()),
+        titre: titre.trim() || "Vacances",
+        client: "", date, dateFin: dateFin && dateFin > date ? dateFin : "",
+        heure: "—", duree: "", adresse: "", tel: "", notes,
+        rappel: false, fait: false, categorie: "vacances",
+      });
+      return;
+    }
     if (!titre.trim()) { setErreurTitre(true); return; }
+    // Jour de vacances : on prévient, il faut confirmer d'un second appui.
+    if (conflitVacances.length > 0 && !forcer) { setForcer(true); return; }
     onSubmit({
       id: editingTask?.id || ("p" + Date.now()),
       titre: titre.trim(),
       client,
       date,
+      dateFin: plusieursJoursPossible && dateFin && dateFin > date ? dateFin : "",
       heure,
       duree,
       adresse,
@@ -6306,12 +6400,49 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
       notes,
       rappel: hideRappelToggle ? true : rappel,
       fait: editingTask?.fait || false,
-      categorie: editingTask?.categorie || forceCategorie || "intervention",
+      categorie: estVacances(editingTask) ? "intervention" : (editingTask?.categorie || forceCategorie || "intervention"),
     });
   };
 
+  const champsDates = (
+    <>
+      <label>{plusieursJoursPossible ? "Date de début" : "Date"}<input type="date" value={date} onChange={(e) => { setDate(e.target.value); setForcer(false); }} /></label>
+      {plusieursJoursPossible && (
+        <label>Date de fin <span className="hint-inline">(si plusieurs jours)</span>
+          <input type="date" value={dateFin} min={date} onChange={(e) => { setDateFin(e.target.value); setForcer(false); }} />
+          {dateFinInvalide && <span className="hint alerte"><Icon name="alert" size={13} /> La date de fin est avant la date de début.</span>}
+          {dateFin && !dateFinInvalide && dateFin > date && <span className="hint">{joursDeTache({ date, dateFin }).length} jours, du {dateCourte(date)} au {dateCourte(dateFin)}</span>}
+        </label>
+      )}
+    </>
+  );
+
+  if (vacances) {
+    return (
+      <div className="card form-card form-vacances">
+        {autoriserVacances && (
+          <label className="check-inline case-vacances"><input type="checkbox" checked onChange={() => setVacances(false)} /> 🌴 Vacances <span className="hint-inline">— ces jours sont bloqués dans le planning</span></label>
+        )}
+        <div className="form-grid">
+          <label className="grid-full">Intitulé<input value={titre} onChange={(e) => setTitre(e.target.value)} placeholder="Vacances" /></label>
+          {champsDates}
+          <label className="grid-full">Notes
+            <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ex : Espagne, joignable par mail uniquement" />
+          </label>
+        </div>
+        <div className="form-actions">
+          <button className="btn-ghost" onClick={onCancel}>Annuler</button>
+          <button className="btn-primary" onClick={submit} disabled={dateFinInvalide}>{editingTask ? "Enregistrer les modifications" : "Ajouter les vacances"}</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="card form-card">
+      {autoriserVacances && (
+        <label className="check-inline case-vacances"><input type="checkbox" checked={false} onChange={() => { setVacances(true); if (!editingTask) setTitre("Vacances"); }} /> 🌴 Vacances</label>
+      )}
       <div className="form-grid">
         <label>Intitulé<input value={titre} onChange={(e) => { setTitre(e.target.value); setErreurTitre(false); }} placeholder="Ex : Entretien annuel" />
           {erreurTitre && <span className="hint alerte"><Icon name="alert" size={13} /> Indique un intitulé pour pouvoir enregistrer.</span>}
@@ -6370,7 +6501,7 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
             placeholder="Ex : code portail 1234, prévoir échelle, intervenir côté cour..."
           />
         </label>
-        <label>Date<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+        {champsDates}
         <label>Heure
           <select value={heure} onChange={(e) => setHeure(e.target.value)}>
             {["07:00","07:30","08:00","08:30","09:00","09:30","10:00","10:30","11:00","11:30",
@@ -6401,9 +6532,17 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
       {!hideRappelToggle && (
         <label className="check-inline"><input type="checkbox" checked={rappel} onChange={(e) => setRappel(e.target.checked)} /> Activer un rappel</label>
       )}
+      {conflitVacances.length > 0 && (
+        <div className="alerte-vacances">
+          🌴 Tu es en vacances {conflitVacances.length > 1 ? `ces jours-là (${conflitVacances.map(dateCourte).join(", ")})` : `le ${dateCourte(conflitVacances[0])}`}
+          {forcer ? " — Appuie encore une fois pour l'enregistrer quand même." : " — Change la date, ou confirme pour l'enregistrer quand même."}
+        </div>
+      )}
       <div className="form-actions">
         <button className="btn-ghost" onClick={onCancel}>Annuler</button>
-        <button className="btn-primary" onClick={submit}>{submitLabel || (editingTask ? "Enregistrer les modifications" : "Ajouter au planning")}</button>
+        <button className="btn-primary" onClick={submit} disabled={dateFinInvalide}>
+          {conflitVacances.length > 0 ? (forcer ? "Confirmer quand même" : "Enregistrer malgré les vacances") : (submitLabel || (editingTask ? "Enregistrer les modifications" : "Ajouter au planning"))}
+        </button>
       </div>
     </div>
   );
@@ -7457,6 +7596,9 @@ const css = `
   --jaune-clair: #F7ECD3;
   --violet: #7E57A8;
   --violet-clair: #E9E0F3;
+  --vacances-1: #FF5FB0;
+  --vacances-2: #E6007E;
+  --vacances-encre: #FFFFFF;
   --daikin-clair: #EDF6FD;
 
   --charge-1: #B9E0C6;
@@ -7516,6 +7658,9 @@ const css = `
   --jaune-clair: #3A3220;
   --violet: #A98BD1;
   --violet-clair: #2E2742;
+  --vacances-1: #FF4FA8;
+  --vacances-2: #D4006F;
+  --vacances-encre: #FFFFFF;
   --daikin-clair: #27455F;
 
   --charge-1: #2A6B45;
@@ -7735,6 +7880,17 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .mini-calendar-ech.charge-3 { background: var(--charge-3); }
 .mini-calendar-ech.charge-4 { background: var(--charge-4); }
 .mini-calendar-ech.daikin { background: var(--charge-daikin); }
+.mini-calendar-ech.vacances { background: linear-gradient(135deg, var(--vacances-1), var(--vacances-2)); }
+.mini-calendar-grid .mini-calendar-cell.est-vacances { background-image: linear-gradient(160deg, var(--vacances-1) 0%, var(--vacances-2) 100%); color: var(--vacances-encre); font-weight: 600; }
+.mini-calendar-grid .mini-calendar-cell.est-vacances.has-task { box-shadow: inset 0 -3px 0 var(--rouge-clair-2); }
+.bandeau-vacances { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 14px; margin: 6px 0 10px; border-radius: 10px; background-image: linear-gradient(135deg, var(--vacances-1), var(--vacances-2)); color: var(--vacances-encre); }
+.bandeau-vacances-texte { display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.bandeau-vacances .tache-notes { color: inherit; background: rgba(255,255,255,0.2); }
+.bandeau-vacances .groupe-modifier button { background: #FFFFFF; }
+.bandeau-vacances .btn-action.modifier { color: #6A3D99; border-color: #FFFFFF; }
+.pill-plusieurs-jours { margin-left: 8px; background: var(--violet-clair); color: var(--violet); font-size: 11.5px; padding: 2px 8px; }
+.case-vacances { font-size: 14px; font-weight: 600; }
+.alerte-vacances { margin: 4px 0 12px; padding: 10px 12px; border-radius: 8px; background-image: linear-gradient(135deg, var(--vacances-1), var(--vacances-2)); color: var(--vacances-encre); font-size: 13.5px; }
 
 .mini-calendar-legend { display: flex; gap: 14px; justify-content: center; margin-top: 14px; font-size: 11.5px; color: var(--encre-3); flex-wrap: wrap; }
 .mini-calendar-legend span { display: inline-flex; align-items: center; gap: 4px; }
@@ -8054,6 +8210,7 @@ textarea { resize: vertical; }
 .incident-detail { margin-top: 4px; font-size: 11.5px; color: var(--encre-4); font-family: ui-monospace, monospace; }
 .ancre-formulaire { scroll-margin-top: 12px; }
 .notif-heures { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 12px; margin: 12px 0 4px; }
+.notif-heures .grid-full { grid-column: 1 / -1; }
 .notif-heures label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--encre-2); min-width: 0; }
 .notif-heures select { width: 100%; min-width: 0; }
 @media (max-width: 480px) { .notif-heures { grid-template-columns: minmax(0,1fr); } }
