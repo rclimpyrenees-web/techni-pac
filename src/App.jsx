@@ -408,6 +408,426 @@ function IncidentsSection() {
   );
 }
 
+/* ---------- Écran d'accueil ----------
+   Affiché à l'ouverture de l'appli (une fois connecté) : le soleil se lève,
+   « Bonjour Adrian » s'écrit, puis le programme et la météo du jour. Le
+   matin, à la première ouverture de la journée, une voix fait le mini-point.
+   Un appui passe l'écran. Réglages dans Paramètres → Apparence (par appareil). */
+const CLE_ACCUEIL_ACTIF = "techni-pac-accueil";
+const CLE_ACCUEIL_VOIX = "techni-pac-accueil-voix";
+const CLE_ACCUEIL_VOIX_JOUR = "techni-pac-accueil-voix-jour";
+const CLE_ACCUEIL_SESSION = "techni-pac-accueil-vu";
+const CLE_METEO_DOMICILE = "techni-pac-meteo-domicile";
+const CLE_METEO_CACHE = "techni-pac-meteo";
+
+const lireLocal = (cle) => { try { return localStorage.getItem(cle); } catch (_e) { return null; } };
+const ecrireLocal = (cle, valeur) => { try { localStorage.setItem(cle, valeur); } catch (_e) { /* stockage indisponible */ } };
+const lireJson = (cle) => { try { return JSON.parse(lireLocal(cle) || "null"); } catch (_e) { return null; } };
+
+const accueilActif = () => lireLocal(CLE_ACCUEIL_ACTIF) !== "false";
+const voixAccueilActive = () => lireLocal(CLE_ACCUEIL_VOIX) !== "false";
+
+// Ouverture par un raccourci Siri ou une notification (?onglet=...) : on va
+// droit au but, sans accueil. Lu au chargement, avant que l'adresse soit nettoyée.
+const OUVERTURE_DIRECTE = (() => {
+  try { return new URLSearchParams(window.location.search).has("onglet"); } catch (_e) { return false; }
+})();
+
+// Une seule fois par lancement de l'appli (pas à chaque rechargement de la page).
+function accueilAPresenter() {
+  if (OUVERTURE_DIRECTE || !accueilActif()) return false;
+  try {
+    if (sessionStorage.getItem(CLE_ACCUEIL_SESSION)) return false;
+    sessionStorage.setItem(CLE_ACCUEIL_SESSION, "1");
+  } catch (_e) { /* sans sessionStorage, on l'affiche */ }
+  return true;
+}
+
+function momentDeLaJournee(date = new Date()) {
+  const h = date.getHours();
+  if (h >= 18) return "soir";
+  if (h >= 12) return "journee";
+  return "matin";
+}
+
+const heureLisible = (h) => {
+  const m = String(h || "").match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return "";
+  return `${parseInt(m[1], 10)}h${m[2] === "00" ? "" : m[2]}`;
+};
+
+function jourCible(moment) {
+  const d = new Date();
+  if (moment === "soir") d.setDate(d.getDate() + 1);
+  return toLocalISODate(d);
+}
+
+// Programme du jour (ou de demain le soir) : mêmes règles que le tableau de bord.
+function programmeDuJour(planning, iso) {
+  const liste = planning || [];
+  const vacances = liste.some((p) => estVacances(p) && couvreJour(p, iso));
+  const taches = liste
+    .filter((p) => !p.fait && p.categorie !== "relance" && !estVacances(p) && couvreJour(p, iso))
+    .sort((a, b) => String(a.heure && a.heure !== "—" ? a.heure : "99").localeCompare(String(b.heure && b.heure !== "—" ? b.heure : "99")));
+  const avecHeure = taches.find((p) => heureLisible(p.heure));
+  return { nombre: taches.length, premiere: avecHeure ? heureLisible(avecHeure.heure) : "", vacances };
+}
+
+/* --- Météo (Open-Meteo : gratuit, sans clé) --- */
+// Codes météo OMM → pastille et phrase lue.
+function decrireTemps(code) {
+  const c = Number(code);
+  if (c === 0) return { icone: "☀️", court: "Ensoleillé", phrase: "une journée ensoleillée" };
+  if (c === 1 || c === 2) return { icone: "🌤️", court: "Éclaircies", phrase: "une journée avec des éclaircies" };
+  if (c === 3) return { icone: "☁️", court: "Couvert", phrase: "une journée nuageuse" };
+  if (c === 45 || c === 48) return { icone: "🌫️", court: "Brouillard", phrase: "une journée avec du brouillard" };
+  if (c >= 51 && c <= 57) return { icone: "🌦️", court: "Bruine", phrase: "une journée avec de la bruine" };
+  if ((c >= 61 && c <= 67) || (c >= 80 && c <= 82)) return { icone: "🌧️", court: "Pluie", phrase: "une journée pluvieuse" };
+  if ((c >= 71 && c <= 77) || c === 85 || c === 86) return { icone: "❄️", court: "Neige", phrase: "une journée neigeuse" };
+  if (c >= 95) return { icone: "⛈️", court: "Orages", phrase: "une journée orageuse" };
+  return { icone: "🌤️", court: "Variable", phrase: "un temps variable" };
+}
+
+function avecDelai(promesse, ms) {
+  return Promise.race([promesse, new Promise((_, rejet) => setTimeout(() => rejet(new Error("délai")), ms))]);
+}
+
+// Domicile : l'adresse saisie dans Paramètres → Informations de l'entreprise,
+// convertie en coordonnées une seule fois (gardée tant qu'elle ne change pas).
+async function positionDomicile(adresse, ville) {
+  const cle = [adresse, ville].filter(Boolean).join(", ").trim();
+  const enCache = lireJson(CLE_METEO_DOMICILE);
+  // Paramètres pas encore chargés à l'ouverture : on reprend le domicile connu.
+  if (!cle) return enCache;
+  if (enCache && enCache.cle === cle) return enCache;
+  const garder = (lat, lon) => {
+    const p = { lat: +Number(lat).toFixed(3), lon: +Number(lon).toFixed(3), cle };
+    ecrireLocal(CLE_METEO_DOMICILE, JSON.stringify(p));
+    return p;
+  };
+  try {
+    const r = await avecDelai(fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(cle)}&limit=1`), 3000);
+    const j = await r.json();
+    const c = j?.features?.[0]?.geometry?.coordinates;
+    if (c) return garder(c[1], c[0]);
+  } catch (_e) { /* on essaie avec la ville seule */ }
+  const nomVille = String(ville || "").replace(/\b\d{5}\b/g, "").trim();
+  if (!nomVille) return null;
+  try {
+    const r = await avecDelai(fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(nomVille)}&count=1&language=fr&countryCode=FR`), 3000);
+    const j = await r.json();
+    const lieu = j?.results?.[0];
+    if (lieu) return garder(lieu.latitude, lieu.longitude);
+  } catch (_e) { /* réseau indisponible */ }
+  return null;
+}
+
+// Position actuelle de l'iPhone (une position de moins de 30 min suffit).
+async function positionIphone() {
+  try {
+    if (navigator.permissions?.query) {
+      const etat = await avecDelai(navigator.permissions.query({ name: "geolocation" }), 800);
+      if (etat.state === "denied") return null;
+    }
+  } catch (_e) { /* API absente (Safari ancien) : on tente quand même */ }
+  if (!navigator.geolocation) return null;
+  try {
+    const pos = await new Promise((ok, ko) =>
+      navigator.geolocation.getCurrentPosition(ok, ko, { enableHighAccuracy: false, timeout: 3500, maximumAge: 30 * 60 * 1000 })
+    );
+    return { lat: +pos.coords.latitude.toFixed(3), lon: +pos.coords.longitude.toFixed(3) };
+  } catch (_e) {
+    return null; // refus ou délai dépassé
+  }
+}
+
+// Le matin (et le soir, pour la météo du lendemain) : le domicile.
+// L'après-midi : là où se trouve l'iPhone. Chacun sert de secours à l'autre.
+async function positionPourMeteo(source, domicile) {
+  if (source === "iphone") return (await positionIphone()) || (await positionDomicile(domicile.adresse, domicile.ville));
+  return (await positionDomicile(domicile.adresse, domicile.ville)) || (await positionIphone());
+}
+
+// Météo du jour (ou de demain) : temps, température à 8h et à 15h, risque de
+// pluie. Gardée sur l'appareil pour les ouvertures suivantes : une heure pour
+// le domicile, une demi-heure pour la position de l'iPhone (on se déplace).
+async function chargerMeteo(iso, source, domicile) {
+  const cache = lireJson(CLE_METEO_CACHE);
+  const validite = source === "iphone" ? 30 * 60 * 1000 : 3600 * 1000;
+  if (cache && cache.jour === iso && cache.source === source && Date.now() - cache.le < validite) return cache.meteo;
+  const pos = await positionPourMeteo(source, domicile);
+  if (!pos) throw new Error("position inconnue");
+  const url = "https://api.open-meteo.com/v1/forecast"
+    + `?latitude=${pos.lat}&longitude=${pos.lon}`
+    + "&daily=weather_code,temperature_2m_min,temperature_2m_max,precipitation_probability_max"
+    + "&hourly=temperature_2m&timezone=auto&forecast_days=3";
+  const r = await avecDelai(fetch(url), 4000);
+  if (!r.ok) throw new Error("météo indisponible");
+  const j = await r.json();
+  const i = (j.daily?.time || []).indexOf(iso);
+  if (i < 0) throw new Error("jour absent");
+  const aHeure = (hh) => {
+    const k = (j.hourly?.time || []).indexOf(`${iso}T${hh}:00`);
+    return k >= 0 ? j.hourly.temperature_2m[k] : null;
+  };
+  const matin = aHeure("08") ?? j.daily.temperature_2m_min[i];
+  const apresMidi = aHeure("15") ?? j.daily.temperature_2m_max[i];
+  const meteo = {
+    ...decrireTemps(j.daily.weather_code[i]),
+    matin: Math.round(matin),
+    apresMidi: Math.round(apresMidi),
+    max: Math.round(j.daily.temperature_2m_max[i]),
+    pluie: j.daily.precipitation_probability_max?.[i] ?? 0,
+  };
+  ecrireLocal(CLE_METEO_CACHE, JSON.stringify({ jour: iso, source, le: Date.now(), meteo }));
+  return meteo;
+}
+
+/* --- Textes --- */
+const SALUTS = { matin: "Bonjour", journee: "Bon après-midi", soir: "Bonsoir" };
+
+function phraseMeteo(m, demain) {
+  let t = `Les prévisions météo indiquent ${m.phrase}${demain ? " demain" : ""}, avec une température de ${m.matin} degrés le matin et de ${m.apresMidi} degrés l'après-midi.`;
+  if (m.pluie >= 40) t += ` Risque de pluie de ${m.pluie} pour cent.`;
+  if (m.max >= 30) t += " Forte chaleur attendue, pense à bien boire.";
+  return t;
+}
+
+function texteDuPoint({ salut, programme, meteo, demain }) {
+  const quand = demain ? "demain" : "aujourd'hui";
+  let t = `${salut}.`;
+  if (programme) {
+    if (programme.vacances) t += demain ? " Demain, tu es en vacances." : " Tu es en vacances aujourd'hui, profite bien.";
+    else if (programme.nombre === 0) t += ` Tu n'as pas d'intervention prévue ${quand}.`;
+    else if (programme.nombre === 1) t += ` Tu as une intervention ${quand}${programme.premiere ? `, à ${programme.premiere}` : ""}.`;
+    else t += ` Tu as ${programme.nombre} interventions ${quand}${programme.premiere ? `, la première à ${programme.premiere}` : ""}.`;
+  }
+  if (meteo) t += " " + phraseMeteo(meteo, demain);
+  return t;
+}
+
+// Lecture du mini-point. Le navigateur peut refuser de parler sans appui sur
+// l'écran (iPhone) : onDemarre n'est alors jamais appelé.
+function direAccueil(texte, { onDemarre, onFin }) {
+  if (!syntheseVocaleDisponible()) { onFin?.(); return; }
+  const synth = window.speechSynthesis;
+  try { synth.cancel(); } catch (_e) { /* ignoré */ }
+  numeroLecture += 1;
+  const numero = numeroLecture;
+  let fini = false;
+  const finir = () => { if (fini || numero !== numeroLecture) return; fini = true; onFin?.(); };
+  const voix = choisirVoixFrancaise();
+  const morceaux = decouperPourLecture(texte);
+  phrasesEnCours = morceaux.map((m) => {
+    const u = new SpeechSynthesisUtterance(m);
+    u.lang = "fr-FR";
+    if (voix) u.voice = voix;
+    u.rate = 1;
+    return u;
+  });
+  if (phrasesEnCours.length === 0) { finir(); return; }
+  phrasesEnCours[0].onstart = () => { syntheseVocaleDebloquee = true; onDemarre?.(); };
+  const derniere = phrasesEnCours[phrasesEnCours.length - 1];
+  derniere.onend = finir;
+  derniere.onerror = finir;
+  try {
+    synth.resume();
+    phrasesEnCours.forEach((u) => synth.speak(u));
+  } catch (_e) { finir(); return; }
+  setTimeout(finir, texte.length * 90 + 4000);
+}
+
+/* --- Composant --- */
+const ACCUEIL_PUCES_MS = 3000;   // arrivée de la première pastille
+const ACCUEIL_SORTIE_MS = 7800;  // début du fondu de sortie
+const ACCUEIL_FONDU_MS = 1100;
+
+function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFin }) {
+  const [moment] = useState(() => momentDeLaJournee());
+  const [debut] = useState(() => Date.now());
+  const demain = moment === "soir";
+  const salut = prenom ? `${SALUTS[moment]} ${prenom}` : SALUTS[moment];
+  const [tape, setTape] = useState("");
+  const [meteo, setMeteo] = useState(null);
+  const [sortie, setSortie] = useState(null); // null | "douce" | "rapide"
+  const [boutonVoix, setBoutonVoix] = useState(false);
+  const [parle, setParle] = useState(false);
+  const etat = useRef({ termine: false, voixFaite: false, parle: false, minuterieSortie: null });
+  const reduit = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+  const programme = pret ? programmeDuJour(planning, jourCible(moment)) : null;
+  const meteoRef = useRef(null);
+  const programmeRef = useRef(null);
+  meteoRef.current = meteo;
+  programmeRef.current = programme;
+
+  const terminer = (vite) => {
+    if (etat.current.termine) return;
+    etat.current.termine = true;
+    clearTimeout(etat.current.minuterieSortie);
+    setSortie(vite ? "rapide" : "douce");
+    setTimeout(onFin, vite ? 260 : ACCUEIL_FONDU_MS);
+  };
+  const programmerSortie = (ms) => {
+    clearTimeout(etat.current.minuterieSortie);
+    etat.current.minuterieSortie = setTimeout(() => {
+      if (!etat.current.parle) terminer(false);
+    }, Math.max(0, ms));
+  };
+
+  const lancerVoix = () => {
+    etat.current.voixFaite = true;
+    const texte = texteDuPoint({ salut, programme: programmeRef.current, meteo: meteoRef.current, demain });
+    let demarree = false;
+    direAccueil(texte, {
+      onDemarre: () => {
+        demarree = true;
+        etat.current.parle = true;
+        setParle(true);
+        setBoutonVoix(false);
+        ecrireLocal(CLE_ACCUEIL_VOIX_JOUR, toLocalISODate(new Date()));
+      },
+      onFin: () => {
+        etat.current.parle = false;
+        setParle(false);
+        // L'écran reste encore un peu après la dernière phrase.
+        programmerSortie(demarree ? Math.max(1500, ACCUEIL_SORTIE_MS - (Date.now() - debut)) : 600);
+      },
+    });
+    return () => demarree;
+  };
+
+  // Écriture du salut, lettre par lettre, puis sortie programmée.
+  useEffect(() => {
+    const minuteries = [];
+    if (reduit) setTape(salut);
+    else {
+      let delai = 1200;
+      [...salut].forEach((c, i) => {
+        const texte = salut.slice(0, i + 1);
+        minuteries.push(setTimeout(() => setTape(texte), delai));
+        delai += c === " " ? 230 : 105;
+      });
+    }
+    programmerSortie(ACCUEIL_SORTIE_MS);
+    return () => { minuteries.forEach(clearTimeout); clearTimeout(etat.current.minuterieSortie); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Météo : chargée dès l'ouverture (dès que l'adresse du domicile est
+  // connue, s'il faut l'attendre) ; si elle n'arrive pas, pas de pastille.
+  const meteoLancee = useRef(false);
+  const montee = useRef(true);
+  useEffect(() => { montee.current = true; return () => { montee.current = false; }; }, []);
+  useEffect(() => {
+    if (meteoLancee.current) return;
+    const source = moment === "journee" ? "iphone" : "domicile";
+    if (source === "domicile" && !pret && !lireJson(CLE_METEO_DOMICILE)) return; // on attend les Paramètres
+    meteoLancee.current = true;
+    chargerMeteo(jourCible(moment), source, domicile || {}).then((m) => { if (montee.current) setMeteo(m); }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pret]);
+
+  // Voix : essai automatique quand les pastilles arrivent (en attendant
+  // un peu la météo et le planning). Si l'iPhone refuse, bouton « écouter ».
+  useEffect(() => {
+    if (!voixDemandee || !syntheseVocaleDisponible()) return undefined;
+    let annule = false;
+    const essayer = () => {
+      if (annule || etat.current.termine || etat.current.voixFaite) return;
+      const aDemarre = lancerVoix();
+      setTimeout(() => {
+        if (annule || etat.current.termine || aDemarre()) return;
+        arreterLecture(); // annule aussi la fin prévue de cet essai
+        etat.current.voixFaite = false;
+        setBoutonVoix(true);
+        programmerSortie(Math.max(ACCUEIL_SORTIE_MS, 10500) - (Date.now() - debut));
+      }, 1300);
+    };
+    const attente = setInterval(() => {
+      const ecoule = Date.now() - debut;
+      const toutEstLa = programmeRef.current && meteoRef.current;
+      if (ecoule >= ACCUEIL_PUCES_MS && (toutEstLa || ecoule >= 4500)) { clearInterval(attente); essayer(); }
+    }, 150);
+    return () => { annule = true; clearInterval(attente); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const auToucher = () => {
+    if (boutonVoix && !etat.current.voixFaite) {
+      // Appui = geste de l'utilisateur : l'iPhone accepte alors de parler.
+      setBoutonVoix(false);
+      clearTimeout(etat.current.minuterieSortie);
+      etat.current.parle = true;
+      lancerVoix();
+      return;
+    }
+    if (etat.current.parle) arreterLecture();
+    etat.current.parle = false;
+    terminer(true);
+  };
+
+  // Les pastilles qui arrivent en retard (données ou météo lentes) gardent
+  // le rythme prévu : pas de délai supplémentaire.
+  const delaiPuce = (rang) => `${Math.max(0, ACCUEIL_PUCES_MS + rang * 500 - (Date.now() - debut)) / 1000}s`;
+
+  const puces = [];
+  if (programme) {
+    if (programme.vacances) puces.push(<>{demain ? "Demain" : "Aujourd'hui"} : <b>en vacances 🌴</b></>);
+    else {
+      puces.push(<>{demain ? "Demain" : "Aujourd'hui"} : <b>{programme.nombre === 0 ? "aucune intervention" : `${programme.nombre} intervention${programme.nombre > 1 ? "s" : ""}`}</b></>);
+      if (programme.premiere) puces.push(<>Première à <b>{programme.premiere}</b></>);
+    }
+  }
+
+  return (
+    <div
+      className={`bienvenue ${moment}` + (reduit ? " immobile" : "") + (sortie ? ` sortie-${sortie}` : "")}
+      onClick={auToucher}
+      role="presentation"
+    >
+      <div className="bienvenue-astre" />
+      <div className="bienvenue-mark">TP</div>
+      <div className="bienvenue-salut" aria-label={salut}>
+        {/* Mot par mot, pour ne jamais couper « après-midi » en fin de ligne. */}
+        {tape.split(" ").map((mot, i) => <React.Fragment key={i}>{i > 0 && " "}<span className="bienvenue-mot">{mot}</span></React.Fragment>)}
+        <span className="bienvenue-curseur" />
+      </div>
+      <div className="bienvenue-puces">
+        {puces.map((contenu, i) => (
+          <div key={i} className="bienvenue-puce" style={{ animationDelay: delaiPuce(i) }}>{contenu}</div>
+        ))}
+        {meteo && (
+          <div key="meteo" className="bienvenue-puce meteo" style={{ animationDelay: delaiPuce(2) }}>
+            {meteo.icone} {demain ? "Demain " : ""}<b>{meteo.court}{meteo.pluie >= 40 ? ` ${meteo.pluie} %` : ""} · {meteo.matin}°/{meteo.apresMidi}°</b>{meteo.max >= 30 ? " 🔥" : ""}
+          </div>
+        )}
+        {boutonVoix && <div className="bienvenue-puce ecouter" style={{ animationDelay: "0s" }}>🔊 Touche pour m'écouter</div>}
+        {parle && <div className="bienvenue-onde" aria-hidden="true"><i /><i /><i /></div>}
+      </div>
+    </div>
+  );
+}
+
+// Réglages de l'accueil (Paramètres → Apparence), propres à cet appareil.
+function ReglagesAccueil({ onRevoir }) {
+  const [actif, setActif] = useState(accueilActif);
+  const [voix, setVoix] = useState(voixAccueilActive);
+  return (
+    <div className="reglages-accueil">
+      <label className="check-inline">
+        <input type="checkbox" checked={actif} onChange={(e) => { setActif(e.target.checked); ecrireLocal(CLE_ACCUEIL_ACTIF, String(e.target.checked)); }} />
+        Écran d'accueil à l'ouverture de l'appli
+      </label>
+      <label className="check-inline">
+        <input type="checkbox" checked={voix} disabled={!actif} onChange={(e) => { setVoix(e.target.checked); ecrireLocal(CLE_ACCUEIL_VOIX, String(e.target.checked)); }} />
+        Mini-point à voix haute le matin (première ouverture de la journée)
+      </label>
+      <button type="button" className="btn-ghost small" onClick={onRevoir}>Revoir l'accueil</button>
+    </div>
+  );
+}
+
 /* ---------- App principale ---------- */
 
 export default function App() {
@@ -421,6 +841,19 @@ export default function App() {
 function AppContenu() {
   const [tab, setTab] = useState(ongletDepuisAdresse);
   const [theme, setTheme] = useState(themeEnregistre);
+  // Écran d'accueil : décidé une fois, à l'ouverture de l'appli.
+  const [accueil, setAccueil] = useState(() => {
+    if (!accueilAPresenter()) return null;
+    const aujourdhui = toLocalISODate(new Date());
+    const voix = voixAccueilActive() && momentDeLaJournee() === "matin" && lireLocal(CLE_ACCUEIL_VOIX_JOUR) !== aujourdhui;
+    return { cle: 1, voix };
+  });
+  // « Revoir l'accueil » (Paramètres) : avec la voix, quelle que soit l'heure.
+  // L'appui débloque la voix sur l'iPhone pour la suite.
+  const revoirAccueil = () => {
+    debloquerSyntheseVocale();
+    setAccueil((a) => ({ cle: (a?.cle || 1) + 1, voix: voixAccueilActive() }));
+  };
 
   useEffect(() => { appliquerTheme(theme); }, [theme]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -890,8 +1323,22 @@ function AppContenu() {
     if (item) upsertPlanning({ ...item, rappel: !item.rappel });
   };
 
+  const accueilEl = accueil ? (
+    <AccueilBienvenue
+      key={accueil.cle}
+      prenom={String(settings?.technicien?.nom || "").trim().split(/\s+/)[0] || ""}
+      planning={planning}
+      pret={!dataLoading}
+      domicile={{ adresse: settings?.entreprise?.adresse, ville: settings?.entreprise?.codePostalVille }}
+      voixDemandee={accueil.voix}
+      onFin={() => setAccueil(null)}
+    />
+  ) : null;
+
   if (dataLoading) {
     return (
+      <>
+      {accueilEl}
       <div className="app-loading">
         <style>{css}</style>
         <div className="app-loading-box">
@@ -899,10 +1346,13 @@ function AppContenu() {
           <p>Chargement de vos données...</p>
         </div>
       </div>
+      </>
     );
   }
 
   return (
+    <>
+    {accueilEl}
     <div className="app">
       <style>{css}</style>
 
@@ -1090,7 +1540,7 @@ function AppContenu() {
           />
         )}
 
-        {tab === "parametres" && <Parametres settings={settings} setSettings={saveSettings} loading={loadingSettings} theme={theme} setTheme={setTheme} oneDrive={oneDrive} />}
+        {tab === "parametres" && <Parametres settings={settings} setSettings={saveSettings} loading={loadingSettings} theme={theme} setTheme={setTheme} oneDrive={oneDrive} onRevoirAccueil={revoirAccueil} />}
       </main>
 
       {tab !== "assistant" && (
@@ -1125,6 +1575,7 @@ function AppContenu() {
         </ConfirmationModal>
       )}
     </div>
+    </>
   );
 }
 
@@ -1249,6 +1700,31 @@ function typePillClass(t) {
   return t === "mise_en_service" ? "pill-cold" : t === "entretien" ? "pill-ok" : "pill-warm";
 }
 
+/* Appel d'une fonction Supabase avec un jeton de connexion à jour.
+   Sur iPhone, quand l'appli dort en arrière-plan (ou est rouverte par Siri),
+   le jeton de connexion (valable une heure) peut avoir expiré sans avoir été
+   renouvelé : la première demande échouait alors avec « Invalid JWT », la
+   suivante passait. On renouvelle le jeton s'il arrive à échéance, et en cas
+   de refus (401) on le renouvelle et on réessaie une fois — sans risque de
+   doublon : une demande refusée n'a rien exécuté. */
+async function jetonAJour() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const s = data?.session;
+    if (s?.expires_at && s.expires_at * 1000 - Date.now() < 2 * 60 * 1000) await supabase.auth.refreshSession();
+  } catch (_e) { /* on tente l'appel quand même */ }
+}
+
+async function invoquerFonction(nom, body) {
+  await jetonAJour();
+  let reponse = await supabase.functions.invoke(nom, { body });
+  if (reponse.error?.context?.status === 401) {
+    try { await supabase.auth.refreshSession(); } catch (_e) { /* ignoré */ }
+    reponse = await supabase.functions.invoke(nom, { body });
+  }
+  return reponse;
+}
+
 /* ---------- Assistant IA ----------
    L'onglet Assistant envoie la conversation à la fonction Supabase
    "assistant" (voir supabase/functions/assistant), qui interroge Claude et
@@ -1256,8 +1732,10 @@ function typePillClass(t) {
    reviennent sous forme de propositions, enregistrées seulement après
    validation (bouton ou réponse « oui »). */
 
+const numeroLisibleApp = (n) => (/^0\d{9}$/.test(String(n)) ? String(n).replace(/(\d{2})(?=\d)/g, "$1 ") : String(n || ""));
+
 async function appelerAssistant(messages) {
-  const { data, error } = await supabase.functions.invoke("assistant", { body: { messages } });
+  const { data, error } = await invoquerFonction("assistant", { messages });
   if (error) {
     let detail = error.message;
     try {
@@ -1285,7 +1763,7 @@ async function appelerAssistantExecution(action) {
 }
 
 async function appelerAssistantCorps(corps) {
-  const { data, error } = await supabase.functions.invoke("assistant", { body: corps });
+  const { data, error } = await invoquerFonction("assistant", corps);
   if (error) {
     let detail = error.message;
     try {
@@ -1782,6 +2260,7 @@ function CarteDebrief() {
                 </button>
               )}
               <p className="hint">Préparé le {new Date(debrief.genere_le).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })} · {debrief.nb_mails || 0} mail(s) analysé(s). En voiture, dis à Siri : « fais-moi le point ».</p>
+              {debrief.diagnostic && /pas réussi|pas pu/.test(debrief.texte || "") && <p className="hint">Détail technique : {debrief.diagnostic}</p>}
             </>
           ) : (
             <p className="hint">Pas encore de débrief. Il est préparé chaque matin à l'heure réglée dans Paramètres → Notifications (6h30 par défaut), ou tout de suite avec « Préparer maintenant ».</p>
@@ -1972,11 +2451,23 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     ajouterMessage("user", texte);
     setChargement(true);
     try {
-      const { reply, actions: nouvelles } = await appelerAssistant(historique);
-      ajouterMessage("assistant", reply);
-      if (Array.isArray(nouvelles) && nouvelles.length > 0) setActions((liste) => [...liste, ...nouvelles]);
+      const { reply, actions: recues } = await appelerAssistant(historique);
+      // Un appel n'est pas une proposition à valider : bouton « Appeler »
+      // dans la réponse, et l'iPhone demande lui-même confirmation.
+      const appel = (Array.isArray(recues) ? recues : []).find((a) => a.type === "appel" && a.item?.numero);
+      const nouvelles = (Array.isArray(recues) ? recues : []).filter((a) => a.type !== "appel");
+      ajouterMessage("assistant", reply, appel ? { appel: appel.item } : {});
+      if (nouvelles.length > 0) setActions((liste) => [...liste, ...nouvelles]);
       setChargement(false);
-      parler(reply);
+      if (appel) {
+        // La conversation à la voix s'arrête : on passe au téléphone.
+        changerConversation(false);
+        const composer = () => { try { window.location.href = "tel:" + appel.item.numero; } catch (_e) { /* le bouton reste là */ } };
+        if (voixActive && syntheseDispo) { setParle(true); setTimeout(() => lireAVoixHaute(reply, () => { setParle(false); composer(); }), 250); }
+        else composer();
+      } else {
+        parler(reply);
+      }
     } catch (e) {
       setChargement(false);
       signalerErreur(String(e?.message || e));
@@ -2198,6 +2689,12 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
             {messages.map((m) => (
               <div key={m.id} className={"assistant-bulle " + (m.role === "user" ? "bulle-moi" : "bulle-assistant") + (m.erreur ? " bulle-erreur" : "")}>
                 {m.erreur && <span className="bulle-icone"><Icon name="alert" size={14} /></span>}{m.content}
+                {m.appel && (
+                  <a className="bulle-appeler" href={"tel:" + m.appel.numero}>
+                    <Icon name="phone" size={15} /> Appeler {m.appel.nom || numeroLisibleApp(m.appel.numero)}
+                    {m.appel.nom && <span>{numeroLisibleApp(m.appel.numero)}</span>}
+                  </a>
+                )}
                 {m.role === "assistant" && !m.erreur && syntheseDispo && (
                   <button className="bulle-ecouter" onClick={() => { syntheseVocaleDebloquee = true; lireAVoixHaute(m.content); }} title="Écouter cette réponse">
                     <Icon name="volume" size={13} /> Écouter
@@ -2335,7 +2832,7 @@ function Rappels({ planning, clients, showForm, setShowForm, onAdd, onToggle, on
    résumés. La clé de l'application est fournie par cette fonction. */
 
 async function appelerNotifications(action, extra = {}) {
-  const { data, error } = await supabase.functions.invoke("notifications", { body: { action, ...extra } });
+  const { data, error } = await invoquerFonction("notifications", { action, ...extra });
   if (error) {
     let detail = error.message;
     try {
@@ -2583,7 +3080,7 @@ function NotificationsSection({ heures, onChangeHeures }) {
    renvoie vers elle, elle enregistre l'accès côté serveur, puis ramène ici.
    Le code d'accès n'est jamais visible dans le navigateur. */
 async function appelerGmailConnexion(action, extra = {}) {
-  const { data, error } = await supabase.functions.invoke("gmail-connexion", { body: { action, ...extra } });
+  const { data, error } = await invoquerFonction("gmail-connexion", { action, ...extra });
   if (error) {
     let detail = error.message;
     try {
@@ -2812,7 +3309,7 @@ function Fournisseurs({ fournisseurs, erreur, onSave, onDelete }) {
    N'importe quel appareil ouvert (téléphone ou ordinateur) s'en charge : un
    rapport fait hors connexion part dès que le réseau revient. */
 async function appelerOneDrive(action, extra = {}) {
-  const { data, error } = await supabase.functions.invoke("onedrive-connexion", { body: { action, ...extra } });
+  const { data, error } = await invoquerFonction("onedrive-connexion", { action, ...extra });
   if (error) {
     let detail = error.message;
     try {
@@ -3292,7 +3789,7 @@ function ReglesClassement({ liste, onChange, oneDriveConnecte }) {
 }
 
 /* ---------- Paramètres ---------- */
-function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
+function Parametres({ settings, setSettings, theme, setTheme, oneDrive, onRevoirAccueil }) {
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);
   // Une règle ajoutée depuis l'assistant apparaît ici tout de suite, tant
@@ -3302,12 +3799,19 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
     if (!reglesModifiees.current) setDraft((d) => ({ ...d, reglesClassementListe: settings.reglesClassementListe, reglesClassement: settings.reglesClassement }));
   }, [settings.reglesClassementListe, settings.reglesClassement]);
 
+  // Rubrique ouverte (une seule à la fois) et modèle en cours de modification.
+  const [rubrique, setRubrique] = useState(null);
+  const [modeleOuvert, setModeleOuvert] = useState(null);
+  const basculer = (id) => { setRubrique((r) => (r === id ? null : id)); setModeleOuvert(null); };
+
   const updateTechnicien = (patch) => { setDraft((s) => ({ ...s, technicien: { ...s.technicien, ...patch } })); setSaved(false); };
   const updateEntreprise = (patch) => { setDraft((s) => ({ ...s, entreprise: { ...s.entreprise, ...patch } })); setSaved(false); };
   const updatePennylane = (patch) => { setDraft((s) => ({ ...s, pennylane: { ...(s.pennylane || {}), ...patch } })); setSaved(false); };
 
   const addTableau = () => {
-    setDraft((s) => ({ ...s, tableaux: [...(s.tableaux || []), { id: "tpl" + Date.now(), nom: "", rows: [["", ""], ["", ""]] }] }));
+    const id = "tpl" + Date.now();
+    setDraft((s) => ({ ...s, tableaux: [...(s.tableaux || []), { id, nom: "", rows: [["", ""], ["", ""]] }] }));
+    setModeleOuvert(id);
     setSaved(false);
   };
   const updateTableau = (id, next) => {
@@ -3320,7 +3824,9 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
   };
 
   const addChecklistTpl = () => {
-    setDraft((s) => ({ ...s, checklists: [...(s.checklists || []), { id: "cktpl" + Date.now(), nom: "", type: "entretien", items: [{ label: "" }] }] }));
+    const id = "cktpl" + Date.now();
+    setDraft((s) => ({ ...s, checklists: [...(s.checklists || []), { id, nom: "", type: "entretien", items: [{ label: "" }] }] }));
+    setModeleOuvert(id);
     setSaved(false);
   };
   const updateChecklistTpl = (id, next) => {
@@ -3340,16 +3846,19 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
     reglesModifiees.current = false;
   };
 
+  const n = (nb, mot) => `${nb} ${mot}${nb > 1 ? "s" : ""}`;
+  const listeRegles = draft.reglesClassementListe || REGLES_CLASSEMENT_DEFAUT_LISTE;
+  const heuresNotif = draft.notifications || {};
+  const TYPES_RAPPORT = { mise_en_service: "Mise en service", entretien: "Entretien", diagnostic: "Diagnostic / dépannage" };
+
   return (
     <div>
       <header className="page-head">
         <h1>Paramètres</h1>
-        <p>Informations générales utilisées automatiquement dans vos rapports</p>
+        <p>Touche une rubrique pour l'ouvrir.</p>
       </header>
 
-      <div className="grid-2">
-        <section className="card">
-          <h3>Technicien</h3>
+      <Rubrique id="technicien" titre="Technicien" resume={draft.technicien.nom || "À compléter"} ouverte={rubrique === "technicien"} onBasculer={basculer}>
           <label>Nom du technicien
             <input
               value={draft.technicien.nom}
@@ -3358,10 +3867,9 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
             />
           </label>
           <span className="hint">Ce nom s'affiche automatiquement au-dessus du client dans chaque rapport et sur les PDF.</span>
-        </section>
+      </Rubrique>
 
-        <section className="card">
-          <h3>Informations de l'entreprise</h3>
+      <Rubrique id="entreprise" titre="Informations de l'entreprise" resume={[draft.entreprise.nom, draft.entreprise.codePostalVille].filter(Boolean).join(" · ") || "À compléter"} ouverte={rubrique === "entreprise"} onBasculer={basculer}>
           <label>Nom de l'entreprise
             <input value={draft.entreprise.nom} onChange={(e) => updateEntreprise({ nom: e.target.value })} placeholder="Ex : TECHNI-PAC SARL" />
           </label>
@@ -3408,11 +3916,9 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
             />
           </label>
           <span className="hint">Le logo et cette clause apparaissent sur les 3 types de rapports exportés en PDF (logo en en-tête, clause en pied de page).</span>
-        </section>
-      </div>
+      </Rubrique>
 
-      <section className="card">
-        <h3>Apparence</h3>
+      <Rubrique id="apparence" titre="Apparence et accueil" resume={`Mode ${theme === "clair" ? "clair" : "sombre"} · écran d'accueil`} ouverte={rubrique === "apparence"} onBasculer={basculer}>
         <p className="hint">
           Le mode sombre repose les yeux en atelier et le soir ; le mode clair reste plus lisible
           en plein soleil. Le choix vaut pour cet appareil seulement.
@@ -3433,24 +3939,35 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
             Clair
           </button>
         </div>
-      </section>
+        <ReglagesAccueil onRevoir={onRevoirAccueil} />
+      </Rubrique>
 
-      <NotificationsSection
+      <Rubrique id="notifications" titre="Notifications" resume={`Matin ${heuresNotif.matin || "08:00"} · soir ${heuresNotif.soir || "19:00"} · débrief ${heuresNotif.debrief === "" ? "aucun" : heuresNotif.debrief || "06:30"}`} ouverte={rubrique === "notifications"} onBasculer={basculer}>
+        <NotificationsSection
         heures={draft.notifications}
         onChangeHeures={(h) => { setDraft((d) => ({ ...d, notifications: { ...(d.notifications || {}), ...h } })); setSaved(false); }}
-      />
-      <GmailSection />
-      {oneDrive && <OneDriveSection etat={oneDrive.etat} onChange={oneDrive.rafraichir} />}
-      <IncidentsSection />
+        />
+      </Rubrique>
 
-      <ReglesClassement
+      <Rubrique id="gmail" titre="Gmail" resume="Connexion de la boîte mail" ouverte={rubrique === "gmail"} onBasculer={basculer}>
+        <GmailSection />
+      </Rubrique>
+
+      {oneDrive && (
+        <Rubrique id="onedrive" titre="OneDrive" resume={oneDrive.etat?.connecte ? `Connecté${oneDrive.etat.email ? ` · ${oneDrive.etat.email}` : ""}` : "Non connecté"} ouverte={rubrique === "onedrive"} onBasculer={basculer}>
+          <OneDriveSection etat={oneDrive.etat} onChange={oneDrive.rafraichir} />
+        </Rubrique>
+      )}
+
+      <Rubrique id="regles" titre="Règles de classement" resume={n(listeRegles.length, "règle")} ouverte={rubrique === "regles"} onBasculer={basculer}>
+        <ReglesClassement
         liste={draft.reglesClassementListe || REGLES_CLASSEMENT_DEFAUT_LISTE}
         onChange={(liste) => { reglesModifiees.current = true; setDraft((d) => ({ ...d, reglesClassementListe: liste })); setSaved(false); }}
         oneDriveConnecte={!!oneDrive?.etat?.connecte}
-      />
+        />
+      </Rubrique>
 
-      <section className="card">
-        <h3>Facturation Pennylane</h3>
+      <Rubrique id="pennylane" titre="Facturation Pennylane" resume={draft.pennylane?.active ? "Synchronisation activée" : "Synchronisation désactivée"} ouverte={rubrique === "pennylane"} onBasculer={basculer}>
         <p className="hint">
           Une fois activée, chaque intervention de mise en service ou d'entretien enregistrée <strong>sans devis à effectuer</strong> crée
           automatiquement la facture correspondante dans Pennylane. Le statut payé/impayé se met ensuite à jour automatiquement dans l'onglet
@@ -3471,36 +3988,87 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive }) {
             <span className="hint">Valeur pré-sélectionnée dans chaque rapport — vous pouvez toujours choisir un autre taux directement sur un rapport si besoin.</span>
           </label>
         )}
-      </section>
+      </Rubrique>
 
-      <section className="card">
-        <h3>Modèles de tableaux</h3>
+      <Rubrique id="tableaux" titre="Modèles de tableaux" resume={n((draft.tableaux || []).length, "modèle")} ouverte={rubrique === "tableaux"} onBasculer={basculer}>
         <p className="hint">Créez des trames de tableau réutilisables (ex : relevés de pressions). Elles seront proposées lors de la création d'un rapport de mise en service — vous pourrez toujours les modifier librement une fois insérées.</p>
         {(draft.tableaux || []).length === 0 && <p className="empty">Aucun modèle créé pour le moment.</p>}
         {(draft.tableaux || []).map((t) => (
-          <div key={t.id} className="card machine-editor-card">
+          <ModeleRepliable
+            key={t.id}
+            nom={t.nom}
+            details={`${n(t.rows.length, "ligne")} × ${n(t.rows[0]?.length || 0, "colonne")}`}
+            ouvert={modeleOuvert === t.id}
+            onBasculer={() => setModeleOuvert((m) => (m === t.id ? null : t.id))}
+          >
             <TemplateTableEditor template={t} onChange={(next) => updateTableau(t.id, next)} onRemove={() => removeTableau(t.id)} />
-          </div>
+          </ModeleRepliable>
         ))}
         <button type="button" className="btn-ghost small" onClick={addTableau}><Icon name="plus" size={14} /> Ajouter un modèle de tableau</button>
-      </section>
+      </Rubrique>
 
-      <section className="card">
-        <h3>Modèles de checklist</h3>
+      <Rubrique id="checklists" titre="Modèles de checklist" resume={n((draft.checklists || []).length, "modèle")} ouverte={rubrique === "checklists"} onBasculer={basculer}>
         <p className="hint">Créez des checklists réutilisables. Elles seront proposées dans les rapports du type choisi — vous pourrez toujours les modifier librement une fois insérées.</p>
         {(draft.checklists || []).length === 0 && <p className="empty">Aucun modèle créé pour le moment.</p>}
         {(draft.checklists || []).map((t) => (
-          <div key={t.id} className="card machine-editor-card">
+          <ModeleRepliable
+            key={t.id}
+            nom={t.nom}
+            details={`${TYPES_RAPPORT[t.type || "entretien"] || ""} · ${n((t.items || []).length, "point")}`}
+            ouvert={modeleOuvert === t.id}
+            onBasculer={() => setModeleOuvert((m) => (m === t.id ? null : t.id))}
+          >
             <ChecklistTemplateEditor template={t} onChange={(next) => updateChecklistTpl(t.id, next)} onRemove={() => removeChecklistTpl(t.id)} />
-          </div>
+          </ModeleRepliable>
         ))}
         <button type="button" className="btn-ghost small" onClick={addChecklistTpl}><Icon name="plus" size={14} /> Ajouter un modèle de checklist</button>
-      </section>
+      </Rubrique>
+
+      <Rubrique id="incidents" titre="Incidents" resume="Journal des problèmes sur cet appareil" ouverte={rubrique === "incidents"} onBasculer={basculer}>
+        <IncidentsSection />
+      </Rubrique>
 
       <div className="form-actions">
         {saved && <span className="pill pill-ok"><Icon name="check" size={13} /> Modifications enregistrées</span>}
         <button className="btn-primary" onClick={handleSave}>Enregistrer les modifications</button>
       </div>
+    </div>
+  );
+}
+
+/* Rubrique des Paramètres : une ligne (titre + résumé) qui se déplie au
+   toucher. Une seule ouverte à la fois, pour garder la page courte. */
+function Rubrique({ id, titre, resume, ouverte, onBasculer, children }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ouverte && ref.current) ref.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [ouverte]);
+  return (
+    <section ref={ref} className={"card rubrique" + (ouverte ? " ouverte" : "")}>
+      <button type="button" className="rubrique-tete" onClick={() => onBasculer(id)} aria-expanded={ouverte}>
+        <span className="rubrique-titres">
+          <span className="rubrique-titre">{titre}</span>
+          {resume && <span className="rubrique-resume">{resume}</span>}
+        </span>
+        <span className="rubrique-chevron"><Icon name="chevronDown" size={18} /></span>
+      </button>
+      {ouverte && <div className="rubrique-corps">{children}</div>}
+    </section>
+  );
+}
+
+// Un modèle (tableau ou checklist) replié sur une ligne : son nom et un résumé.
+function ModeleRepliable({ nom, details, ouvert, onBasculer, children }) {
+  return (
+    <div className={"modele-repliable" + (ouvert ? " ouvert" : "")}>
+      <button type="button" className="modele-tete" onClick={onBasculer} aria-expanded={ouvert}>
+        <span className="rubrique-titres">
+          <span className="modele-nom">{nom || "Modèle sans nom"}</span>
+          <span className="rubrique-resume">{details}</span>
+        </span>
+        <span className="rubrique-chevron"><Icon name="chevronDown" size={16} /></span>
+      </button>
+      {ouvert && <div className="modele-corps">{children}</div>}
     </div>
   );
 }
@@ -7899,6 +8467,38 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .logout-link { background: none; border: none; color: var(--nav-encre); font-size: 11px; text-decoration: underline; cursor: pointer; padding: 0; margin-top: 6px; }
 .logout-link:hover { color: var(--sur-couleur); }
 
+/* --- Écran d'accueil (toujours sur fond de ciel sombre, quel que soit le thème) --- */
+.bienvenue { position: fixed; inset: 0; z-index: 3000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; text-align: center; padding: calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom)); overflow: hidden; color: #E7ECEB; font-family: 'Inter', -apple-system, sans-serif; cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none;
+  background: radial-gradient(120% 70% at 50% 108%, var(--b-lueur) 0%, transparent 62%), linear-gradient(180deg, #16212B 0%, #1B2733 55%, #22303D 100%); }
+.bienvenue.matin { --b-lueur: rgba(232,135,58,0.55); --b-astre: #F4B15F; --b-halo: rgba(244,177,95,0.45); }
+.bienvenue.journee { --b-lueur: rgba(92,155,209,0.45); --b-astre: #F7D27A; --b-halo: rgba(247,210,122,0.4); }
+.bienvenue.soir { --b-lueur: rgba(126,87,168,0.45); --b-astre: #DCE3EA; --b-halo: rgba(220,227,234,0.25); }
+.bienvenue-astre { position: absolute; left: 50%; bottom: -90px; width: 80px; height: 80px; margin-left: -40px; border-radius: 50%; background: var(--b-astre); box-shadow: 0 0 50px 18px var(--b-halo), 0 0 140px 50px var(--b-halo); opacity: 0.95; animation: b-leve 3.6s cubic-bezier(.25,.6,.25,1) forwards; }
+.bienvenue-mark { width: 88px; height: 88px; border-radius: 20px; background: linear-gradient(135deg, #3B86C4, #E8873A); display: flex; align-items: center; justify-content: center; font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 36px; letter-spacing: 0.5px; color: #fff; box-shadow: 0 6px 30px rgba(232,135,58,0.35); transform: scale(0); animation: b-rebond 1.2s cubic-bezier(.3,1.35,.5,1) 0.35s forwards; }
+.bienvenue-salut { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 46px; line-height: 1.1; letter-spacing: 0.4px; min-height: 1.15em; max-width: 12ch; margin-top: 4px; }
+.bienvenue-mot { white-space: nowrap; }
+.bienvenue-curseur { display: inline-block; width: 3px; height: 0.85em; background: #E8873A; vertical-align: -0.06em; margin-left: 4px; animation: b-clignote 0.8s steps(1) infinite; }
+.bienvenue-puces { display: flex; flex-direction: column; gap: 10px; align-items: center; min-height: 140px; }
+.bienvenue-puce { font-size: 15px; padding: 8px 16px; border-radius: 999px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); opacity: 0; transform: translateY(10px); animation: b-monte 0.9s cubic-bezier(.2,.7,.3,1) forwards; }
+.bienvenue-puce b { color: #E8873A; font-weight: 600; }
+.bienvenue-puce.meteo b { color: #F2C14E; }
+.bienvenue-puce.ecouter { background: rgba(232,135,58,0.18); border-color: rgba(232,135,58,0.5); font-weight: 600; animation: b-monte 0.6s ease-out forwards, b-pulse 1.6s ease-in-out 0.6s infinite; }
+.bienvenue-onde { display: flex; gap: 5px; align-items: flex-end; height: 18px; margin-top: 2px; }
+.bienvenue-onde i { width: 4px; border-radius: 2px; background: #E8873A; animation: b-onde 0.9s ease-in-out infinite; }
+.bienvenue-onde i:nth-child(2) { animation-delay: 0.15s; }
+.bienvenue-onde i:nth-child(3) { animation-delay: 0.3s; }
+.bienvenue.sortie-douce { opacity: 0; transition: opacity 1.1s ease-in-out; }
+.bienvenue.sortie-rapide { opacity: 0; transition: opacity 0.25s ease-in; }
+.bienvenue.immobile *, .bienvenue.immobile { animation-duration: 0.01s !important; animation-delay: 0s !important; }
+@media (prefers-reduced-motion: reduce) { .bienvenue *, .bienvenue { animation-duration: 0.01s !important; animation-delay: 0s !important; } }
+@keyframes b-leve { from { bottom: -90px; } to { bottom: calc(40px + env(safe-area-inset-bottom)); } }
+@keyframes b-rebond { to { transform: scale(1); } }
+@keyframes b-monte { to { opacity: 1; transform: translateY(0); } }
+@keyframes b-clignote { 50% { opacity: 0; } }
+@keyframes b-pulse { 50% { box-shadow: 0 0 0 6px rgba(232,135,58,0.15); } }
+@keyframes b-onde { 0%, 100% { height: 5px; } 50% { height: 18px; } }
+.reglages-accueil { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--trait-clair); }
+.reglages-accueil .btn-ghost.small { align-self: flex-start; margin-top: 2px; }
 .app-loading { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--fond); }
 .app-loading-box { display: flex; flex-direction: column; align-items: center; gap: 14px; color: var(--encre-3); font-family: 'Inter', sans-serif; font-size: 14px; }
 .app-loading-box .brand-mark { width: 48px; height: 48px; font-size: 18px; }
@@ -8101,6 +8701,31 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .machine-section-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; background: transparent; border: none; padding: 0; cursor: pointer; color: var(--encre); }
 .machine-title { font-size: 13.5px; font-weight: 600; margin-bottom: 6px; color: var(--encre); }
 .machine-date { font-weight: 400; color: var(--encre-3); }
+/* --- Paramètres en rubriques dépliables --- */
+.card.rubrique { padding: 0; margin-bottom: 10px; overflow: hidden; scroll-margin-top: 14px; }
+.rubrique-tete, .modele-tete { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: transparent; border: 0; padding: 16px 18px; text-align: left; cursor: pointer; color: var(--encre); font: inherit; -webkit-tap-highlight-color: transparent; }
+.rubrique-tete:hover, .modele-tete:hover { background: var(--survol); }
+.rubrique-titres { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.rubrique-titre { font-family: 'Barlow Condensed', sans-serif; font-size: 19px; font-weight: 600; letter-spacing: 0.2px; }
+.rubrique-resume { font-size: 13px; color: var(--encre-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rubrique-chevron { flex-shrink: 0; display: inline-flex; color: var(--encre-3); transition: transform 0.2s ease; }
+.rubrique.ouverte > .rubrique-tete .rubrique-chevron, .modele-repliable.ouvert > .modele-tete .rubrique-chevron { transform: rotate(180deg); }
+.rubrique.ouverte > .rubrique-tete { border-bottom: 1px solid var(--trait-clair); }
+.rubrique-corps { padding: 18px 18px 20px; }
+/* Les blocs déjà « carte » (Gmail, OneDrive...) se fondent dans leur rubrique. */
+.rubrique-corps > .card { border: 0; padding: 0; margin: 0; background: transparent; box-shadow: none; }
+.rubrique-corps > .card > h3:first-child { display: none; }
+.modele-repliable { border: 1px solid var(--trait); border-radius: 10px; background: var(--fond-doux); margin-bottom: 10px; overflow: hidden; }
+.modele-tete { padding: 12px 14px; }
+.modele-nom { font-weight: 600; font-size: 15px; }
+.modele-repliable.ouvert > .modele-tete { border-bottom: 1px solid var(--trait); }
+.modele-corps { padding: 14px; }
+.modele-corps .table-editor { padding: 0; margin: 0; background: transparent; overflow-x: auto; }
+.modele-corps .form-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.modele-corps label input, .modele-corps label select { width: 100%; min-width: 0; }
+.modele-corps .checklist-tpl-row input { min-width: 0; }
+@media (max-width: 560px) { .modele-corps .form-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .rubrique { scroll-margin-top: calc(70px + env(safe-area-inset-top, 0px)); } }
 .machine-editor-card { background: var(--fond-doux); border-color: var(--trait); margin-bottom: 12px; }
 .machine-editor-card .machine-section-toggle { font-size: 14px; font-weight: 600; }
 .machine-editor-card .machine-editor { margin-top: 14px; }
@@ -8392,6 +9017,8 @@ textarea { resize: vertical; }
 .notif-heures .grid-full { grid-column: 1 / -1; }
 .notif-heures label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--encre-2); min-width: 0; }
 .notif-heures select { width: 100%; min-width: 0; }
+.notif-heures label.check-inline { flex-direction: row; align-items: flex-start; gap: 8px; margin: 4px 0 0; }
+.notif-heures label.check-inline input { margin-top: 2px; flex-shrink: 0; }
 @media (max-width: 480px) { .notif-heures { grid-template-columns: minmax(0,1fr); } }
 .regles-liste { display: flex; flex-direction: column; gap: 12px; margin: 12px 0; }
 .regle { border: 1px solid var(--trait); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--fond-doux); }
@@ -8433,6 +9060,9 @@ textarea { resize: vertical; }
 .fournisseur-notes { margin-top: 4px; font-style: italic; }
 .fournisseur-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .fournisseur-actions .btn-ghost.small { margin: 0; }
+.bulle-appeler { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 14px; border-radius: 10px; background: var(--vert); color: #fff; font-weight: 600; font-size: 15px; text-decoration: none; width: fit-content; max-width: 100%; }
+.bulle-appeler span { font-weight: 400; opacity: 0.9; font-size: 13.5px; }
+.bulle-appeler:active { background: var(--vert-fonce); }
 .bulle-ecouter { display: flex; align-items: center; gap: 5px; margin-top: 8px; padding: 4px 10px; border-radius: 14px; border: 1px solid var(--trait); background: var(--fond-doux); color: var(--encre-3); font-size: 12px; cursor: pointer; }
 .bulle-ecouter:hover { color: var(--bleu); border-color: var(--bleu-clair-2); }
 .bulle-icone { display: inline-flex; vertical-align: -2px; margin-right: 6px; }
