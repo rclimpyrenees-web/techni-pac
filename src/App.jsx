@@ -417,6 +417,9 @@ const CLE_ACCUEIL_ACTIF = "techni-pac-accueil";
 const CLE_ACCUEIL_VOIX = "techni-pac-accueil-voix";
 const CLE_ACCUEIL_VOIX_JOUR = "techni-pac-accueil-voix-jour";
 const CLE_ACCUEIL_SESSION = "techni-pac-accueil-vu";
+// Prénom gardé sur l'appareil : l'accueil s'affiche avant la fin du
+// chargement des Paramètres, il le connaît ainsi dès la première lettre.
+const CLE_ACCUEIL_PRENOM = "techni-pac-accueil-prenom";
 const CLE_METEO_DOMICILE = "techni-pac-meteo-domicile";
 const CLE_METEO_CACHE = "techni-pac-meteo";
 
@@ -646,8 +649,12 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
   const [moment] = useState(() => momentDeLaJournee());
   const [debut] = useState(() => Date.now());
   const demain = moment === "soir";
-  const salut = prenom ? `${SALUTS[moment]} ${prenom}` : SALUTS[moment];
+  const prenomConnu = prenom || lireLocal(CLE_ACCUEIL_PRENOM) || "";
+  const salut = prenomConnu ? `${SALUTS[moment]} ${prenomConnu}` : SALUTS[moment];
   const [tape, setTape] = useState("");
+  const tapeRef = useRef("");
+  const pretRef = useRef(pret);
+  pretRef.current = pret;
   const [meteo, setMeteo] = useState(null);
   const [sortie, setSortie] = useState(null); // null | "douce" | "rapide"
   const [boutonVoix, setBoutonVoix] = useState(false);
@@ -671,6 +678,9 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
   const programmerSortie = (ms) => {
     clearTimeout(etat.current.minuterieSortie);
     etat.current.minuterieSortie = setTimeout(() => {
+      // Données pas encore chargées (réseau lent) : on attend qu'elles
+      // arrivent pour montrer le programme, 20 secondes au plus.
+      if (!pretRef.current && Date.now() - debut < 20000) { etat.current.attentePret = true; return; }
       if (!etat.current.parle) terminer(false);
     }, Math.max(0, ms));
   };
@@ -697,22 +707,38 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
     return () => demarree;
   };
 
-  // Écriture du salut, lettre par lettre, puis sortie programmée.
+  // Sortie programmée dès l'ouverture.
   useEffect(() => {
-    const minuteries = [];
-    if (reduit) setTape(salut);
-    else {
-      let delai = 1200;
-      [...salut].forEach((c, i) => {
-        const texte = salut.slice(0, i + 1);
-        minuteries.push(setTimeout(() => setTape(texte), delai));
-        delai += c === " " ? 230 : 105;
-      });
-    }
     programmerSortie(ACCUEIL_SORTIE_MS);
-    return () => { minuteries.forEach(clearTimeout); clearTimeout(etat.current.minuterieSortie); };
+    return () => clearTimeout(etat.current.minuterieSortie);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Les données arrivent après l'heure de sortie prévue : on laisse le temps
+  // de lire le programme qui vient d'apparaître.
+  useEffect(() => {
+    if (pret && etat.current.attentePret && !etat.current.termine) {
+      etat.current.attentePret = false;
+      programmerSortie(3500);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pret]);
+
+  // Écriture du salut, lettre par lettre. Si le prénom arrive en cours de
+  // route (premier lancement sur cet appareil), l'écriture continue avec lui.
+  useEffect(() => {
+    if (reduit) { tapeRef.current = salut; setTape(salut); return undefined; }
+    const deja = salut.startsWith(tapeRef.current) ? tapeRef.current.length : 0;
+    const minuteries = [];
+    let delai = deja === 0 ? Math.max(0, 1200 - (Date.now() - debut)) : 150;
+    [...salut].slice(deja).forEach((c, i) => {
+      const texte = salut.slice(0, deja + i + 1);
+      minuteries.push(setTimeout(() => { tapeRef.current = texte; setTape(texte); }, delai));
+      delai += c === " " ? 230 : 105;
+    });
+    return () => minuteries.forEach(clearTimeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [salut]);
 
   // Météo : chargée dès l'ouverture (dès que l'adresse du domicile est
   // connue, s'il faut l'attendre) ; si elle n'arrive pas, pas de pastille.
@@ -865,6 +891,10 @@ function AppContenu() {
   const { items: devisEnCours, upsert: upsertDevisEnCours, remove: removeDevisEnCours, loading: loadingDevisEnCours } = useSyncedCollection("devis_en_cours", initialDevisEnCours);
   const { items: facturation, upsert: upsertFacturation, remove: removeFacturation, loading: loadingFacturation } = useSyncedCollection("facturation", initialFacturation);
   const { settings, saveSettings, loading: loadingSettings } = useSyncedSettings(defaultSettings);
+  // Prénom gardé sur l'appareil pour le prochain accueil.
+  const prenomTechnicien = String(settings?.technicien?.nom || "").trim().split(/\s+/)[0] || "";
+  useEffect(() => { if (prenomTechnicien) ecrireLocal(CLE_ACCUEIL_PRENOM, prenomTechnicien); }, [prenomTechnicien]);
+
   // Hors du chargement initial : tant que la table n'existe pas (script SQL
   // pas encore lancé), le reste de l'application fonctionne normalement.
   const { items: fournisseurs, upsert: upsertFournisseur, remove: removeFournisseur, error: erreurFournisseurs } = useSyncedCollection("fournisseurs", initialFournisseurs);
@@ -1326,7 +1356,7 @@ function AppContenu() {
   const accueilEl = accueil ? (
     <AccueilBienvenue
       key={accueil.cle}
-      prenom={String(settings?.technicien?.nom || "").trim().split(/\s+/)[0] || ""}
+      prenom={prenomTechnicien}
       planning={planning}
       pret={!dataLoading}
       domicile={{ adresse: settings?.entreprise?.adresse, ville: settings?.entreprise?.codePostalVille }}
@@ -3848,17 +3878,18 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive, onRevoir
 
   const n = (nb, mot) => `${nb} ${mot}${nb > 1 ? "s" : ""}`;
   const listeRegles = draft.reglesClassementListe || REGLES_CLASSEMENT_DEFAUT_LISTE;
-  const heuresNotif = draft.notifications || {};
   const TYPES_RAPPORT = { mise_en_service: "Mise en service", entretien: "Entretien", diagnostic: "Diagnostic / dépannage" };
 
   return (
     <div>
       <header className="page-head">
         <h1>Paramètres</h1>
-        <p>Touche une rubrique pour l'ouvrir.</p>
+        <p>Informations générales utilisées automatiquement dans vos rapports</p>
       </header>
 
-      <Rubrique id="technicien" titre="Technicien" resume={draft.technicien.nom || "À compléter"} ouverte={rubrique === "technicien"} onBasculer={basculer}>
+      <div className="grid-2">
+        <section className="card">
+          <h3>Technicien</h3>
           <label>Nom du technicien
             <input
               value={draft.technicien.nom}
@@ -3867,9 +3898,10 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive, onRevoir
             />
           </label>
           <span className="hint">Ce nom s'affiche automatiquement au-dessus du client dans chaque rapport et sur les PDF.</span>
-      </Rubrique>
+        </section>
 
-      <Rubrique id="entreprise" titre="Informations de l'entreprise" resume={[draft.entreprise.nom, draft.entreprise.codePostalVille].filter(Boolean).join(" · ") || "À compléter"} ouverte={rubrique === "entreprise"} onBasculer={basculer}>
+        <section className="card">
+          <h3>Informations de l'entreprise</h3>
           <label>Nom de l'entreprise
             <input value={draft.entreprise.nom} onChange={(e) => updateEntreprise({ nom: e.target.value })} placeholder="Ex : TECHNI-PAC SARL" />
           </label>
@@ -3916,9 +3948,11 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive, onRevoir
             />
           </label>
           <span className="hint">Le logo et cette clause apparaissent sur les 3 types de rapports exportés en PDF (logo en en-tête, clause en pied de page).</span>
-      </Rubrique>
+        </section>
+      </div>
 
-      <Rubrique id="apparence" titre="Apparence et accueil" resume={`Mode ${theme === "clair" ? "clair" : "sombre"} · écran d'accueil`} ouverte={rubrique === "apparence"} onBasculer={basculer}>
+      <section className="card">
+        <h3>Apparence</h3>
         <p className="hint">
           Le mode sombre repose les yeux en atelier et le soir ; le mode clair reste plus lisible
           en plein soleil. Le choix vaut pour cet appareil seulement.
@@ -3940,24 +3974,15 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive, onRevoir
           </button>
         </div>
         <ReglagesAccueil onRevoir={onRevoirAccueil} />
-      </Rubrique>
+      </section>
 
-      <Rubrique id="notifications" titre="Notifications" resume={`Matin ${heuresNotif.matin || "08:00"} · soir ${heuresNotif.soir || "19:00"} · débrief ${heuresNotif.debrief === "" ? "aucun" : heuresNotif.debrief || "06:30"}`} ouverte={rubrique === "notifications"} onBasculer={basculer}>
-        <NotificationsSection
+      <NotificationsSection
         heures={draft.notifications}
         onChangeHeures={(h) => { setDraft((d) => ({ ...d, notifications: { ...(d.notifications || {}), ...h } })); setSaved(false); }}
-        />
-      </Rubrique>
-
-      <Rubrique id="gmail" titre="Gmail" resume="Connexion de la boîte mail" ouverte={rubrique === "gmail"} onBasculer={basculer}>
-        <GmailSection />
-      </Rubrique>
-
-      {oneDrive && (
-        <Rubrique id="onedrive" titre="OneDrive" resume={oneDrive.etat?.connecte ? `Connecté${oneDrive.etat.email ? ` · ${oneDrive.etat.email}` : ""}` : "Non connecté"} ouverte={rubrique === "onedrive"} onBasculer={basculer}>
-          <OneDriveSection etat={oneDrive.etat} onChange={oneDrive.rafraichir} />
-        </Rubrique>
-      )}
+      />
+      <GmailSection />
+      {oneDrive && <OneDriveSection etat={oneDrive.etat} onChange={oneDrive.rafraichir} />}
+      <IncidentsSection />
 
       <Rubrique id="regles" titre="Règles de classement" resume={n(listeRegles.length, "règle")} ouverte={rubrique === "regles"} onBasculer={basculer}>
         <ReglesClassement
@@ -3967,7 +3992,8 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive, onRevoir
         />
       </Rubrique>
 
-      <Rubrique id="pennylane" titre="Facturation Pennylane" resume={draft.pennylane?.active ? "Synchronisation activée" : "Synchronisation désactivée"} ouverte={rubrique === "pennylane"} onBasculer={basculer}>
+      <section className="card">
+        <h3>Facturation Pennylane</h3>
         <p className="hint">
           Une fois activée, chaque intervention de mise en service ou d'entretien enregistrée <strong>sans devis à effectuer</strong> crée
           automatiquement la facture correspondante dans Pennylane. Le statut payé/impayé se met ensuite à jour automatiquement dans l'onglet
@@ -3988,7 +4014,7 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive, onRevoir
             <span className="hint">Valeur pré-sélectionnée dans chaque rapport — vous pouvez toujours choisir un autre taux directement sur un rapport si besoin.</span>
           </label>
         )}
-      </Rubrique>
+      </section>
 
       <Rubrique id="tableaux" titre="Modèles de tableaux" resume={n((draft.tableaux || []).length, "modèle")} ouverte={rubrique === "tableaux"} onBasculer={basculer}>
         <p className="hint">Créez des trames de tableau réutilisables (ex : relevés de pressions). Elles seront proposées lors de la création d'un rapport de mise en service — vous pourrez toujours les modifier librement une fois insérées.</p>
@@ -4024,10 +4050,6 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive, onRevoir
         <button type="button" className="btn-ghost small" onClick={addChecklistTpl}><Icon name="plus" size={14} /> Ajouter un modèle de checklist</button>
       </Rubrique>
 
-      <Rubrique id="incidents" titre="Incidents" resume="Journal des problèmes sur cet appareil" ouverte={rubrique === "incidents"} onBasculer={basculer}>
-        <IncidentsSection />
-      </Rubrique>
-
       <div className="form-actions">
         {saved && <span className="pill pill-ok"><Icon name="check" size={13} /> Modifications enregistrées</span>}
         <button className="btn-primary" onClick={handleSave}>Enregistrer les modifications</button>
@@ -4037,7 +4059,7 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive, onRevoir
 }
 
 /* Rubrique des Paramètres : une ligne (titre + résumé) qui se déplie au
-   toucher. Une seule ouverte à la fois, pour garder la page courte. */
+   toucher (règles de classement et modèles), pour garder la page courte. */
 function Rubrique({ id, titre, resume, ouverte, onBasculer, children }) {
   const ref = useRef(null);
   useEffect(() => {
