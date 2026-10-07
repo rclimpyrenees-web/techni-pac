@@ -121,6 +121,7 @@ const Icon = ({ name, size = 18 }) => {
     chevronRight: "M9 18l6-6-6-6",
     chevronDown: "M6 9l6 6 6-6",
     menu: "M3 12h18M3 6h18M3 18h18",
+    navigation: "M3 11l19-9-9 19-2-8-8-2z",
     pin: "M12 21s7-6.5 7-11a7 7 0 10-14 0c0 4.5 7 11 7 11zM12 11.5a2 2 0 100-4 2 2 0 000 4z",
     phone: "M22 16.9v3a2 2 0 01-2.2 2 19.8 19.8 0 01-8.6-3.1 19.5 19.5 0 01-6-6A19.8 19.8 0 012.1 4.2 2 2 0 014.1 2h3a2 2 0 012 1.7c.1.9.3 1.8.6 2.7a2 2 0 01-.5 2.1L8.1 9.7a16 16 0 006 6l1.2-1.1a2 2 0 012.1-.5c.9.3 1.8.5 2.7.6a2 2 0 011.9 2.2z",
     close: "M18 6L6 18M6 6l12 12",
@@ -609,15 +610,40 @@ function texteDuPoint({ salut, programme, meteo, demain }) {
   return t;
 }
 
-// Lecture du mini-point. Le navigateur peut refuser de parler sans appui sur
-// l'écran (iPhone) : onDemarre n'est alors jamais appelé.
-function direAccueil(texte, { onDemarre, onFin }) {
+// Lecture du mini-point. L'iPhone peut refuser de jouer un son sans appui
+// sur l'écran : onRefus est alors appelé (et onDemarre jamais).
+// Voix naturelle Google si elle est réglée, sinon voix de l'iPhone.
+function direAccueil(texte, { onDemarre, onFin, onRefus }) {
+  const voixG = voixGoogleChoisie();
+  if (voixG && !voixGoogleIndisponible) {
+    arreterLecture();
+    const numero = numeroLecture;
+    let fini = false;
+    const finir = () => { if (fini || numero !== numeroLecture) return; fini = true; onFin?.(); };
+    const jouer = (b64) => jouerAudio(b64, {
+      onDemarre,
+      onFin: finir,
+      onRefus: () => { if (numero === numeroLecture) onRefus?.(); },
+    });
+    const pret = sonEnCache(texte, voixG);
+    // Son déjà prêt (2e essai, après un appui) : il part dans le geste même.
+    if (pret) { jouer(pret); return; }
+    syntheseGoogle(texte, voixG)
+      .then((b64) => { if (numero === numeroLecture) jouer(b64); })
+      .catch(() => { if (numero === numeroLecture) direAccueilIphone(texte, { onDemarre, onFin, onRefus }); });
+    return;
+  }
+  direAccueilIphone(texte, { onDemarre, onFin, onRefus });
+}
+
+function direAccueilIphone(texte, { onDemarre, onFin, onRefus }) {
   if (!syntheseVocaleDisponible()) { onFin?.(); return; }
   const synth = window.speechSynthesis;
   try { synth.cancel(); } catch (_e) { /* ignoré */ }
   numeroLecture += 1;
   const numero = numeroLecture;
   let fini = false;
+  let demarre = false;
   const finir = () => { if (fini || numero !== numeroLecture) return; fini = true; onFin?.(); };
   const voix = choisirVoixFrancaise();
   const morceaux = decouperPourLecture(texte);
@@ -629,7 +655,7 @@ function direAccueil(texte, { onDemarre, onFin }) {
     return u;
   });
   if (phrasesEnCours.length === 0) { finir(); return; }
-  phrasesEnCours[0].onstart = () => { syntheseVocaleDebloquee = true; onDemarre?.(); };
+  phrasesEnCours[0].onstart = () => { demarre = true; syntheseVocaleDebloquee = true; onDemarre?.(); };
   const derniere = phrasesEnCours[phrasesEnCours.length - 1];
   derniere.onend = finir;
   derniere.onerror = finir;
@@ -637,6 +663,12 @@ function direAccueil(texte, { onDemarre, onFin }) {
     synth.resume();
     phrasesEnCours.forEach((u) => synth.speak(u));
   } catch (_e) { finir(); return; }
+  // Pas de son au bout d'1,3 s : l'iPhone a refusé.
+  setTimeout(() => {
+    if (demarre || fini || numero !== numeroLecture) return;
+    arreterLecture();
+    onRefus?.();
+  }, 1300);
   setTimeout(finir, texte.length * 90 + 4000);
 }
 
@@ -687,9 +719,20 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
 
   const lancerVoix = () => {
     etat.current.voixFaite = true;
-    const texte = texteDuPoint({ salut, programme: programmeRef.current, meteo: meteoRef.current, demain });
+    // Même texte pour l'essai automatique et l'appui : le son déjà préparé
+    // peut alors partir tout de suite.
+    const texte = etat.current.texteVoix || texteDuPoint({ salut, programme: programmeRef.current, meteo: meteoRef.current, demain });
+    etat.current.texteVoix = texte;
     let demarree = false;
     direAccueil(texte, {
+      onRefus: () => {
+        if (etat.current.termine) return;
+        etat.current.voixFaite = false;
+        etat.current.parle = false;
+        setParle(false);
+        setBoutonVoix(true);
+        programmerSortie(Math.max(ACCUEIL_SORTIE_MS, 10500) - (Date.now() - debut));
+      },
       onDemarre: () => {
         demarree = true;
         etat.current.parle = true;
@@ -761,14 +804,7 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
     let annule = false;
     const essayer = () => {
       if (annule || etat.current.termine || etat.current.voixFaite) return;
-      const aDemarre = lancerVoix();
-      setTimeout(() => {
-        if (annule || etat.current.termine || aDemarre()) return;
-        arreterLecture(); // annule aussi la fin prévue de cet essai
-        etat.current.voixFaite = false;
-        setBoutonVoix(true);
-        programmerSortie(Math.max(ACCUEIL_SORTIE_MS, 10500) - (Date.now() - debut));
-      }, 1300);
+      lancerVoix();
     };
     const attente = setInterval(() => {
       const ecoule = Date.now() - debut;
@@ -867,17 +903,29 @@ function ChoixVoix() {
     const t = setTimeout(recharger, 800);
     return () => { clearTimeout(t); window.speechSynthesis.removeEventListener?.("voiceschanged", recharger); };
   }, []);
-  if (!syntheseVocaleDisponible()) return null;
   const qualite = (v) => VOIX_DE_QUALITE.test(v.name) || VOIX_DE_QUALITE.test(v.voiceURI || "");
   const triee = [...liste].sort((a, b) => Number(qualite(b)) - Number(qualite(a)) || a.name.localeCompare(b.name));
+  const [google, setGoogle] = useState(voixGoogleChoisie);
   const ecouter = () => {
     syntheseVocaleDebloquee = true;
+    debloquerAudio();
+    voixGoogleIndisponible = false; // nouvel essai (clé tout juste installée…)
     const prenom = lireLocal(CLE_ACCUEIL_PRENOM) || "";
     lireAVoixHaute(`Bonjour${prenom ? " " + prenom : ""}. Tu as trois interventions aujourd'hui, la première à 8h30. Les prévisions météo indiquent une journée ensoleillée.`);
   };
   return (
     <div className="choix-voix">
-      <label>Voix de lecture (accueil et assistant)
+      <label>Voix naturelle Google (en ligne)
+        <select
+          value={google}
+          onChange={(e) => { setGoogle(e.target.value); ecrireLocal(CLE_VOIX_GOOGLE, e.target.value); voixGoogleIndisponible = false; }}
+        >
+          {VOIX_GOOGLE.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+          <option value="">Désactivée (voix de l'iPhone)</option>
+        </select>
+      </label>
+      {syntheseVocaleDisponible() && (
+      <label>{google ? "Voix de secours de l'iPhone (sans réseau)" : "Voix de l'iPhone"}
         <select
           value={choisie}
           onChange={(e) => { setChoisie(e.target.value); ecrireLocal(CLE_VOIX_CHOISIE, e.target.value); }}
@@ -890,10 +938,11 @@ function ChoixVoix() {
           ))}
         </select>
       </label>
+      )}
       <button type="button" className="btn-ghost small" onClick={ecouter}>Écouter</button>
       <span className="hint">
-        Les voix ★ sont les plus naturelles. Pour en avoir plus sur l'iPhone : Réglages → Accessibilité → Contenu énoncé →
-        Voix → Français, puis télécharge une voix « Améliorée » ou « Premium » (par exemple Audrey ou Thomas). Rouvre ensuite l'appli.
+        La voix Google sert pour l'accueil et l'assistant. Si elle ne répond pas (pas de réseau, clé pas encore
+        installée), la voix de l'iPhone prend le relais automatiquement.
       </span>
     </div>
   );
@@ -927,6 +976,8 @@ function AppContenu() {
   };
 
   useEffect(() => { appliquerTheme(theme); }, [theme]);
+  const [accent, setAccent] = useState(accentEnregistre);
+  useEffect(() => { appliquerAccent(accent); }, [accent]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const { items: clients, upsert: upsertClient, remove: removeClient, loading: loadingClients } = useSyncedCollection("clients", initialClients);
@@ -1485,6 +1536,7 @@ function AppContenu() {
             onToggle={togglePlanning}
             onNavigate={allerAOnglet}
             onOpenReport={goToReport}
+            settings={settings}
           />
         )}
 
@@ -1615,7 +1667,7 @@ function AppContenu() {
           />
         )}
 
-        {tab === "parametres" && <Parametres settings={settings} setSettings={saveSettings} loading={loadingSettings} theme={theme} setTheme={setTheme} oneDrive={oneDrive} onRevoirAccueil={revoirAccueil} />}
+        {tab === "parametres" && <Parametres settings={settings} setSettings={saveSettings} loading={loadingSettings} theme={theme} setTheme={setTheme} accent={accent} setAccent={setAccent} oneDrive={oneDrive} onRevoirAccueil={revoirAccueil} />}
       </main>
 
       {tab !== "assistant" && (
@@ -1655,9 +1707,11 @@ function AppContenu() {
 }
 
 /* ---------- Dashboard ---------- */
-function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, reports, rappelsActifs, onToggle, onNavigate, onOpenReport }) {
+function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, reports, rappelsActifs, onToggle, onNavigate, onOpenReport, settings }) {
   const todayIso = toLocalISODate(new Date());
-  const next = planning.filter((p) => !p.fait && p.categorie !== "relance" && !estVacances(p) && couvreJour(p, todayIso));
+  const estIntervention = (p) => !p.fait && p.categorie !== "relance" && !estVacances(p);
+  const next = planning.filter((p) => estIntervention(p) && couvreJour(p, todayIso));
+  const enVacances = planning.some((p) => estVacances(p) && couvreJour(p, todayIso));
 
   const now = new Date();
   const moisEnCours = now.getMonth() + 1;
@@ -1673,19 +1727,152 @@ function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, r
   const moisLabelBrut = now.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
   const moisLabel = moisLabelBrut.charAt(0).toUpperCase() + moisLabelBrut.slice(1);
 
+  // En-tête : prénom et initiales du technicien, date du jour.
+  const nomTech = String(settings?.technicien?.nom || "").trim();
+  const prenom = nomTech.split(/\s+/)[0] || "";
+  const initiales = nomTech.split(/\s+/).filter(Boolean).slice(0, 2).map((m) => m[0].toUpperCase()).join("") || "TP";
+  const dateLongue = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+  const salut = now.getHours() >= 18 ? "Bonsoir" : "Bonjour";
+
+  // Semaine en cours, du lundi au dimanche, avec un point les jours chargés.
+  const lundi = new Date(now);
+  lundi.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  const semaine = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(lundi);
+    d.setDate(lundi.getDate() + i);
+    const iso = toLocalISODate(d);
+    return {
+      iso,
+      nom: d.toLocaleDateString("fr-FR", { weekday: "short" }).replace(".", ""),
+      num: d.getDate(),
+      charge: planning.some((p) => estIntervention(p) && couvreJour(p, iso)),
+      vacances: planning.some((p) => estVacances(p) && couvreJour(p, iso)),
+      aujourdhui: iso === todayIso,
+    };
+  });
+
+  // Prochaine intervention : la première encore à venir aujourd'hui, sinon la première du jour.
+  const heureMin = (p) => (p.heure && p.heure !== "—" ? p.heure : "99:99");
+  const triees = [...next].sort((a, b) => heureMin(a).localeCompare(heureMin(b)));
+  const maintenant = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const prochaine = triees.find((p) => heureMin(p) >= maintenant) || triees[0] || null;
+  const ficheProchaine = prochaine ? clients.find((c) => c.nom === prochaine.client) : null;
+  const adresseProchaine = prochaine ? ((prochaine.adresse && prochaine.adresse.trim()) || ficheProchaine?.adresse || "") : "";
+
+  // Météo du jour (domicile), déjà en cache le plus souvent grâce à l'accueil.
+  const [meteo, setMeteo] = useState(null);
+  useEffect(() => {
+    let actif = true;
+    chargerMeteo(todayIso, "domicile", { adresse: settings?.entreprise?.adresse, ville: settings?.entreprise?.codePostalVille })
+      .then((m) => { if (actif) setMeteo(m); })
+      .catch(() => {});
+    return () => { actif = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayIso]);
+
+  const raccourcis = [
+    { onglet: "planning", label: "Planning", icone: "calendar", ton: "acc" },
+    { onglet: "clients", label: "Clients", icone: "users", ton: "acc2" },
+    { onglet: "rapports", label: "Rapport", icone: "report", ton: "acc" },
+    { onglet: "devis", label: "Devis", icone: "quote", ton: "orange" },
+  ];
+  const compteurs = [
+    { valeur: upcoming, label: "Interventions cette semaine", onglet: "planning", ton: "acc" },
+    { valeur: devisAFaireCount, label: "Devis à faire", onglet: "devis", ton: "acc" },
+    { valeur: aFacturer, label: "À facturer", onglet: "facturation", ton: "orange" },
+    { valeur: rappelsActifs.length, label: "Rappels actifs", onglet: "rappels", ton: "orange" },
+  ];
+
   return (
-    <div>
-      <header className="page-head">
-        <h1>Tableau de bord</h1>
-        <p>Vue d'ensemble de votre activité</p>
+    <div className="sig-dashboard">
+      <header className="sig-entete">
+        <div className="sig-avatar"><span>{initiales}</span></div>
+        <div className="grow">
+          <div className="sig-date">{dateLongue.charAt(0).toUpperCase() + dateLongue.slice(1)}</div>
+          <h1 className="sig-salut">{salut}{prenom ? ` ${prenom}` : ""}</h1>
+        </div>
       </header>
 
-      <div className="gauges">
-        <Jauge value={upcoming} max={10} label="Interventions cette semaine" onClick={() => onNavigate("planning")} />
-        <Jauge value={devisAFaireCount} max={5} label="Devis à faire" onClick={() => onNavigate("devis")} />
-        <Jauge value={aFacturer} max={5} label="À facturer" onClick={() => onNavigate("facturation")} />
-        <Jauge value={rappelsActifs.length} max={5} label="Rappels actifs" onClick={() => onNavigate("rappels")} />
+      <div className="sig-semaine" role="list">
+        {semaine.map((j) => (
+          <button
+            key={j.iso}
+            type="button"
+            role="listitem"
+            className={"sig-jour" + (j.aujourdhui ? " actif" : "") + (j.vacances ? " vacances" : "")}
+            onClick={() => onNavigate("planning")}
+            aria-label={`${j.nom} ${j.num}${j.charge ? ", interventions prévues" : ""}`}
+          >
+            <span className="sig-jour-nom">{j.nom}</span>
+            <span className="sig-jour-num">{j.num}</span>
+            <span className={"sig-jour-point" + (j.charge ? " plein" : "")} />
+          </button>
+        ))}
       </div>
+
+      <section className="sig-hero">
+        <span className="sig-hero-cercle grand" aria-hidden="true" />
+        <span className="sig-hero-cercle petit" aria-hidden="true" />
+        <div className="sig-hero-haut">
+          <span className="sig-hero-titre">Aujourd'hui</span>
+          {meteo && (
+            <span className="sig-meteo">{meteo.icone} {meteo.matin}° / {meteo.apresMidi}°</span>
+          )}
+        </div>
+        <div className="sig-hero-nombre">
+          {enVacances ? "En vacances 🌴" : next.length === 0 ? "Aucune intervention" : `${next.length} intervention${next.length > 1 ? "s" : ""}`}
+        </div>
+        {prochaine && (
+          <div className="sig-prochaine">
+            <button type="button" className="sig-prochaine-texte" onClick={() => onNavigate("planning")}>
+              <span className="sig-prochaine-quand">{heureMin(prochaine) !== "99:99" && heureMin(prochaine) >= maintenant ? "Prochaine" : "Au programme"}{prochaine.heure && prochaine.heure !== "—" ? ` · ${prochaine.heure.replace(":", "h")}` : ""}</span>
+              <span className="sig-prochaine-titre">{prochaine.titre}</span>
+              <span className="sig-prochaine-client">{nomAffiche(prochaine.client, clients)}</span>
+            </button>
+            {adresseProchaine && (
+              <a className="sig-itineraire" href={lienNavigation(adresseProchaine)} target="_blank" rel="noopener noreferrer" aria-label="Itinéraire">
+                <Icon name="navigation" size={20} />
+              </a>
+            )}
+          </div>
+        )}
+      </section>
+
+      <div className="sig-raccourcis">
+        {raccourcis.map((r) => (
+          <button key={r.onglet} type="button" className="sig-raccourci" onClick={() => onNavigate(r.onglet)}>
+            <span className={"sig-raccourci-icone ton-" + r.ton}><Icon name={r.icone} size={22} /></span>
+            <span className="sig-raccourci-label">{r.label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="sig-compteurs">
+        {compteurs.map((c) => (
+          <button key={c.label} type="button" className="sig-compteur" onClick={() => onNavigate(c.onglet)}>
+            <span className={"sig-compteur-valeur ton-" + c.ton}>{c.valeur}</span>
+            <span className="sig-compteur-label">{c.label}</span>
+          </button>
+        ))}
+      </div>
+
+      <section className="card">
+        <div className="sig-carte-tete"><h3>Programme du jour</h3><button type="button" className="sig-lien" onClick={() => onNavigate("planning")}>Tout voir</button></div>
+        {triees.length === 0 && <p className="empty">Aucune intervention prévue aujourd'hui.</p>}
+        <ul className="sig-frise">
+          {triees.map((p) => (
+            <li key={p.id} className={"sig-frise-item" + (prochaine && p.id === prochaine.id ? " actif" : "")}>
+              <span className="sig-frise-point" aria-hidden="true" />
+              <button type="button" className="sig-frise-texte" onClick={() => onNavigate("planning")}>
+                <span className="sig-frise-heure">{p.heure && p.heure !== "—" ? p.heure.replace(":", "h") : "Dans la journée"}{p.duree ? ` · ${p.duree}` : ""}</span>
+                <span className="sig-frise-titre">{p.titre}</span>
+                <span className="sig-frise-client">{nomAffiche(p.client, clients)}</span>
+              </button>
+              {p.rappel && <span className="pill pill-warm"><Icon name="bell" size={13} /> rappel</span>}
+            </li>
+          ))}
+        </ul>
+      </section>
 
       <section className="card">
         <h3>Récapitulatif de {moisLabel}</h3>
@@ -1705,24 +1892,7 @@ function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, r
         </div>
       </section>
 
-      <div className="grid-2">
-        <section className="card">
-          <h3>Interventions du jour</h3>
-          {next.length === 0 && <p className="empty">Aucune intervention prévue aujourd'hui.</p>}
-          <ul className="list">
-            {next.map((p) => (
-              <li key={p.id} className="row clickable" onClick={() => onNavigate("planning")} title="Voir dans le planning">
-                <div>
-                  <div className="row-title">{p.titre}</div>
-                  <div className="row-sub">{nomAffiche(p.client, clients)} {p.heure !== "—" ? `· à ${p.heure}` : ""}{p.duree && ` · ${p.duree}`}</div>
-                </div>
-                {p.rappel && <span className="pill pill-warm"><Icon name="bell" size={13} /> rappel</span>}
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="card">
+      <section className="card">
           <h3>Derniers rapports</h3>
           <ul className="list">
             {reports.slice(0, 4).map((r) => (
@@ -1736,7 +1906,6 @@ function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, r
             ))}
           </ul>
         </section>
-      </div>
 
       <section className="card">
         <h3>Rappels actifs</h3>
@@ -1912,6 +2081,113 @@ const REPONSE_ENVOI = /^(oui,? )?(envoie|envoies|envoyer|envoie-le|envoie-la|env
 const estUnOui = (t) => REPONSE_OUI.test(t) || REPONSE_ENVOI.test(t);
 const REPONSE_NON = /^(non|annule|annuler|laisse tomber|stop|pas maintenant)\b/i;
 
+/* ---------- Voix naturelle Google (fonction Supabase « voix ») ----------
+   Le texte part à la fonction « voix », qui renvoie un MP3 lu par une voix
+   Google Chirp 3 HD. Un seul lecteur audio sert à tout : l'iPhone l'autorise
+   à jouer une fois qu'il a été « réveillé » pendant un appui sur l'écran.
+   Si la voix Google échoue, la voix de l'iPhone prend le relais. */
+const CLE_VOIX_GOOGLE = "techni-pac-voix-google";
+const VOIX_GOOGLE = [
+  { id: "Charon", label: "Charon — homme, posé" },
+  { id: "Orus", label: "Orus — homme, assuré" },
+  { id: "Iapetus", label: "Iapetus — homme, clair" },
+  { id: "Algieba", label: "Algieba — homme, doux" },
+  { id: "Aoede", label: "Aoede — femme, chaleureuse" },
+  { id: "Kore", label: "Kore — femme, nette" },
+  { id: "Leda", label: "Leda — femme, jeune" },
+  { id: "Despina", label: "Despina — femme, douce" },
+];
+// "" = voix Google désactivée ; par défaut : Charon.
+function voixGoogleChoisie() {
+  let v = null;
+  try { v = localStorage.getItem(CLE_VOIX_GOOGLE); } catch (_e) { /* ignoré */ }
+  if (v === null) return "Charon";
+  return /^[A-Za-z]{2,30}$/.test(v) ? v : "";
+}
+// Clé absente ou refusée, fonction pas encore déployée : on n'insiste pas
+// pendant cette session (pas d'attente inutile avant chaque lecture).
+let voixGoogleIndisponible = false;
+let lecteurAudio = null;
+let lecteurAudioDebloque = false;
+const sonsEnCache = new Map();
+
+function lecteur() {
+  if (!lecteurAudio && typeof Audio !== "undefined") {
+    lecteurAudio = new Audio();
+    lecteurAudio.preload = "auto";
+    lecteurAudio.setAttribute("playsinline", "");
+  }
+  return lecteurAudio;
+}
+
+// Un court silence (WAV fabriqué ici) joué pendant l'appui débloque le lecteur.
+function silenceWav() {
+  const n = 800;
+  const buf = new ArrayBuffer(44 + n);
+  const v = new DataView(buf);
+  const ecrire = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  ecrire(0, "RIFF"); v.setUint32(4, 36 + n, true); ecrire(8, "WAVE"); ecrire(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+  ecrire(36, "data"); v.setUint32(40, n, true);
+  for (let i = 0; i < n; i++) v.setUint8(44 + i, 128);
+  let bin = ""; new Uint8Array(buf).forEach((b) => { bin += String.fromCharCode(b); });
+  return "data:audio/wav;base64," + btoa(bin);
+}
+
+function debloquerAudio() {
+  if (lecteurAudioDebloque) return;
+  const el = lecteur();
+  if (!el) return;
+  try {
+    el.src = silenceWav();
+    const p = el.play();
+    if (p && p.then) p.then(() => { lecteurAudioDebloque = true; }).catch(() => {});
+  } catch (_e) { /* ignoré */ }
+}
+
+const cleSon = (texte, voix) => voix + "|" + texte;
+function sonEnCache(texte, voix) { return sonsEnCache.get(cleSon(texte, voix)) || null; }
+
+async function syntheseGoogle(texte, voix) {
+  const enCache = sonEnCache(texte, voix);
+  if (enCache) return enCache;
+  const { data, error } = await invoquerFonction("voix", { texte, voix });
+  if (error || !data?.ok || !data?.audio) {
+    let code = data?.code || "";
+    try {
+      if (error?.context?.status === 404) code = "absente";
+      else if (error?.context && typeof error.context.json === "function") code = (await error.context.json())?.code || code;
+    } catch (_e) { /* corps illisible */ }
+    if (["cle_manquante", "cle_refusee", "absente"].includes(code)) voixGoogleIndisponible = true;
+    throw new Error(code || "voix indisponible");
+  }
+  sonsEnCache.set(cleSon(texte, voix), data.audio);
+  if (sonsEnCache.size > 12) sonsEnCache.delete(sonsEnCache.keys().next().value);
+  return data.audio;
+}
+
+// Joue un MP3 (base64). onRefus : l'iPhone a bloqué le son (pas d'appui).
+function jouerAudio(b64, { onDemarre, onFin, onRefus } = {}) {
+  const el = lecteur();
+  if (!el) { onRefus?.(); return; }
+  let fini = false;
+  const finir = () => { if (fini) return; fini = true; onFin?.(); };
+  el.onended = finir;
+  el.onerror = finir;
+  el.src = "data:audio/mpeg;base64," + b64;
+  try {
+    const p = el.play();
+    if (p && p.then) {
+      p.then(() => { lecteurAudioDebloque = true; onDemarre?.(); })
+        .catch((e) => {
+          el.onended = null; el.onerror = null;
+          if (e?.name === "NotAllowedError") onRefus?.(); else finir();
+        });
+    } else onDemarre?.();
+  } catch (_e) { onRefus?.(); }
+}
+
 /* ---------- Lecture à voix haute ----------
    Les navigateurs (Safari sur iPhone surtout, mais aussi Chrome) refusent de
    parler tant que la synthèse vocale n'a pas été lancée une première fois
@@ -1929,6 +2205,7 @@ function syntheseVocaleDisponible() {
 }
 
 function debloquerSyntheseVocale() {
+  debloquerAudio();
   if (syntheseVocaleDebloquee || !syntheseVocaleDisponible()) return;
   try {
     const u = new SpeechSynthesisUtterance(".");
@@ -1950,6 +2227,7 @@ let numeroLecture = 0;
 
 function arreterLecture() {
   numeroLecture += 1;
+  try { if (lecteurAudio) { lecteurAudio.onended = null; lecteurAudio.onerror = null; lecteurAudio.pause(); } } catch (_e) { /* ignoré */ }
   if (!syntheseVocaleDisponible()) return;
   phrasesEnCours = [];
   try { window.speechSynthesis.cancel(); } catch (e) { /* ignoré */ }
@@ -1976,6 +2254,24 @@ function decouperPourLecture(texte) {
 // d'une lecture : une minuterie de secours, calée sur la longueur du texte,
 // prend alors le relais.
 function lireAVoixHaute(texte, onFin) {
+  const voixG = voixGoogleChoisie();
+  const propre = textepourVoix(texte || "").trim();
+  if (voixG && !voixGoogleIndisponible && propre && propre.length <= 3000) {
+    arreterLecture();
+    const numero = numeroLecture;
+    let termine = false;
+    const terminer = () => { if (termine || numero !== numeroLecture) return; termine = true; if (onFin) onFin(); };
+    // En cas d'échec (réseau, clé), la voix de l'iPhone prend le relais.
+    const secours = () => { if (numero === numeroLecture) lireAVoixHauteIphone(texte, onFin); };
+    syntheseGoogle(propre, voixG)
+      .then((b64) => { if (numero === numeroLecture) jouerAudio(b64, { onFin: terminer, onRefus: secours }); })
+      .catch(secours);
+    return;
+  }
+  lireAVoixHauteIphone(texte, onFin);
+}
+
+function lireAVoixHauteIphone(texte, onFin) {
   const morceaux = syntheseVocaleDisponible() && texte ? decouperPourLecture(texte) : [];
   if (morceaux.length === 0) { if (onFin) setTimeout(onFin, 0); return; }
   const synth = window.speechSynthesis;
@@ -2306,7 +2602,7 @@ function CarteDebrief() {
         </button>
         <span className="carte-debrief-boutons">
           {debrief?.texte && (
-            <button type="button" className="btn-ghost small" onClick={() => { syntheseVocaleDebloquee = true; lireAVoixHaute(debrief.texte); }}>
+            <button type="button" className="btn-ghost small" onClick={() => { syntheseVocaleDebloquee = true; debloquerAudio(); lireAVoixHaute(debrief.texte); }}>
               <Icon name="volume" size={14} /> Écouter
             </button>
           )}
@@ -2789,7 +3085,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
                   </a>
                 )}
                 {m.role === "assistant" && !m.erreur && syntheseDispo && (
-                  <button className="bulle-ecouter" onClick={() => { syntheseVocaleDebloquee = true; lireAVoixHaute(m.content); }} title="Écouter cette réponse">
+                  <button className="bulle-ecouter" onClick={() => { syntheseVocaleDebloquee = true; debloquerAudio(); lireAVoixHaute(m.content); }} title="Écouter cette réponse">
                     <Icon name="volume" size={13} /> Écouter
                   </button>
                 )}
@@ -3882,7 +4178,7 @@ function ReglesClassement({ liste, onChange, oneDriveConnecte }) {
 }
 
 /* ---------- Paramètres ---------- */
-function Parametres({ settings, setSettings, theme, setTheme, oneDrive, onRevoirAccueil }) {
+function Parametres({ settings, setSettings, theme, setTheme, accent, setAccent, oneDrive, onRevoirAccueil }) {
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);
   // Une règle ajoutée depuis l'assistant apparaît ici tout de suite, tant
@@ -4018,7 +4314,7 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive, onRevoir
         <h3>Apparence</h3>
         <p className="hint">
           Le mode sombre repose les yeux en atelier et le soir ; le mode clair reste plus lisible
-          en plein soleil. Le choix vaut pour cet appareil seulement.
+          en plein soleil. Choisis aussi la couleur de l'application. Ces choix valent pour cet appareil seulement.
         </p>
         <div className="theme-choix">
           <button
@@ -4035,6 +4331,20 @@ function Parametres({ settings, setSettings, theme, setTheme, oneDrive, onRevoir
           >
             Clair
           </button>
+        </div>
+        <div className="accent-choix" role="group" aria-label="Couleur de l'application">
+          {ACCENTS.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              className={"accent-option accent-" + a.id + (accent === a.id ? " actif" : "")}
+              aria-pressed={accent === a.id}
+              onClick={() => setAccent && setAccent(a.id)}
+            >
+              <span className="accent-pastille" aria-hidden="true" />
+              {a.label}
+            </button>
+          ))}
         </div>
         <ReglagesAccueil onRevoir={onRevoirAccueil} />
       </section>
@@ -5068,8 +5378,31 @@ function appliquerTheme(theme) {
   }
 }
 
-// Appliqué dès le chargement, avant le premier rendu.
+// Couleur d'accent (violet, bleu ou vert), choisie dans Paramètres → Apparence,
+// retenue par appareil comme le thème.
+const CLE_ACCENT = "techni-pac-accent";
+const ACCENTS = [
+  { id: "violet", label: "Violet" },
+  { id: "bleu", label: "Bleu" },
+  { id: "vert", label: "Vert" },
+];
+function accentEnregistre() {
+  try {
+    const v = localStorage.getItem(CLE_ACCENT);
+    return ACCENTS.some((a) => a.id === v) ? v : "violet";
+  } catch (_e) {
+    return "violet";
+  }
+}
+function appliquerAccent(accent) {
+  const v = ACCENTS.some((a) => a.id === accent) ? accent : "violet";
+  document.documentElement.setAttribute("data-accent", v);
+  try { localStorage.setItem(CLE_ACCENT, v); } catch (_e) { /* stockage indisponible */ }
+}
+
+// Appliqués dès le chargement, avant le premier rendu.
 appliquerTheme(themeEnregistre());
+appliquerAccent(accentEnregistre());
 
 /* ---------- Préparation des photos ----------
    Les photos prises avec un iPhone sont volumineuses, et souvent au format
@@ -8370,7 +8703,7 @@ function buildReportHtml(report, settings, clients) {
 
 /* ---------- CSS ---------- */
 const css = `
-@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Barlow+Condensed:wght@500;600;700&display=swap');
 
 /* ---------------------------------------------------------------------------
    Thème — toutes les couleurs de l'application passent par ces variables.
@@ -8507,7 +8840,7 @@ const css = `
   display: flex;
   min-height: 100vh;
   background: var(--fond);
-  font-family: 'Inter', -apple-system, sans-serif;
+  font-family: var(--police);
   color: var(--encre);
 }
 
@@ -8531,11 +8864,11 @@ const css = `
   width: 44px; height: 44px; border-radius: 11px; flex-shrink: 0;
   background: linear-gradient(135deg, #3B86C4, #E8873A);
   display: flex; align-items: center; justify-content: center;
-  font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 19px;
+  font-family: var(--police-titre); font-weight: 700; font-size: 19px;
   color: #FFFFFF; letter-spacing: 0.5px;
   box-shadow: 0 2px 10px rgba(59,134,196,0.35);
 }
-.brand-name { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 21px; letter-spacing: 0.6px; line-height: 1.1; color: var(--nav-encre-clair); }
+.brand-name { font-family: var(--police-titre); font-weight: 700; font-size: 21px; letter-spacing: 0.6px; line-height: 1.1; color: var(--nav-encre-clair); }
 .brand-sub { font-size: 10.5px; color: var(--nav-encre); margin-top: 1px; text-transform: uppercase; letter-spacing: 0.6px; }
 
 nav { display: flex; flex-direction: column; gap: 2px; }
@@ -8553,14 +8886,14 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .logout-link:hover { color: var(--sur-couleur); }
 
 /* --- Écran d'accueil (toujours sur fond de ciel sombre, quel que soit le thème) --- */
-.bienvenue { position: fixed; inset: 0; z-index: 3000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; text-align: center; padding: calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom)); overflow: hidden; color: #E7ECEB; font-family: 'Inter', -apple-system, sans-serif; cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none;
+.bienvenue { position: fixed; inset: 0; z-index: 3000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; text-align: center; padding: calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom)); overflow: hidden; color: #E7ECEB; font-family: var(--police); cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none;
   background: radial-gradient(120% 70% at 50% 108%, var(--b-lueur) 0%, transparent 62%), linear-gradient(180deg, #16212B 0%, #1B2733 55%, #22303D 100%); }
 .bienvenue.matin { --b-lueur: rgba(232,135,58,0.55); --b-astre: #F4B15F; --b-halo: rgba(244,177,95,0.45); }
 .bienvenue.journee { --b-lueur: rgba(92,155,209,0.45); --b-astre: #F7D27A; --b-halo: rgba(247,210,122,0.4); }
 .bienvenue.soir { --b-lueur: rgba(126,87,168,0.45); --b-astre: #DCE3EA; --b-halo: rgba(220,227,234,0.25); }
 .bienvenue-astre { position: absolute; left: 50%; bottom: -90px; width: 80px; height: 80px; margin-left: -40px; border-radius: 50%; background: var(--b-astre); box-shadow: 0 0 50px 18px var(--b-halo), 0 0 140px 50px var(--b-halo); opacity: 0.95; animation: b-leve 3.6s cubic-bezier(.25,.6,.25,1) forwards; }
-.bienvenue-mark { width: 88px; height: 88px; border-radius: 20px; background: linear-gradient(135deg, #3B86C4, #E8873A); display: flex; align-items: center; justify-content: center; font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 36px; letter-spacing: 0.5px; color: #fff; box-shadow: 0 6px 30px rgba(232,135,58,0.35); transform: scale(0); animation: b-rebond 1.2s cubic-bezier(.3,1.35,.5,1) 0.35s forwards; }
-.bienvenue-salut { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 46px; line-height: 1.1; letter-spacing: 0.4px; min-height: 1.15em; max-width: 12ch; margin-top: 4px; }
+.bienvenue-mark { width: 88px; height: 88px; border-radius: 20px; background: linear-gradient(135deg, #3B86C4, #E8873A); display: flex; align-items: center; justify-content: center; font-family: var(--police-titre); font-weight: 700; font-size: 36px; letter-spacing: 0.5px; color: #fff; box-shadow: 0 6px 30px rgba(232,135,58,0.35); transform: scale(0); animation: b-rebond 1.2s cubic-bezier(.3,1.35,.5,1) 0.35s forwards; }
+.bienvenue-salut { font-family: var(--police-titre); font-weight: 700; font-size: 46px; line-height: 1.1; letter-spacing: 0.4px; min-height: 1.15em; max-width: 12ch; margin-top: 4px; }
 .bienvenue-mot { white-space: nowrap; }
 .bienvenue-curseur { display: inline-block; width: 3px; height: 0.85em; background: #E8873A; vertical-align: -0.06em; margin-left: 4px; animation: b-clignote 0.8s steps(1) infinite; }
 .bienvenue-puces { display: flex; flex-direction: column; gap: 10px; align-items: center; min-height: 140px; }
@@ -8587,7 +8920,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .choix-voix { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .choix-voix select { width: 100%; max-width: 420px; }
 .app-loading { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--fond); }
-.app-loading-box { display: flex; flex-direction: column; align-items: center; gap: 14px; color: var(--encre-3); font-family: 'Inter', sans-serif; font-size: 14px; }
+.app-loading-box { display: flex; flex-direction: column; align-items: center; gap: 14px; color: var(--encre-3); font-family: var(--police); font-size: 14px; }
 .app-loading-box .brand-mark { width: 48px; height: 48px; font-size: 18px; }
 
 .main { flex: 1; padding: 32px 40px; max-width: 1100px; min-width: 0; }
@@ -8604,20 +8937,20 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .map-warning { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--orange-fonce); margin-top: 10px; }
 .map-popup-link { color: var(--bleu); font-weight: 600; }
 .map-hover-card { font-size: 12.5px; line-height: 1.4; }
-.page-head h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 30px; font-weight: 700; margin: 0 0 4px; letter-spacing: 0.2px; }
+.page-head h1 { font-family: var(--police-titre); font-size: 30px; font-weight: 700; margin: 0 0 4px; letter-spacing: 0.2px; }
 .page-head p { margin: 0; color: var(--encre-3); font-size: 14px; }
 .row-between { display: flex; justify-content: space-between; align-items: flex-end; }
 
 .gauges { display: flex; gap: 20px; margin-bottom: 26px; flex-wrap: wrap; }
 .monthly-recap-grid { display: flex; gap: 16px; flex-wrap: wrap; }
 .monthly-recap-item { flex: 1; min-width: 130px; text-align: center; padding: 16px 10px; background: var(--fond-doux); border-radius: 10px; }
-.monthly-recap-value { font-family: 'Barlow Condensed', sans-serif; font-size: 34px; font-weight: 700; color: var(--encre); line-height: 1; }
+.monthly-recap-value { font-family: var(--police-titre); font-size: 34px; font-weight: 700; color: var(--encre); line-height: 1; }
 .monthly-recap-label { font-size: 12.5px; color: var(--encre-3); margin-top: 4px; }
 .jauge { background: var(--carte); border: 1px solid var(--trait); border-radius: 12px; padding: 14px 20px 16px; flex: 1; min-width: 140px; text-align: center; }
 .jauge-clickable { cursor: pointer; transition: border-color 0.15s, transform 0.1s; }
 .jauge-clickable:hover { border-color: var(--bleu); }
 .jauge-clickable:active { transform: scale(0.98); }
-.jauge-val { font-family: 'Barlow Condensed', sans-serif; font-size: 28px; font-weight: 700; margin-top: -6px; }
+.jauge-val { font-family: var(--police-titre); font-size: 28px; font-weight: 700; margin-top: -6px; }
 .jauge-label { font-size: 12.5px; color: var(--encre-3); margin-top: 2px; }
 .jauge-piste { stroke: var(--trait-fonce); }
 .jauge-aiguille { stroke: var(--encre); }
@@ -8628,16 +8961,16 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 
 .card { background: var(--carte); border: 1px solid var(--trait); border-radius: 12px; padding: 20px 22px; margin-bottom: 20px; }
-.card h3 { font-family: 'Barlow Condensed', sans-serif; font-size: 18px; font-weight: 600; margin: 0 0 14px; }
+.card h3 { font-family: var(--police-titre); font-size: 18px; font-weight: 600; margin: 0 0 14px; }
 .card h4 { font-size: 13px; font-weight: 600; margin: 0 0 8px; color: var(--encre-2); text-transform: uppercase; letter-spacing: 0.4px; }
 .total-ligne { display: flex; align-items: baseline; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--trait-clair); font-size: 14px; color: var(--encre-2); }
-.total-ligne strong { font-family: 'Barlow Condensed', sans-serif; font-size: 20px; font-weight: 700; color: var(--rouge); }
+.total-ligne strong { font-family: var(--police-titre); font-size: 20px; font-weight: 700; color: var(--rouge); }
 .total-ligne-ok strong { color: var(--vert); }
 .month-group { margin-bottom: 18px; }
 .month-group:last-child { margin-bottom: 0; }
-.month-heading { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: var(--bleu); margin: 0 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--trait-clair); text-transform: none; letter-spacing: 0; }
+.month-heading { font-family: var(--police-titre); font-size: 15px; font-weight: 600; color: var(--bleu); margin: 0 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--trait-clair); text-transform: none; letter-spacing: 0; }
 .report-month-group { margin-bottom: 28px; }
-.report-month-title { font-family: 'Barlow Condensed', sans-serif; font-size: 24px; font-weight: 700; color: var(--encre); margin: 0 0 14px; padding-bottom: 6px; border-bottom: 2px solid var(--encre); }
+.report-month-title { font-family: var(--police-titre); font-size: 24px; font-weight: 700; color: var(--encre); margin: 0 0 14px; padding-bottom: 6px; border-bottom: 2px solid var(--encre); }
 .report-day-group { margin-bottom: 16px; }
 .report-day-title { font-size: 13px; font-weight: 600; color: var(--encre-3); text-transform: capitalize; margin: 0 0 8px; }
 .mt { margin-top: 18px; }
@@ -8699,7 +9032,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .mini-calendar { margin-bottom: 20px; max-width: 520px; padding: 18px 20px; }
 .mini-calendar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .mini-calendar-header .icon-btn { color: var(--bleu); padding: 3px; }
-.mini-calendar-title { font-family: 'Barlow Condensed', sans-serif; font-weight: 600; font-size: 18px; color: var(--encre); text-transform: capitalize; }
+.mini-calendar-title { font-family: var(--police-titre); font-weight: 600; font-size: 18px; color: var(--encre); text-transform: capitalize; }
 .mini-calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
 .mini-calendar-weekdays { margin-bottom: 2px; }
 .mini-calendar-weekday { text-align: center; font-size: 11.5px; font-weight: 600; color: var(--encre-4); text-transform: uppercase; padding: 4px 0; }
@@ -8776,7 +9109,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .section-title { font-size: 13.5px; font-weight: 700; color: var(--encre); margin: 14px 0 4px; text-decoration: underline; text-underline-offset: 3px; }
 .texte-libre { white-space: pre-wrap; }
 .mini-table-block { margin-bottom: 12px; }
-.mini-table-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: var(--bleu); margin-bottom: 3px; text-decoration: underline; text-underline-offset: 3px; }
+.mini-table-title { font-family: var(--police-titre); font-size: 15px; font-weight: 600; color: var(--bleu); margin-bottom: 3px; text-decoration: underline; text-underline-offset: 3px; }
 .mini-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 12px; }
 .mini-table td, .mini-table th { padding: 6px 8px; border-bottom: 1px solid var(--survol); text-align: left; }
 .mini-table td:first-child, .mini-table th:first-child { color: var(--encre-3); }
@@ -8793,7 +9126,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .rubrique-tete, .modele-tete { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: transparent; border: 0; padding: 16px 18px; text-align: left; cursor: pointer; color: var(--encre); font: inherit; -webkit-tap-highlight-color: transparent; }
 .rubrique-tete:hover, .modele-tete:hover { background: var(--survol); }
 .rubrique-titres { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.rubrique-titre { font-family: 'Barlow Condensed', sans-serif; font-size: 19px; font-weight: 600; letter-spacing: 0.2px; }
+.rubrique-titre { font-family: var(--police-titre); font-size: 19px; font-weight: 600; letter-spacing: 0.2px; }
 .rubrique-resume { font-size: 13px; color: var(--encre-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rubrique-chevron { flex-shrink: 0; display: inline-flex; color: var(--encre-3); transition: transform 0.2s ease; }
 .rubrique.ouverte > .rubrique-tete .rubrique-chevron, .modele-repliable.ouvert > .modele-tete .rubrique-chevron { transform: rotate(180deg); }
@@ -8823,7 +9156,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .recherche-client .icon-btn { position: absolute; right: 4px; color: var(--encre-3); }
 .client-detail-actions { display: flex; gap: 8px; }
 .fiche-bandeau { gap: 12px; }
-.fiche-bandeau-nom { font-family: 'Barlow Condensed', sans-serif; font-size: 18px; font-weight: 600; color: var(--encre); }
+.fiche-bandeau-nom { font-family: var(--police-titre); font-size: 18px; font-weight: 600; color: var(--encre); }
 .fiche-bandeau-contact { display: block; font-size: 13px; font-weight: 400; color: var(--encre-3); margin-top: 1px; }
 .fiche-actions-row { margin-top: 12px; }
 .fiche-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px 22px; margin: 14px 0 4px; }
@@ -8879,7 +9212,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .table-position { margin-bottom: 10px; }
 .table-position select { width: auto; min-width: 220px; }
 
-.checklist-group-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; color: var(--bleu); margin: 6px 0 2px; text-decoration: underline; text-underline-offset: 3px; }
+.checklist-group-title { font-family: var(--police-titre); font-size: 15px; font-weight: 600; color: var(--bleu); margin: 6px 0 2px; text-decoration: underline; text-underline-offset: 3px; }
 .checklist-block { background: var(--fond-doux); border: 1px solid var(--trait); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
 .checklist-block-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .checklist-block-title { flex: 1; font-weight: 600; font-size: 13.5px; }
@@ -9019,7 +9352,7 @@ textarea { resize: vertical; }
 }
 .pdf-modal-box-compact { height: auto; max-width: 460px; }
 .pdf-modal-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--trait); flex-shrink: 0; }
-.pdf-modal-title { display: inline-flex; align-items: center; gap: 8px; font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 600; color: var(--encre); }
+.pdf-modal-title { display: inline-flex; align-items: center; gap: 8px; font-family: var(--police-titre); font-size: 16px; font-weight: 600; color: var(--encre); }
 .pdf-modal-actions { display: flex; gap: 8px; }
 .pdf-modal-iframe { flex: 1; border: none; width: 100%; background: var(--fond); }
 .pdf-modal-fallback { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--encre-3); background: var(--carte); padding: 32px 28px; text-align: center; }
@@ -9032,7 +9365,7 @@ textarea { resize: vertical; }
 
 .print-only { display: none; }
 .print-letterhead { margin-bottom: 20px; padding-bottom: 12px; border-bottom: 2px solid var(--encre); font-size: 12.5px; color: var(--encre-2); }
-.print-company-name { font-family: 'Barlow Condensed', sans-serif; font-size: 20px; font-weight: 700; color: var(--encre); margin-bottom: 2px; }
+.print-company-name { font-family: var(--police-titre); font-size: 20px; font-weight: 700; color: var(--encre); margin-bottom: 2px; }
 .print-checklist { padding-left: 18px; }
 @media print {
   /* Le papier est blanc : on repasse en valeurs claires pour l'impression,
@@ -9058,8 +9391,8 @@ textarea { resize: vertical; }
   }
   body * { visibility: hidden; }
   .print-only, .print-only * { visibility: visible; }
-  .print-only { position: absolute; left: 0; top: 0; width: 100%; display: block; padding: 20px; font-family: 'Inter', sans-serif; }
-  .print-only h1 { font-family: 'Barlow Condensed', sans-serif; }
+  .print-only { position: absolute; left: 0; top: 0; width: 100%; display: block; padding: 20px; font-family: var(--police); }
+  .print-only h1 { font-family: var(--police-titre); }
 }
 
 /* ---------- Assistant IA ---------- */
@@ -9181,7 +9514,7 @@ textarea { resize: vertical; }
 /* Mode vocal de l'assistant */
 .vocal { display: flex; flex-direction: column; gap: 18px; }
 .vocal-zone { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 28px 12px 8px; min-height: 52vh; justify-content: center; }
-.vocal-etat { font-family: 'Barlow Condensed', sans-serif; font-size: 26px; font-weight: 600; color: var(--encre); letter-spacing: 0.2px; }
+.vocal-etat { font-family: var(--police-titre); font-size: 26px; font-weight: 600; color: var(--encre); letter-spacing: 0.2px; }
 .vocal-etat-ecoute { color: var(--rouge); }
 .vocal-etat-attente { color: var(--orange-fonce); }
 .vocal-texte { min-height: 48px; max-width: 520px; margin: 8px 0 26px; font-size: 15px; line-height: 1.45; color: var(--encre-3); font-style: italic; }
@@ -9317,4 +9650,240 @@ textarea { resize: vertical; }
 @media (min-width: 781px) {
   .mobile-close-btn { display: none; }
 }
+
+/* ===========================================================================
+   Style « Signature » : dégradés doux, cartes en verre dépoli, coins arrondis.
+   Deux thèmes (clair / sombre) × trois couleurs d'accent (violet, bleu, vert),
+   posées sur <html data-theme="…" data-accent="…">. Ce bloc vient en dernier :
+   il redéfinit les variables et habille les éléments communs.
+=========================================================================== */
+:root {
+  --police: 'Plus Jakarta Sans', -apple-system, 'Segoe UI', sans-serif;
+  --police-titre: 'Plus Jakarta Sans', -apple-system, 'Segoe UI', sans-serif;
+  --fond: #F6F7FB;
+  --carte: #FFFFFF;
+  --fond-doux: #F1F3F9;
+  --survol: #ECEFF7;
+  --encre: #131A33;
+  --encre-2: #3F4766;
+  --encre-3: #5D6585;
+  --encre-4: #858BA6;
+  --encre-5: #A3A9BF;
+  --trait: #E1E5EF;
+  --trait-clair: #ECEFF6;
+  --trait-fonce: #CBD1E1;
+  --verre: rgba(255,255,255,0.78);
+  --verre-bord: rgba(255,255,255,0.95);
+  --verre-fort: rgba(255,255,255,0.88);
+  --nav: rgba(255,255,255,0.78);
+  --nav-encre: #5D6585;
+  --nav-encre-clair: #131A33;
+  --nav-survol: rgba(19,26,51,0.06);
+  --inverse: #131A33;
+  --sur-inverse: #FFFFFF;
+  --peche: #FFE0CC;
+  --orange-1: #F2994A;
+  --orange-2: #E5603A;
+  --ombre-carte: 0 8px 22px rgba(40,52,110,0.08);
+  --ombre-forte: 0 14px 30px rgba(40,52,110,0.14);
+}
+[data-theme="sombre"] {
+  --fond: #0C1022;
+  --carte: #171D35;
+  --fond-doux: #1B2140;
+  --survol: #232A4A;
+  --encre: #F1F3FF;
+  --encre-2: #C9CFEA;
+  --encre-3: #A8AFCF;
+  --encre-4: #7F86A6;
+  --encre-5: #6E7596;
+  --trait: rgba(255,255,255,0.12);
+  --trait-clair: rgba(255,255,255,0.07);
+  --trait-fonce: rgba(255,255,255,0.22);
+  --verre: rgba(255,255,255,0.065);
+  --verre-bord: rgba(255,255,255,0.12);
+  --verre-fort: rgba(22,28,54,0.82);
+  --nav: rgba(16,21,44,0.78);
+  --nav-encre: #A8AFCF;
+  --nav-encre-clair: #F1F3FF;
+  --nav-survol: rgba(255,255,255,0.07);
+  --inverse: #F1F3FF;
+  --sur-inverse: #0C1022;
+  --peche: rgba(240,130,70,0.28);
+  --orange-1: #FFC08A;
+  --orange-2: #FF8F6B;
+  --ombre-carte: 0 10px 26px rgba(0,0,0,0.30);
+  --ombre-forte: 0 14px 30px rgba(0,0,0,0.45);
+}
+
+/* Couleurs d'accent : dégradé principal (acc-1 → acc-mi → acc-2), texte, fond doux, halo. */
+:root, [data-accent="violet"] {
+  --acc-1: #2F62DB; --acc-mi: #5A55DF; --acc-2: #8B5CF6;
+  --acc-texte: #3557D6; --acc-doux: #ECEBFF; --acc-doux-2: #DEDCFF;
+  --acc-ombre: rgba(80,90,220,0.35); --acc-halo-1: #CFDDFF; --acc-halo-2: #ECE1FF;
+  --acc-chiffre-1: #2F62DB; --acc-chiffre-2: #8B5CF6; --acc-icone-2: #7A5CE8;
+}
+[data-accent="bleu"] {
+  --acc-1: #1A47C8; --acc-mi: #2470E0; --acc-2: #1FA8E4;
+  --acc-texte: #1D4ED8; --acc-doux: #E3EFFF; --acc-doux-2: #D2E5FF;
+  --acc-ombre: rgba(30,110,220,0.35); --acc-halo-1: #CFE0FF; --acc-halo-2: #D6F0FF;
+  --acc-chiffre-1: #1E5BD8; --acc-chiffre-2: #1FA8E4; --acc-icone-2: #1590D0;
+}
+[data-accent="vert"] {
+  --acc-1: #2457C5; --acc-mi: #1A86B0; --acc-2: #10A07A;
+  --acc-texte: #0F7A5F; --acc-doux: #E0F5EC; --acc-doux-2: #CDEEDF;
+  --acc-ombre: rgba(20,130,120,0.35); --acc-halo-1: #CFE0FF; --acc-halo-2: #D5F5E8;
+  --acc-chiffre-1: #2457C5; --acc-chiffre-2: #10A07A; --acc-icone-2: #0F8F6C;
+}
+[data-theme="sombre"], [data-theme="sombre"][data-accent="violet"] {
+  --acc-texte: #A9BCFF; --acc-doux: rgba(139,92,246,0.18); --acc-doux-2: rgba(139,92,246,0.28);
+  --acc-ombre: rgba(80,90,220,0.50); --acc-halo-1: rgba(70,100,240,0.50); --acc-halo-2: rgba(139,92,246,0.32);
+  --acc-chiffre-1: #8FB2FF; --acc-chiffre-2: #B79CFF; --acc-icone-2: #B79CFF;
+}
+[data-theme="sombre"][data-accent="bleu"] {
+  --fond: #0A1222;
+  --acc-texte: #9CC4FF; --acc-doux: rgba(31,168,228,0.18); --acc-doux-2: rgba(31,168,228,0.28);
+  --acc-ombre: rgba(30,110,220,0.50); --acc-halo-1: rgba(40,110,240,0.50); --acc-halo-2: rgba(30,170,230,0.30);
+  --acc-chiffre-1: #8FB2FF; --acc-chiffre-2: #6FD0F5; --acc-icone-2: #6FD0F5;
+}
+[data-theme="sombre"][data-accent="vert"] {
+  --fond: #08151C;
+  --acc-texte: #7EE6C2; --acc-doux: rgba(16,160,122,0.20); --acc-doux-2: rgba(16,160,122,0.30);
+  --acc-ombre: rgba(16,160,122,0.45); --acc-halo-1: rgba(50,100,230,0.45); --acc-halo-2: rgba(23,176,135,0.32);
+  --acc-chiffre-1: #8FB2FF; --acc-chiffre-2: #5EE0B4; --acc-icone-2: #5EE0B4;
+}
+/* L'ancien « bleu » de l'appli suit désormais la couleur d'accent. */
+:root, [data-theme="sombre"] {
+  --bleu: var(--acc-texte);
+  --bleu-fonce: var(--acc-1);
+  --bleu-clair: var(--acc-doux);
+  --bleu-clair-2: var(--acc-doux-2);
+}
+
+/* Fond : halos de couleur fixes derrière le contenu. */
+.app { position: relative; isolation: isolate; background: var(--fond); font-family: var(--police); }
+.app::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(circle at 0% 0%, var(--acc-halo-1) 0%, transparent 42%),
+    radial-gradient(circle at 100% 22%, var(--peche) 0%, transparent 38%),
+    radial-gradient(circle at 18% 82%, var(--acc-halo-2) 0%, transparent 42%);
+}
+
+/* Cartes en verre dépoli. */
+.card {
+  background: var(--verre); border: 1px solid var(--verre-bord); border-radius: 20px;
+  box-shadow: var(--ombre-carte);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+}
+.card h3 { font-weight: 700; font-size: 16.5px; letter-spacing: -0.1px; }
+.page-head h1 { font-weight: 800; font-size: 28px; letter-spacing: -0.4px; }
+.machine-editor-card, .modele-repliable { background: var(--fond-doux); border-color: var(--trait-clair); }
+
+/* Boutons : dégradé de l'accent pour l'action principale. */
+.btn-primary {
+  background: linear-gradient(135deg, var(--acc-1), var(--acc-2)); border-radius: 12px;
+  box-shadow: 0 6px 16px var(--acc-ombre);
+}
+.btn-primary:hover { background: linear-gradient(135deg, var(--acc-1), var(--acc-2)); filter: brightness(1.06); }
+.btn-primary:disabled { background: var(--trait-fonce); box-shadow: none; filter: none; }
+.btn-ghost { border-radius: 12px; background: var(--verre); border-color: var(--trait); }
+input, select, textarea { border-radius: 10px; }
+
+/* Navigation : barre latérale et barre du haut en verre. */
+.sidebar { background: var(--nav); border-right: 1px solid var(--verre-bord); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+.brand { border-bottom-color: var(--trait-clair); }
+.navbtn { color: var(--nav-encre); border-radius: 12px; }
+.navbtn:hover { background: var(--nav-survol); color: var(--nav-encre-clair); }
+.navbtn.active { background: linear-gradient(135deg, var(--acc-1), var(--acc-2)); color: #FFFFFF; box-shadow: 0 6px 16px var(--acc-ombre); }
+.brand-name { letter-spacing: 1px; font-size: 18px; }
+.theme-option { border-radius: 12px; }
+@media (max-width: 780px) {
+  .mobile-topbar { background: var(--nav); border-bottom: 1px solid var(--trait-clair); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); color: var(--encre); }
+  .mobile-menu-btn { color: var(--encre); }
+  .sidebar { background: var(--verre-fort); }
+}
+
+/* Bouton micro flottant. */
+.micro-flottant-btn { background: linear-gradient(135deg, var(--acc-1), var(--acc-2) 60%, #F08A4B); box-shadow: 0 12px 26px var(--acc-ombre); }
+.micro-flottant-btn:hover { background: linear-gradient(135deg, var(--acc-1), var(--acc-2) 60%, #F08A4B); filter: brightness(1.06); }
+
+/* Pastilles de couleur (Paramètres → Apparence). */
+.accent-choix { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.accent-option { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px 8px 8px; border-radius: 999px; border: 1px solid var(--trait); background: var(--verre); color: var(--encre-2); font: inherit; font-size: 14px; cursor: pointer; min-height: 44px; }
+.accent-option.actif { border-color: var(--encre); color: var(--encre); font-weight: 700; }
+.accent-pastille { width: 26px; height: 26px; border-radius: 50%; }
+.accent-violet .accent-pastille { background: linear-gradient(135deg, #2F62DB, #8B5CF6); }
+.accent-bleu .accent-pastille { background: linear-gradient(135deg, #1A47C8, #1FA8E4); }
+.accent-vert .accent-pastille { background: linear-gradient(135deg, #2457C5, #10A07A); }
+
+/* --- Tableau de bord Signature --- */
+.sig-dashboard { display: flex; flex-direction: column; gap: 16px; max-width: 760px; }
+.sig-dashboard > .card { margin-bottom: 0; }
+.sig-entete { display: flex; align-items: center; gap: 12px; }
+.sig-avatar { width: 48px; height: 48px; border-radius: 50%; padding: 2px; background: linear-gradient(135deg, #3B86C4, var(--acc-2), #E8873A); flex-shrink: 0; }
+.sig-avatar span { width: 100%; height: 100%; border-radius: 50%; background: var(--carte); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; color: var(--acc-texte); }
+.sig-date { font-size: 13px; color: var(--encre-3); }
+.sig-salut { margin: 0; font-weight: 800; font-size: 22px; letter-spacing: -0.3px; }
+.sig-semaine { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.sig-jour { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 0 7px; border: none; border-radius: 14px; background: transparent; color: var(--encre); font: inherit; cursor: pointer; min-height: 44px; }
+.sig-jour-nom { font-size: 11px; color: var(--encre-3); text-transform: capitalize; }
+.sig-jour-num { font-weight: 700; font-size: 15px; }
+.sig-jour-point { width: 5px; height: 5px; border-radius: 50%; margin-top: 2px; }
+.sig-jour-point.plein { background: var(--acc-2); }
+.sig-jour.vacances .sig-jour-num { color: var(--vacances-2); }
+.sig-jour.actif { background: linear-gradient(160deg, var(--acc-1), var(--acc-2)); color: #FFFFFF; box-shadow: 0 8px 18px var(--acc-ombre); }
+.sig-jour.actif .sig-jour-nom { color: rgba(255,255,255,0.88); }
+.sig-jour.actif .sig-jour-point.plein { background: #FFFFFF; }
+.sig-hero { position: relative; overflow: hidden; border-radius: 26px; padding: 18px; color: #FFFFFF;
+  background: radial-gradient(circle at 100% 0%, rgba(255,170,110,0.70) 0%, rgba(255,170,110,0) 45%), linear-gradient(135deg, var(--acc-1) 0%, var(--acc-mi) 55%, var(--acc-2) 100%);
+  box-shadow: 0 18px 36px var(--acc-ombre); }
+.sig-hero-cercle { position: absolute; border-radius: 50%; border: 1px solid rgba(255,255,255,0.16); pointer-events: none; }
+.sig-hero-cercle.grand { right: -40px; bottom: -60px; width: 180px; height: 180px; }
+.sig-hero-cercle.petit { right: -10px; bottom: -30px; width: 120px; height: 120px; }
+.sig-hero-haut { display: flex; justify-content: space-between; align-items: center; gap: 10px; position: relative; }
+.sig-hero-titre { font-size: 13px; font-weight: 600; opacity: 0.92; }
+.sig-meteo { background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.25); border-radius: 999px; padding: 5px 11px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.sig-hero-nombre { position: relative; font-weight: 800; font-size: 28px; letter-spacing: -0.5px; margin-top: 6px; }
+.sig-prochaine { position: relative; margin-top: 14px; background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.22); border-radius: 18px; padding: 10px 10px 10px 14px; display: flex; align-items: center; gap: 12px; }
+.sig-prochaine-texte { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; text-align: left; background: none; border: none; padding: 2px 0; color: inherit; font: inherit; cursor: pointer; }
+.sig-prochaine-quand { font-size: 12px; opacity: 0.88; }
+.sig-prochaine-titre { font-weight: 700; font-size: 15px; }
+.sig-prochaine-client { font-size: 12.5px; opacity: 0.88; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sig-itineraire { width: 46px; height: 46px; border-radius: 14px; background: #FFFFFF; color: var(--acc-1); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.sig-raccourcis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.sig-raccourci { display: flex; flex-direction: column; align-items: center; gap: 6px; background: none; border: none; padding: 0; color: var(--encre); font: inherit; cursor: pointer; }
+.sig-raccourci-icone { width: 58px; height: 58px; border-radius: 18px; background: var(--verre); border: 1px solid var(--verre-bord); box-shadow: var(--ombre-carte); display: flex; align-items: center; justify-content: center; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.sig-raccourci-icone.ton-acc { color: var(--acc-texte); }
+.sig-raccourci-icone.ton-acc2 { color: var(--acc-icone-2); }
+.sig-raccourci-icone.ton-orange { color: var(--orange); }
+.sig-raccourci-label { font-size: 12.5px; font-weight: 600; }
+.sig-compteurs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+@media (min-width: 900px) { .sig-compteurs { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.sig-compteur { display: flex; align-items: center; gap: 10px; text-align: left; background: var(--verre); border: 1px solid var(--verre-bord); border-radius: 20px; padding: 12px 14px; box-shadow: var(--ombre-carte); color: var(--encre-2); font: inherit; cursor: pointer; min-height: 64px; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.sig-compteur-valeur { font-weight: 800; font-size: 26px; line-height: 1; -webkit-background-clip: text; background-clip: text; color: transparent; }
+.sig-compteur-valeur.ton-acc { background-image: linear-gradient(135deg, var(--acc-chiffre-1), var(--acc-chiffre-2)); }
+.sig-compteur-valeur.ton-orange { background-image: linear-gradient(135deg, var(--orange-1), var(--orange-2)); }
+.sig-compteur-label { font-size: 12.5px; line-height: 1.25; }
+.sig-carte-tete { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+.sig-carte-tete h3 { margin: 0; }
+.sig-lien { background: none; border: none; color: var(--acc-texte); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 6px 0; }
+.sig-frise { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.sig-frise-item { position: relative; display: flex; align-items: flex-start; gap: 12px; padding: 0 0 14px 22px; }
+.sig-frise-item:last-child { padding-bottom: 0; }
+.sig-frise-item::before { content: ""; position: absolute; left: 4px; top: 16px; bottom: -2px; width: 2px; background: var(--trait); }
+.sig-frise-item:last-child::before { display: none; }
+.sig-frise-point { position: absolute; left: 0; top: 5px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--trait-fonce); background: var(--carte); }
+.sig-frise-item.actif .sig-frise-point { border: none; background: linear-gradient(135deg, var(--acc-1), var(--acc-2)); }
+.sig-frise-texte { flex: 1; min-width: 0; display: flex; flex-direction: column; text-align: left; background: none; border: none; padding: 0; color: var(--encre); font: inherit; cursor: pointer; }
+.sig-frise-heure { font-size: 12px; font-weight: 600; color: var(--encre-3); }
+.sig-frise-item.actif .sig-frise-heure { color: var(--acc-texte); }
+.sig-frise-titre { font-weight: 600; font-size: 15px; }
+.sig-frise-client { font-size: 12.5px; color: var(--encre-3); }
+.monthly-recap-item { background: var(--acc-doux); border-radius: 14px; }
+.monthly-recap-value { font-weight: 800; font-size: 26px; color: var(--acc-texte); }
+.logout-link:hover { color: var(--nav-encre-clair); }
+/* L'écran d'accueil garde sa typographie d'origine. */
+.bienvenue-salut, .bienvenue-mark { font-family: 'Barlow Condensed', sans-serif; }
+
 `;
