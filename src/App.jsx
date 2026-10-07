@@ -849,7 +849,52 @@ function ReglagesAccueil({ onRevoir }) {
         <input type="checkbox" checked={voix} disabled={!actif} onChange={(e) => { setVoix(e.target.checked); ecrireLocal(CLE_ACCUEIL_VOIX, String(e.target.checked)); }} />
         Mini-point à voix haute le matin (première ouverture de la journée)
       </label>
+      <ChoixVoix />
       <button type="button" className="btn-ghost small" onClick={onRevoir}>Revoir l'accueil</button>
+    </div>
+  );
+}
+
+// Choix de la voix de lecture (accueil et assistant), propre à cet appareil.
+function ChoixVoix() {
+  const [liste, setListe] = useState(() => (syntheseVocaleDisponible() ? voixFrancaises() : []));
+  const [choisie, setChoisie] = useState(() => lireLocal(CLE_VOIX_CHOISIE) || "");
+  useEffect(() => {
+    if (!syntheseVocaleDisponible()) return undefined;
+    const recharger = () => setListe(voixFrancaises());
+    recharger();
+    window.speechSynthesis.addEventListener?.("voiceschanged", recharger);
+    const t = setTimeout(recharger, 800);
+    return () => { clearTimeout(t); window.speechSynthesis.removeEventListener?.("voiceschanged", recharger); };
+  }, []);
+  if (!syntheseVocaleDisponible()) return null;
+  const qualite = (v) => VOIX_DE_QUALITE.test(v.name) || VOIX_DE_QUALITE.test(v.voiceURI || "");
+  const triee = [...liste].sort((a, b) => Number(qualite(b)) - Number(qualite(a)) || a.name.localeCompare(b.name));
+  const ecouter = () => {
+    syntheseVocaleDebloquee = true;
+    const prenom = lireLocal(CLE_ACCUEIL_PRENOM) || "";
+    lireAVoixHaute(`Bonjour${prenom ? " " + prenom : ""}. Tu as trois interventions aujourd'hui, la première à 8h30. Les prévisions météo indiquent une journée ensoleillée.`);
+  };
+  return (
+    <div className="choix-voix">
+      <label>Voix de lecture (accueil et assistant)
+        <select
+          value={choisie}
+          onChange={(e) => { setChoisie(e.target.value); ecrireLocal(CLE_VOIX_CHOISIE, e.target.value); }}
+        >
+          <option value="">Automatique (la plus naturelle installée)</option>
+          {triee.map((v) => (
+            <option key={v.voiceURI || v.name} value={v.voiceURI || v.name}>
+              {v.name}{qualite(v) ? " ★" : ""}{v.lang !== "fr-FR" ? ` (${v.lang})` : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button type="button" className="btn-ghost small" onClick={ecouter}>Écouter</button>
+      <span className="hint">
+        Les voix ★ sont les plus naturelles. Pour en avoir plus sur l'iPhone : Réglages → Accessibilité → Contenu énoncé →
+        Voix → Français, puis télécharge une voix « Améliorée » ou « Premium » (par exemple Audrey ou Thomas). Rouvre ensuite l'appli.
+      </span>
     </div>
   );
 }
@@ -1831,9 +1876,27 @@ function textepourVoix(texte) {
     .replace(/\n+/g, ". ");
 }
 
+// Voix choisie dans Paramètres → Apparence (par appareil). Sans choix, on
+// prend de préférence une voix « améliorée » ou « premium » de l'iPhone,
+// bien plus naturelle que les voix de base.
+const CLE_VOIX_CHOISIE = "techni-pac-voix";
+const VOIX_DE_QUALITE = /premium|enhanced|améliorée|amélioré|neural|natural|siri/i;
+
+function voixFrancaises() {
+  return (window.speechSynthesis?.getVoices() || []).filter((v) => (v.lang || "").toLowerCase().startsWith("fr"));
+}
+
 function choisirVoixFrancaise() {
-  const voix = (window.speechSynthesis?.getVoices() || []).filter((v) => (v.lang || "").toLowerCase().startsWith("fr"));
+  const voix = voixFrancaises();
   if (voix.length === 0) return null;
+  let choisie = "";
+  try { choisie = localStorage.getItem(CLE_VOIX_CHOISIE) || ""; } catch (_e) { /* ignoré */ }
+  if (choisie) {
+    const v = voix.find((x) => x.voiceURI === choisie || x.name === choisie);
+    if (v) return v;
+  }
+  const deQualite = voix.filter((x) => VOIX_DE_QUALITE.test(x.name) || VOIX_DE_QUALITE.test(x.voiceURI || ""));
+  if (deQualite.length > 0) return deQualite.find((x) => x.lang === "fr-FR") || deQualite[0];
   const preferees = ["Amélie", "Audrey", "Thomas", "Google français", "Denise", "Henri", "Marie"];
   for (const nom of preferees) {
     const v = voix.find((x) => x.name.includes(nom));
@@ -8521,6 +8584,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 @keyframes b-onde { 0%, 100% { height: 5px; } 50% { height: 18px; } }
 .reglages-accueil { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--trait-clair); }
 .reglages-accueil .btn-ghost.small { align-self: flex-start; margin-top: 2px; }
+.choix-voix { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.choix-voix select { width: 100%; max-width: 420px; }
 .app-loading { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--fond); }
 .app-loading-box { display: flex; flex-direction: column; align-items: center; gap: 14px; color: var(--encre-3); font-family: 'Inter', sans-serif; font-size: 14px; }
 .app-loading-box .brand-mark { width: 48px; height: 48px; font-size: 18px; }
