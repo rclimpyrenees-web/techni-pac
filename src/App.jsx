@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { useSyncedCollection, useSyncedSettings } from "./useSyncedCollection.js";
 import { supabase } from "./supabaseClient.js";
 import { BLANK_CONTRACT_PDF_BASE64, BLANK_CONTRACT_AIR_EAU_PDF_BASE64, BLANK_CONTRACT_B2B_PDF_BASE64, BLANK_CONTRACT_AIR_EAU_B2B_PDF_BASE64 } from "./contractTemplate.js";
@@ -1479,6 +1480,10 @@ function AppContenu() {
   return (
     <>
     {accueilEl}
+    {/* Fond dégradé et micro posés directement sur la page (hors du contenu
+        qui défile) : sur iPhone, ils restent ainsi bien fixes pendant le
+        défilement, au lieu de glisser avec les cartes. */}
+    {createPortal(<div className="fond-degrade" aria-hidden="true" />, document.body)}
     <div className="app">
       <style>{css}</style>
 
@@ -2475,7 +2480,7 @@ function BoutonMicroFlottant({ onTexte, onOuvrir }) {
     return () => clearTimeout(t);
   }, [info]);
 
-  return (
+  return createPortal(
     <div className="micro-flottant">
       {(ecoute || info) && (
         <div className="micro-flottant-bulle">
@@ -2491,7 +2496,8 @@ function BoutonMicroFlottant({ onTexte, onOuvrir }) {
       >
         <Icon name="mic" size={26} />
       </button>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -9541,7 +9547,7 @@ textarea { resize: vertical; }
 .vocal-erreur svg { flex-shrink: 0; margin-top: 2px; }
 .vocal-reponse-ecrite { margin-top: 16px; max-width: 520px; background: var(--carte); border: 1px solid var(--trait); border-radius: 12px; padding: 12px 14px; font-size: 14.5px; line-height: 1.5; text-align: left; white-space: pre-wrap; }
 @media (prefers-reduced-motion: reduce) { .vocal-onde { animation: none !important; } }
-.micro-flottant { position: fixed; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 55; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; pointer-events: none; }
+.micro-flottant { position: fixed; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 55; -webkit-transform: translateZ(0); transform: translateZ(0); font-family: var(--police); display: flex; flex-direction: column; align-items: flex-end; gap: 10px; pointer-events: none; }
 .micro-flottant-btn { pointer-events: auto; width: 60px; height: 60px; border-radius: 50%; border: none; background: var(--bleu); color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 6px 18px rgba(27, 39, 51, 0.28); }
 .micro-flottant-btn:hover { background: var(--bleu-fonce); }
 .micro-flottant-btn.en-ecoute { background: var(--rouge); animation: assistantPulse 1.4s infinite; }
@@ -9761,9 +9767,13 @@ textarea { resize: vertical; }
 }
 
 /* Fond : halos de couleur fixes derrière le contenu. */
-.app { position: relative; isolation: isolate; background: var(--fond); font-family: var(--police); }
-.app::before {
-  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+html { background: var(--fond); }
+body { background: transparent; }
+@media print { .fond-degrade, .micro-flottant { display: none !important; } }
+.app { background: transparent; font-family: var(--police); }
+.fond-degrade {
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  -webkit-transform: translateZ(0); transform: translateZ(0);
   background:
     radial-gradient(circle at 0% 0%, var(--acc-halo-1) 0%, transparent 42%),
     radial-gradient(circle at 100% 22%, var(--peche) 0%, transparent 38%),
