@@ -1049,6 +1049,23 @@ function AppContenu() {
       upsertDevisAFaire(action.item);
       return true;
     }
+    // Suppression demandée à l'assistant, validée par l'utilisateur.
+    if (action.type === "suppression" && action.item?.id) {
+      const suppressions = {
+        planning: [planningRaw, removePlanning],
+        devis_a_faire: [devisAFaire, removeDevisAFaire],
+        devis_en_cours: [devisEnCours, removeDevisEnCours],
+        facturation: [facturation, removeFacturation],
+        clients: [clients, removeClient],
+        reports: [reportsRaw, removeReport],
+        fournisseurs: [fournisseurs, removeFournisseur],
+      };
+      const [liste, supprimer] = suppressions[action.item.table] || [];
+      if (!supprimer) return false;
+      if (!liste.some((x) => String(x.id) === String(action.item.id))) throw new Error("cet élément n'existe plus (déjà supprimé ?)");
+      supprimer(action.item.id);
+      return true;
+    }
     // E-mail, rangement d'une pièce jointe dans OneDrive, règle de
     // classement : exécutés côté serveur, là où se trouvent les accès.
     if (["email", "classer_pj", "regle", "dossier", "pennylane_fournisseur", "debrief_valider"].includes(action.type) && action.item) {
@@ -2086,6 +2103,44 @@ const REPONSE_ENVOI = /^(oui,? )?(envoie|envoies|envoyer|envoie-le|envoie-la|env
 const estUnOui = (t) => REPONSE_OUI.test(t) || REPONSE_ENVOI.test(t);
 const REPONSE_NON = /^(non|annule|annuler|laisse tomber|stop|pas maintenant)\b/i;
 
+// Réponse à une proposition en attente, quelle que soit la tournure :
+// « oui », « oui vas-y tu peux le faire », « oui, c'est un dépannage »,
+// « non, mets plutôt jeudi ». sens = oui / non / null ; reste = la suite de
+// la phrase une fois retirés les mots de confirmation.
+const DEBUT_OUI = /^(oui|ouais|ouai|ok|okay|d'accord|daccord|je valide|valide|valider|validé|vas-y|vas y|go|confirme|confirmer|confirmé|c'est bon|c'est parfait|parfait|exact|exactement|c'est ça|yes|tu peux y aller|tu peux le faire|tu peux valider|tu peux enregistrer|enregistre|enregistre-le|nickel|impeccable|carrément|bien sûr|absolument|top|super)(?![\p{L}'-])/u;
+const DEBUT_NON = /^(non|annule|annuler|laisse tomber|pas maintenant|surtout pas|attends|attend)(?![\p{L}'-])/u;
+const REMPLISSAGE = /^(oui|ouais|ouai|ok|okay|d'accord|daccord|vas-y|vas y|go|c'est bon|c'est parfait|parfait|nickel|impeccable|merci|merci beaucoup|s'il te plaît|s'il te plait|stp|je valide|valide|validé|valider|confirme|confirmé|tu peux y aller|tu peux le faire|tu peux valider|tu peux l'enregistrer|tu peux enregistrer|tu peux l'envoyer|tu peux envoyer|envoie-le|envoie-la|envoie|enregistre-le|enregistre|c'est ça|exact|exactement|bien sûr|carrément|absolument|super|top|génial|non|annule|annuler|laisse tomber|et|alors|donc|du coup|les deux|tout)(?![\p{L}'-])[\s,.!;:?-]*/u;
+
+function analyserConfirmation(texte) {
+  const t = String(texte || "").toLowerCase().replace(/[’‘]/g, "'").replace(/^[\s,.!;:?-]+/, "").trim();
+  const sansPonctuation = t.replace(/[.!?,]+$/, "");
+  if (estUnOui(sansPonctuation) && t.split(/\s+/).length <= 4) return { sens: "oui", reste: "" };
+  const sens = DEBUT_OUI.test(t) ? "oui" : DEBUT_NON.test(t) ? "non" : REPONSE_NON.test(sansPonctuation) ? "non" : null;
+  if (!sens) return { sens: null, reste: t };
+  let reste = t;
+  for (let i = 0; i < 12; i++) {
+    const m = reste.match(REMPLISSAGE);
+    if (!m || m[0].length === 0) break;
+    reste = reste.slice(m[0].length).replace(/^[\s,.!;:?-]+/, "");
+  }
+  reste = reste.replace(/[.!?,\s]+$/, "").trim();
+  return { sens, reste: reste.split(/\s+/).filter(Boolean).length >= 2 ? reste : "" };
+}
+
+// Deux propositions de planning pour le même créneau : la nouvelle remplace
+// l'ancienne (l'assistant a corrigé sa proposition, pas ajouté une tâche).
+function memeCreneau(a, b) {
+  if (a.type !== "planning" || b.type !== "planning") return false;
+  const x = a.item || {}, y = b.item || {};
+  if (!x.date || x.date !== y.date) return false;
+  return (x.heure || "") === (y.heure || "") || (!!x.client && x.client === y.client);
+}
+
+// « Oui, et ajoute aussi… » : la suite est une demande en plus (on valide
+// d'abord). « Oui, c'est un dépannage » : c'est une correction (l'assistant
+// refait sa proposition, qu'il faudra valider).
+const SUITE_EN_PLUS = /^(et|ajoute|rajoute|aussi|puis|ensuite|après|apres|crée|cree|mets aussi|envoie|appelle|programme|note)(?![\p{L}'-])/u;
+
 /* ---------- Voix naturelle Google (fonction Supabase « voix ») ----------
    Le texte part à la fonction « voix », qui renvoie un MP3 lu par une voix
    Google Chirp 3 HD. Un seul lecteur audio sert à tout : l'iPhone l'autorise
@@ -2763,7 +2818,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     try {
       return !!(await onAppliquerAction(action));
     } catch (e) {
-      const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : action.type === "dossier" ? "Le dossier n'a pas pu être créé" : action.type === "pennylane_fournisseur" ? "La facture n'a pas pu être envoyée dans Pennylane" : "Enregistrement impossible";
+      const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : action.type === "dossier" ? "Le dossier n'a pas pu être créé" : action.type === "pennylane_fournisseur" ? "La facture n'a pas pu être envoyée dans Pennylane" : action.type === "suppression" ? "Suppression impossible" : "Enregistrement impossible";
       ajouterMessage("assistant", `${quoi} : ${e?.message || e}`, { erreur: true });
       return false;
     }
@@ -2777,6 +2832,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     setActionsEnCours(false);
     setActions((liste) => liste.filter((a) => a.id !== action.id));
     if (ok && action.type === "email") ajouterMessage("assistant", "E-mail envoyé.");
+    if (ok && action.type === "suppression") ajouterMessage("assistant", "Supprimé.");
     if (ok && action.type === "classer_pj") ajouterMessage("assistant", "Fichier rangé dans OneDrive.");
     if (ok && action.type === "regle") ajouterMessage("assistant", "Règle de classement ajoutée.");
     if (ok && action.type === "pennylane_fournisseur") ajouterMessage("assistant", "Facture envoyée dans Pennylane.");
@@ -2789,7 +2845,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     setActions((liste) => liste.filter((a) => a.id !== action.id));
   };
 
-  const validerTout = async () => {
+  const validerTout = async ({ silencieux = false } = {}) => {
     const aFaire = actions;
     setActionsEnCours(true);
     let nb = 0;
@@ -2801,16 +2857,18 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       ? "Je n'ai rien pu enregistrer."
       : nb < aFaire.length
         ? `C'est fait pour ${nb} sur ${aFaire.length}. Le détail du problème est affiché.`
-        : avecEmail && aFaire.length === 1 ? "C'est envoyé." : nb > 1 ? `C'est fait, ${nb} éléments traités.` : "C'est enregistré.";
+        : avecEmail && aFaire.length === 1 ? "C'est envoyé." : nb > 1 ? `C'est fait, ${nb} éléments traités.` : aFaire.every((a) => a.type === "suppression") ? "C'est supprimé." : "C'est enregistré.";
     ajouterMessage("assistant", texte);
-    parler(texte);
+    if (!silencieux) parler(texte);
+    return texte;
   };
 
-  const annulerTout = () => {
+  const annulerTout = ({ silencieux = false } = {}) => {
     setActions([]);
     const texte = "D'accord, j'annule.";
     ajouterMessage("assistant", texte);
-    parler(texte);
+    if (!silencieux) parler(texte);
+    return texte;
   };
 
   const signalerErreur = (message) => {
@@ -2826,24 +2884,45 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     setSaisie("");
     setDerniereQuestion(texte);
 
-    // Réponse courte à une proposition en attente : traitée sur place, sans
-    // repasser par l'assistant.
-    if (actions.length > 0 && texte.split(/\s+/).length <= 4) {
-      // La dictée de l'iPhone écrit souvent « d’accord » avec une apostrophe courbe.
-      const reponse = texte.replace(/[’‘]/g, "'").replace(/[.!,]+$/, "");
-      if (estUnOui(reponse)) { ajouterMessage("user", texte); validerTout(); return; }
-      if (REPONSE_NON.test(reponse)) { ajouterMessage("user", texte); annulerTout(); return; }
+    // Réponse à une proposition en attente (« oui », « oui vas-y tu peux le
+    // faire », « non, mets plutôt jeudi ») : traitée sur place. La suite
+    // éventuelle de la phrase part ensuite à l'assistant comme nouvelle demande.
+    let prefixe = "";
+    let historique = [...messages.filter((m) => !m.erreur), { role: "user", content: texte }];
+    let avantReponse = () => ajouterMessage("user", texte);
+    if (actions.length > 0) {
+      const { sens, reste } = analyserConfirmation(texte);
+      if (sens === "oui" && (!reste || SUITE_EN_PLUS.test(reste))) {
+        ajouterMessage("user", texte);
+        if (!reste) { validerTout(); return; }
+        setChargement(true);
+        prefixe = await validerTout({ silencieux: true });
+        historique = [...historique.slice(0, -1), { role: "user", content: "Oui." }, { role: "assistant", content: prefixe }, { role: "user", content: reste }];
+        avantReponse = () => {};
+      } else if (sens === "non") {
+        ajouterMessage("user", texte);
+        if (!reste) { annulerTout(); return; }
+        // « Non, mets plutôt jeudi » : l'assistant refait sa proposition.
+        prefixe = annulerTout({ silencieux: true });
+        avantReponse = () => {};
+      }
     }
 
     if (typeof navigator !== "undefined" && navigator.onLine === false) {
-      ajouterMessage("user", texte);
+      avantReponse();
       signalerErreur("Pas de connexion internet pour le moment : l'assistant a besoin du réseau pour répondre.");
       return;
     }
 
-    const historique = [...messages.filter((m) => !m.erreur), { role: "user", content: texte }]
-      .map((m) => ({ role: m.role, content: m.content }));
-    ajouterMessage("user", texte);
+    historique = historique.map((m) => ({ role: m.role, content: m.content }));
+    // Propositions toujours affichées : l'assistant doit le savoir pour les
+    // corriger plutôt que d'en ajouter une seconde.
+    const encoreEnAttente = actions.length > 0 && !prefixe;
+    if (encoreEnAttente) {
+      const derniere = historique[historique.length - 1];
+      derniere.content = `${derniere.content}\n\n(Note de l'application : propositions encore affichées en attente de validation : ${actions.map((a) => a.resume).join(" ; ")}. Si l'utilisateur les corrige, refais la proposition corrigée — elle remplacera l'ancienne. Tu ne peux pas les valider toi-même : il valide en disant « oui » ou avec le bouton.)`;
+    }
+    avantReponse();
     setChargement(true);
     try {
       const { reply, actions: recues } = await appelerAssistant(historique);
@@ -2852,16 +2931,16 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       const appel = (Array.isArray(recues) ? recues : []).find((a) => a.type === "appel" && a.item?.numero);
       const nouvelles = (Array.isArray(recues) ? recues : []).filter((a) => a.type !== "appel");
       ajouterMessage("assistant", reply, appel ? { appel: appel.item } : {});
-      if (nouvelles.length > 0) setActions((liste) => [...liste, ...nouvelles]);
+      if (nouvelles.length > 0) setActions((liste) => [...liste.filter((a) => !nouvelles.some((n) => memeCreneau(a, n))), ...nouvelles]);
       setChargement(false);
       if (appel) {
         // La conversation à la voix s'arrête : on passe au téléphone.
         changerConversation(false);
         const composer = () => { try { window.location.href = "tel:" + appel.item.numero; } catch (_e) { /* le bouton reste là */ } };
-        if (voixActive && syntheseDispo) { setParle(true); setTimeout(() => lireAVoixHaute(reply, () => { setParle(false); composer(); }), 250); }
+        if (voixActive && syntheseDispo) { setParle(true); setTimeout(() => lireAVoixHaute(prefixe ? `${prefixe} ${reply}` : reply, () => { setParle(false); composer(); }), 250); }
         else composer();
       } else {
-        parler(reply);
+        parler(prefixe ? `${prefixe} ${reply}` : reply);
       }
     } catch (e) {
       setChargement(false);
@@ -2992,8 +3071,8 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
           </div>
           <div className="assistant-action-boutons">
             <button className="btn-ghost small" onClick={() => annulerAction(a)} disabled={actionsEnCours}>Annuler</button>
-            <button className="btn-small btn-valide" onClick={() => validerAction(a)} disabled={actionsEnCours}>
-              <Icon name={a.type === "email" ? "send" : "check"} size={13} /> {a.type === "email" ? (actionsEnCours ? "Envoi…" : "Envoyer") : "Valider"}
+            <button className={"btn-small " + (a.type === "suppression" ? "btn-supprime" : "btn-valide")} onClick={() => validerAction(a)} disabled={actionsEnCours}>
+              <Icon name={a.type === "email" ? "send" : a.type === "suppression" ? "trash" : "check"} size={13} /> {a.type === "email" ? (actionsEnCours ? "Envoi…" : "Envoyer") : a.type === "suppression" ? "Supprimer" : "Valider"}
             </button>
           </div>
         </div>
@@ -9499,6 +9578,7 @@ textarea { resize: vertical; }
 @keyframes assistantPoint { 0%, 80%, 100% { opacity: 0.3; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
 .assistant-actions { margin-bottom: 0; border-color: var(--vert); background: var(--vert-clair); padding: 14px 16px; }
 .assistant-actions-titre { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vert-fonce); margin-bottom: 6px; }
+.btn-small.btn-supprime { background: var(--rouge); color: #fff; border: none; }
 .assistant-action { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--trait-clair); }
 .assistant-action:first-of-type { border-top: none; }
 .assistant-action-texte { font-size: 14px; color: var(--encre); }
