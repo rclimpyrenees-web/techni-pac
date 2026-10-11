@@ -109,6 +109,7 @@ const Icon = ({ name, size = 18 }) => {
     quote: "M6 3h12v18l-3-2-3 2-3-2-3 2V3z",
     invoice: "M4 3h16v18l-4-2-4 2-4-2-4 2V3z",
     plus: "M12 5v14M5 12h14",
+    copier: "M9 9h11v11H9V9zM5 15H4V4h11v1",
     bell: "M6 8a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6",
     check: "M5 13l4 4L19 7",
     photo: "M4 5h4l2-2h4l2 2h4v14H4V5zm8 4a3 3 0 100 6 3 3 0 000-6z",
@@ -4594,6 +4595,23 @@ function TemplateTableEditor({ template, onChange, onRemove }) {
 }
 
 /* ---------- Rapports ---------- */
+const normaliserRecherche = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+// Tout le texte d'un rapport dans lequel on peut chercher, sans accents.
+function texteRechercheRapport(r, clients) {
+  const fiche = clients.find((c) => c.nom === r.client);
+  const unitesTexte = (u) => normalizeUnits(u).flatMap((x) => [x.marque, x.modele, x.serie]);
+  const machines = (r.machines || []).flatMap((m) => [m.type, m.date, ...unitesTexte(m.exterieur), ...unitesTexte(m.interieur)]);
+  const sansBalises = (t) => String(t || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ");
+  return normaliserRecherche([
+    r.client, fiche?.raisonSociale, fiche?.adresse, fiche?.tel,
+    r.date, labelType(r.type), r.installation, r.adresseSite,
+    sansBalises(r.intro), sansBalises(r.description), sansBalises(r.descriptionLibre),
+    sansBalises(r.conclusion), sansBalises(r.remarques), r.pieces, r.montant,
+    ...machines,
+  ].filter(Boolean).join(" "));
+}
+
 function Rapports({ reports, clients, settings, showForm, setShowForm, reportType, setReportType, onAdd, onUpdate, onValidate, onDelete, onPrint, focusReport, reportPrefill, onPrefillConsomme }) {
   const [filter, setFilter] = useState("tous");
   const [editingReport, setEditingReport] = useState(null);
@@ -4604,7 +4622,18 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
   const formRef = useRef(null);
   // Un seul rapport déplié à la fois : en ouvrir un referme le précédent.
   const [openReportId, setOpenReportId] = useState(null);
-  const filtered = filter === "tous" ? reports : reports.filter((r) => r.type === filter);
+  // Recherche : tous les mots tapés doivent se retrouver dans le rapport
+  // (client, date, adresse, matériel, description, conclusion, pièces…),
+  // sans tenir compte des accents ni des majuscules.
+  const [recherche, setRecherche] = useState("");
+  const motsRecherche = normaliserRecherche(recherche).trim().split(/\s+/).filter(Boolean);
+  const parType = filter === "tous" ? reports : reports.filter((r) => r.type === filter);
+  const filtered = motsRecherche.length
+    ? parType.filter((r) => {
+        const texte = texteRechercheRapport(r, clients);
+        return motsRecherche.every((m) => texte.includes(m));
+      })
+    : parType;
 
   const openNew = () => {
     setEditingReport(null);
@@ -4675,6 +4704,23 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
         ))}
       </div>
 
+      <div className="recherche-client recherche-rapports">
+        <input
+          type="search"
+          value={recherche}
+          onChange={(e) => setRecherche(e.target.value)}
+          placeholder="Rechercher : client, ville, date, marque, n° de série, panne…"
+        />
+        {recherche && (
+          <button type="button" className="icon-btn" onClick={() => setRecherche("")} title="Effacer la recherche">
+            <Icon name="close" size={15} />
+          </button>
+        )}
+      </div>
+      {motsRecherche.length > 0 && (
+        <p className="hint">{filtered.length} rapport{filtered.length > 1 ? "s" : ""} sur {parType.length}</p>
+      )}
+
       <div className="report-list">
         {groupByMonthAndDay(filtered, "date").map((mg) => (
           <div key={mg.key} className="report-month-group">
@@ -4704,7 +4750,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
             ))}
           </div>
         ))}
-        {filtered.length === 0 && <p className="empty">Aucun rapport pour ce filtre.</p>}
+        {filtered.length === 0 && <p className="empty">{motsRecherche.length ? "Aucun rapport ne correspond à cette recherche." : "Aucun rapport pour ce filtre."}</p>}
       </div>
 
       {showForm && (
@@ -7342,16 +7388,20 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
     };
   }, []);
   const [editingTask, setEditingTask] = useState(null);
+  // Duplication : le formulaire s'ouvre rempli avec la tâche d'origine, mais
+  // enregistre une nouvelle tâche (l'originale ne bouge pas).
+  const [copieTache, setCopieTache] = useState(null);
 
-  const openNewTaskForm = () => { setEditingTask(null); setShowForm(!showForm || !!editingTask); };
-  const openEditTaskForm = (task) => { setEditingTask(task); setShowForm(true); };
-  const closeTaskForm = () => { setShowForm(false); setEditingTask(null); };
+  const openNewTaskForm = () => { setEditingTask(null); setCopieTache(null); setShowForm(!showForm || !!editingTask || !!copieTache); };
+  const openEditTaskForm = (task) => { setCopieTache(null); setEditingTask(task); setShowForm(true); };
+  const openDuplicateTaskForm = (task) => { setEditingTask(null); setCopieTache(task); setShowForm(true); };
+  const closeTaskForm = () => { setShowForm(false); setEditingTask(null); setCopieTache(null); };
   const formulaireRef = useRef(null);
   // Le formulaire s'ouvre en haut de la page : sur téléphone, on y descend
   // pour qu'il ne reste pas hors de vue.
   useEffect(() => {
-    if (showForm && editingTask) formulaireRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [showForm, editingTask]);
+    if (showForm && (editingTask || copieTache)) formulaireRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [showForm, editingTask, copieTache]);
 
   return (
     <div>
@@ -7368,10 +7418,11 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
       {showForm && (
         <div ref={formulaireRef} className="ancre-formulaire">
         <TaskForm
-          key={editingTask?.id || "nouvelle"}
+          key={editingTask?.id || (copieTache ? "copie-" + copieTache.id : "nouvelle")}
           clients={clients}
           initialDate={selectedDate}
           editingTask={editingTask}
+          copieDe={copieTache}
           joursVacances={joursVacances}
           autoriserVacances
           onCancel={closeTaskForm}
@@ -7443,6 +7494,9 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
                   <span className="groupe-modifier" onClick={(e) => e.stopPropagation()}>
                     <button type="button" className="btn-action modifier" onClick={() => openEditTaskForm(p)}>
                       <Icon name="edit" size={15} /> Modifier
+                    </button>
+                    <button type="button" className="btn-ghost small btn-dupliquer" onClick={() => openDuplicateTaskForm(p)} aria-label="Dupliquer" title="Dupliquer">
+                      <Icon name="copier" size={15} />
                     </button>
                     <DeleteButton onConfirm={() => onDelete(p.id)} label="" />
                   </span>
@@ -7579,23 +7633,25 @@ function MiniCalendar({ dateCounts, dateHeures, joursVacances, selectedDate, onS
   );
 }
 
-function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggle, submitLabel, initialDate, editingTask, joursVacances, autoriserVacances }) {
-  const [titre, setTitre] = useState(editingTask?.titre || "");
-  const [client, setClient] = useState(editingTask?.client || "");
-  const [date, setDate] = useState(editingTask?.date || initialDate || toLocalISODate(new Date()));
-  const [heure, setHeure] = useState(editingTask?.heure && editingTask.heure !== "—" ? editingTask.heure : "08:30");
-  const [duree, setDuree] = useState(editingTask?.duree || "1h");
-  const [rappel, setRappel] = useState(editingTask ? !!editingTask.rappel : true);
+function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggle, submitLabel, initialDate, editingTask, copieDe, joursVacances, autoriserVacances }) {
+  // Modèle des champs : la tâche modifiée, ou celle qu'on duplique.
+  const source = editingTask || copieDe || null;
+  const [titre, setTitre] = useState(source?.titre || "");
+  const [client, setClient] = useState(source?.client || "");
+  const [date, setDate] = useState(source?.date || initialDate || toLocalISODate(new Date()));
+  const [heure, setHeure] = useState(source?.heure && source.heure !== "—" ? source.heure : "08:30");
+  const [duree, setDuree] = useState(source?.duree || "1h");
+  const [rappel, setRappel] = useState(source ? !!source.rappel : true);
   // Adresse saisie à la main, utilisée uniquement pour les clients qui ne sont
   // pas encore dans le fichier (prospects) : pour les autres, on affiche
   // directement celle de leur fiche.
-  const [adresse, setAdresse] = useState(editingTask?.adresse || "");
+  const [adresse, setAdresse] = useState(source?.adresse || "");
   // Téléphone saisi à la main, pour un client qui n'est pas encore au fichier.
-  const [tel, setTel] = useState(editingTask?.tel || "");
-  const [notes, setNotes] = useState(editingTask?.notes || "");
+  const [tel, setTel] = useState(source?.tel || "");
+  const [notes, setNotes] = useState(source?.notes || "");
   const [erreurTitre, setErreurTitre] = useState(false);
   // Plusieurs jours : date de fin facultative (vide = un seul jour).
-  const [dateFin, setDateFin] = useState(editingTask?.dateFin || "");
+  const [dateFin, setDateFin] = useState(source?.dateFin || "");
   const [vacances, setVacances] = useState(estVacances(editingTask));
   const [forcer, setForcer] = useState(false);
   const plusieursJoursPossible = !forceCategorie;
@@ -7638,7 +7694,7 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
       notes,
       rappel: hideRappelToggle ? true : rappel,
       fait: editingTask?.fait || false,
-      categorie: estVacances(editingTask) ? "intervention" : (editingTask?.categorie || forceCategorie || "intervention"),
+      categorie: estVacances(source) ? "intervention" : (source?.categorie || forceCategorie || "intervention"),
     });
   };
 
@@ -7678,7 +7734,10 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
 
   return (
     <div className="card form-card">
-      {autoriserVacances && (
+      {copieDe && (
+        <div className="bandeau-copie"><Icon name="copier" size={15} /> Copie de « {copieDe.titre} »{copieDe.client ? ` — ${copieDe.client}` : ""} : change la date ou l'heure, puis ajoute-la au planning.</div>
+      )}
+      {autoriserVacances && !copieDe && (
         <label className="check-inline case-vacances"><input type="checkbox" checked={false} onChange={() => { setVacances(true); if (!editingTask) setTitre("Vacances"); }} /> 🌴 Vacances</label>
       )}
       <div className="form-grid">
@@ -7779,7 +7838,7 @@ function TaskForm({ clients, onCancel, onSubmit, forceCategorie, hideRappelToggl
       <div className="form-actions">
         <button className="btn-ghost" onClick={onCancel}>Annuler</button>
         <button className="btn-primary" onClick={submit} disabled={dateFinInvalide}>
-          {conflitVacances.length > 0 ? (forcer ? "Confirmer quand même" : "Enregistrer malgré les vacances") : (submitLabel || (editingTask ? "Enregistrer les modifications" : "Ajouter au planning"))}
+          {conflitVacances.length > 0 ? (forcer ? "Confirmer quand même" : "Enregistrer malgré les vacances") : (submitLabel || (editingTask ? "Enregistrer les modifications" : copieDe ? "Ajouter la copie" : "Ajouter au planning"))}
         </button>
       </div>
     </div>
@@ -9239,6 +9298,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .recherche-client { position: relative; display: flex; align-items: center; margin-bottom: 10px; }
 .recherche-client input { width: 100%; padding-right: 36px; }
 .recherche-client .icon-btn { position: absolute; right: 4px; color: var(--encre-3); }
+.recherche-rapports { margin: 4px 0 8px; }
+.recherche-rapports input::-webkit-search-cancel-button { display: none; }
 .client-detail-actions { display: flex; gap: 8px; }
 .fiche-bandeau { gap: 12px; }
 .fiche-bandeau-nom { font-family: var(--police-titre); font-size: 18px; font-weight: 600; color: var(--encre); }
@@ -9501,6 +9562,9 @@ textarea { resize: vertical; }
 .btn-action.modifier { min-height: 34px; padding: 5px 12px; font-size: 13.5px; border-color: var(--violet); color: var(--violet); flex-shrink: 0; }
 .btn-action.modifier:hover { background: var(--violet-clair); }
 .groupe-modifier { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.btn-dupliquer { min-height: 34px; padding: 5px 10px; color: var(--acc-texte, var(--bleu)); }
+.bandeau-copie svg { flex-shrink: 0; }
+.bandeau-copie { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 9px 12px; border-radius: 10px; background: var(--acc-doux, var(--fond-doux)); color: var(--encre-2); font-size: 13.5px; line-height: 1.4; }
 .micro-flottant-astuce { margin-top: 4px; font-size: 11.5px; opacity: 0.7; }
 .incidents { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .incidents li { border: 1px solid var(--trait); border-radius: 8px; padding: 8px 10px; word-break: break-word; }
