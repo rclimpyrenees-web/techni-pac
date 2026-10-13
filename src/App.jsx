@@ -529,7 +529,19 @@ async function positionDomicile(adresse, ville) {
 }
 
 // Position actuelle de l'iPhone (une position de moins de 30 min suffit).
+// Position de l'iPhone pour la météo de l'après-midi. Sur iPhone, une appli
+// web redemande souvent l'autorisation : on ne la demande donc que si
+// l'option est cochée (Paramètres → Apparence), et on garde la dernière
+// position 3 heures pour ne pas la redemander à chaque ouverture.
+const CLE_METEO_POSITION = "techni-pac-meteo-position";
+const CLE_METEO_POSITION_DERNIERE = "techni-pac-meteo-position-derniere";
+const meteoPositionActive = () => lireLocal(CLE_METEO_POSITION) === "true";
 async function positionIphone() {
+  if (!meteoPositionActive()) return null;
+  try {
+    const garde = JSON.parse(lireLocal(CLE_METEO_POSITION_DERNIERE) || "null");
+    if (garde && Date.now() - garde.t < 3 * 3600 * 1000) return { lat: garde.lat, lon: garde.lon };
+  } catch (_e) { /* ignoré */ }
   try {
     if (navigator.permissions?.query) {
       const etat = await avecDelai(navigator.permissions.query({ name: "geolocation" }), 800);
@@ -539,9 +551,11 @@ async function positionIphone() {
   if (!navigator.geolocation) return null;
   try {
     const pos = await new Promise((ok, ko) =>
-      navigator.geolocation.getCurrentPosition(ok, ko, { enableHighAccuracy: false, timeout: 3500, maximumAge: 30 * 60 * 1000 })
+      navigator.geolocation.getCurrentPosition(ok, ko, { enableHighAccuracy: false, timeout: 3500, maximumAge: 3 * 3600 * 1000 })
     );
-    return { lat: +pos.coords.latitude.toFixed(3), lon: +pos.coords.longitude.toFixed(3) };
+    const p = { lat: +pos.coords.latitude.toFixed(3), lon: +pos.coords.longitude.toFixed(3) };
+    ecrireLocal(CLE_METEO_POSITION_DERNIERE, JSON.stringify({ ...p, t: Date.now() }));
+    return p;
   } catch (_e) {
     return null; // refus ou délai dépassé
   }
@@ -877,6 +891,7 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
 function ReglagesAccueil({ onRevoir }) {
   const [actif, setActif] = useState(accueilActif);
   const [voix, setVoix] = useState(voixAccueilActive);
+  const [position, setPosition] = useState(meteoPositionActive);
   return (
     <div className="reglages-accueil">
       <label className="check-inline">
@@ -886,6 +901,10 @@ function ReglagesAccueil({ onRevoir }) {
       <label className="check-inline">
         <input type="checkbox" checked={voix} disabled={!actif} onChange={(e) => { setVoix(e.target.checked); ecrireLocal(CLE_ACCUEIL_VOIX, String(e.target.checked)); }} />
         Mini-point à voix haute le matin (première ouverture de la journée)
+      </label>
+      <label className="check-inline">
+        <input type="checkbox" checked={position} disabled={!actif} onChange={(e) => { setPosition(e.target.checked); ecrireLocal(CLE_METEO_POSITION, String(e.target.checked)); }} />
+        Météo de là où je suis l'après-midi (sinon celle du domicile ; l'iPhone demande la position)
       </label>
       <ChoixVoix />
       <button type="button" className="btn-ghost small" onClick={onRevoir}>Revoir l'accueil</button>
@@ -1293,7 +1312,10 @@ function AppContenu() {
   // Passer d'un onglet à l'autre referme les formulaires de saisie : sans cela,
   // un formulaire laissé ouvert réapparaissait tel quel au retour sur l'onglet,
   // donnant l'impression d'un rapport vide en haut de la liste.
-  const allerAOnglet = (id) => {
+  // Jour demandé au planning (clic sur un jour de la semaine du tableau de bord).
+  const [planningDateDemandee, setPlanningDateDemandee] = useState(null);
+  const allerAOnglet = (id, options = {}) => {
+    if (id === "planning") setPlanningDateDemandee(options.date ? { date: options.date, token: Date.now() } : null);
     setShowReportForm(false);
     setShowClientForm(false);
     setShowTaskForm(false);
@@ -1626,6 +1648,7 @@ function AppContenu() {
             onToggleRappel={toggleRappel}
             onCreateReport={startReportFromTask}
             onDelete={removePlanning}
+            dateDemandee={planningDateDemandee}
           />
         )}
 
@@ -1823,7 +1846,7 @@ function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, r
             type="button"
             role="listitem"
             className={"sig-jour" + (j.aujourdhui ? " actif" : "") + (j.vacances ? " vacances" : "")}
-            onClick={() => onNavigate("planning")}
+            onClick={() => onNavigate("planning", { date: j.iso })}
             aria-label={`${j.nom} ${j.num}${j.charge ? ", interventions prévues" : ""}`}
           >
             <span className="sig-jour-nom">{j.nom}</span>
@@ -2001,6 +2024,17 @@ async function invoquerFonction(nom, body) {
 
 const numeroLisibleApp = (n) => (/^0\d{9}$/.test(String(n)) ? String(n).replace(/(\d{2})(?=\d)/g, "$1 ") : String(n || ""));
 
+// Réveil des fonctions Supabase dès qu'on commence à parler : quand elles
+// dorment, le premier appel perd une à deux secondes à démarrer. Pendant que
+// l'utilisateur dicte, on les réveille (au plus une fois par minute).
+let dernierReveil = 0;
+function reveillerAssistant() {
+  if (Date.now() - dernierReveil < 60000) return;
+  dernierReveil = Date.now();
+  invoquerFonction("assistant", { ping: true }).catch(() => {});
+  if (voixGoogleChoisie() && !voixGoogleIndisponible) invoquerFonction("voix", { ping: true }).catch(() => {});
+}
+
 async function appelerAssistant(messages) {
   const { data, error } = await invoquerFonction("assistant", { messages });
   if (error) {
@@ -2115,8 +2149,7 @@ const REMPLISSAGE = /^(oui|ouais|ouai|ok|okay|d'accord|daccord|vas-y|vas y|go|c'
 function analyserConfirmation(texte) {
   const t = String(texte || "").toLowerCase().replace(/[’‘]/g, "'").replace(/^[\s,.!;:?-]+/, "").trim();
   const sansPonctuation = t.replace(/[.!?,]+$/, "");
-  if (estUnOui(sansPonctuation) && t.split(/\s+/).length <= 4) return { sens: "oui", reste: "" };
-  const sens = DEBUT_OUI.test(t) ? "oui" : DEBUT_NON.test(t) ? "non" : REPONSE_NON.test(sansPonctuation) ? "non" : null;
+  const sens = DEBUT_OUI.test(t) || estUnOui(sansPonctuation) ? "oui" : DEBUT_NON.test(t) ? "non" : REPONSE_NON.test(sansPonctuation) ? "non" : null;
   if (!sens) return { sens: null, reste: t };
   let reste = t;
   for (let i = 0; i < 12; i++) {
@@ -2124,17 +2157,21 @@ function analyserConfirmation(texte) {
     if (!m || m[0].length === 0) break;
     reste = reste.slice(m[0].length).replace(/^[\s,.!;:?-]+/, "");
   }
-  reste = reste.replace(/[.!?,\s]+$/, "").trim();
-  return { sens, reste: reste.split(/\s+/).filter(Boolean).length >= 2 ? reste : "" };
+  // « oui mais à 15h », « ok attends » : il reste des mots, donc ce n'est
+  // jamais un oui simple (correction ou nouvelle demande).
+  return { sens, reste: reste.replace(/[.!?,\s]+$/, "").trim() };
 }
 
 // Deux propositions de planning pour le même créneau : la nouvelle remplace
 // l'ancienne (l'assistant a corrigé sa proposition, pas ajouté une tâche).
 function memeCreneau(a, b) {
+  // L'assistant indique lui-même la proposition qu'il corrige.
+  if (b.remplace && b.remplace === a.id) return true;
   if (a.type !== "planning" || b.type !== "planning") return false;
   const x = a.item || {}, y = b.item || {};
-  if (!x.date || x.date !== y.date) return false;
-  return (x.heure || "") === (y.heure || "") || (!!x.client && x.client === y.client);
+  const heureReelle = (h) => /^\d{2}:\d{2}$/.test(String(h || ""));
+  // Sinon, seulement un doublon évident : même client, même jour, même heure.
+  return !!x.date && x.date === y.date && !!x.client && x.client === y.client && heureReelle(x.heure) && x.heure === y.heure;
 }
 
 // « Oui, et ajoute aussi… » : la suite est une demande en plus (on valide
@@ -2229,24 +2266,42 @@ async function syntheseGoogle(texte, voix) {
 }
 
 // Joue un MP3 (base64). onRefus : l'iPhone a bloqué le son (pas d'appui).
+let numeroSon = 0;
 function jouerAudio(b64, { onDemarre, onFin, onRefus } = {}) {
   const el = lecteur();
   if (!el) { onRefus?.(); return; }
+  const monSon = ++numeroSon;
   let fini = false;
-  const finir = () => { if (fini) return; fini = true; onFin?.(); };
+  let filet = null;
+  const finir = () => {
+    if (fini) return;
+    fini = true;
+    clearTimeout(filet);
+    if (monSon === numeroSon) { el.onended = null; el.onerror = null; el.onloadedmetadata = null; }
+    onFin?.();
+  };
   el.onended = finir;
   el.onerror = finir;
+  // Filet de sécurité : si l'iPhone ne signale pas la fin (son interrompu,
+  // écran verrouillé), la conversation ne reste pas bloquée.
+  const armerFilet = (secondes) => { clearTimeout(filet); filet = setTimeout(finir, Math.max(4, secondes + 3) * 1000); };
+  el.onloadedmetadata = () => { if (Number.isFinite(el.duration)) armerFilet(el.duration); };
+  armerFilet(b64.length / 4000); // ~ durée d'un MP3 Google, en attendant la vraie
   el.src = "data:audio/mpeg;base64," + b64;
   try {
     const p = el.play();
     if (p && p.then) {
       p.then(() => { lecteurAudioDebloque = true; onDemarre?.(); })
         .catch((e) => {
-          el.onended = null; el.onerror = null;
-          if (e?.name === "NotAllowedError") onRefus?.(); else finir();
+          clearTimeout(filet);
+          // Ne pas toucher au lecteur s'il sert déjà à un autre son.
+          if (monSon === numeroSon) { el.onended = null; el.onerror = null; el.onloadedmetadata = null; }
+          if (fini) return;
+          fini = true;
+          if (e?.name === "NotAllowedError") onRefus?.(); else onFin?.();
         });
     } else onDemarre?.();
-  } catch (_e) { onRefus?.(); }
+  } catch (_e) { clearTimeout(filet); onRefus?.(); }
 }
 
 /* ---------- Lecture à voix haute ----------
@@ -2314,6 +2369,13 @@ function decouperPourLecture(texte) {
 // elle a été interrompue). Certains navigateurs oublient de signaler la fin
 // d'une lecture : une minuterie de secours, calée sur la longueur du texte,
 // prend alors le relais.
+// Coupe le texte après sa première phrase (si elle n'est pas trop courte et
+// qu'il reste assez de texte derrière pour que ça vaille le coup).
+function premierePhrase(texte) {
+  const m = texte.match(/^(.{25,220}?[.!?])\s+(.{40,})$/s);
+  return m ? [m[1], m[2]] : [texte, ""];
+}
+
 function lireAVoixHaute(texte, onFin) {
   const voixG = voixGoogleChoisie();
   const propre = textepourVoix(texte || "").trim();
@@ -2324,8 +2386,25 @@ function lireAVoixHaute(texte, onFin) {
     const terminer = () => { if (termine || numero !== numeroLecture) return; termine = true; if (onFin) onFin(); };
     // En cas d'échec (réseau, clé), la voix de l'iPhone prend le relais.
     const secours = () => { if (numero === numeroLecture) lireAVoixHauteIphone(texte, onFin); };
-    syntheseGoogle(propre, voixG)
-      .then((b64) => { if (numero === numeroLecture) jouerAudio(b64, { onFin: terminer, onRefus: secours }); })
+    // La première phrase est fabriquée à part : elle se fait plus vite et
+    // commence à être lue pendant que le reste se prépare.
+    const [debut, suite] = premierePhrase(propre);
+    const sonSuite = suite ? syntheseGoogle(suite, voixG) : null;
+    sonSuite?.catch(() => {});
+    syntheseGoogle(debut, voixG)
+      .then((b64) => {
+        if (numero !== numeroLecture) return;
+        jouerAudio(b64, {
+          onRefus: secours,
+          onFin: () => {
+            if (numero !== numeroLecture) return;
+            if (!sonSuite) { terminer(); return; }
+            sonSuite
+              .then((b) => { if (numero === numeroLecture) jouerAudio(b, { onFin: terminer, onRefus: terminer }); })
+              .catch(() => { if (numero === numeroLecture) lireAVoixHauteIphone(suite, onFin); });
+          },
+        });
+      })
       .catch(secours);
     return;
   }
@@ -2405,7 +2484,10 @@ function ongletDepuisAdresse() {
    parte à moitié. Un appui sur le bouton envoie tout de suite.
    Si le navigateur coupe l'écoute de lui-même pendant une pause (Safari le
    fait), on la relance et on ajoute la suite au texte déjà dicté. */
-const SILENCE_FIN_MS = 5000;
+// 2 secondes de silence suffisent pour finir une phrase (5 s auparavant :
+// la demande partait 3 secondes trop tard). Un appui sur le micro envoie
+// tout de suite.
+const SILENCE_FIN_MS = 2000;
 
 // Assemble les morceaux dictés. Selon le navigateur, chaque résultat contient
 // soit un nouveau morceau, soit toute la phrase depuis le début (Safari en
@@ -2509,6 +2591,7 @@ function BoutonMicroFlottant({ onTexte, onOuvrir }) {
     setTranscription("");
     texteRef.current = "";
     try {
+      reveillerAssistant();
       recRef.current = ecoutePatiente(Reconnaissance, {
         onDebut: () => setEcoute(true),
         onPartiel: (texte) => { texteRef.current = texte; setTranscription(texte); },
@@ -2788,8 +2871,10 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     }
     setParle(true);
     // Le micro vient parfois de se libérer : sur iPhone, parler tout de suite
-    // après l'écoute peut rester muet.
-    setTimeout(() => lireAVoixHaute(texte, reprendre), 250);
+    // après l'écoute peut rester muet. Si l'utilisateur a repris la parole
+    // entre-temps (arreterLecture), la réponse n'est pas lue par-dessus.
+    const numero = numeroLecture;
+    setTimeout(() => { if (numero === numeroLecture) lireAVoixHaute(texte, reprendre); else setParle(false); }, 250);
   };
 
   const basculerVoix = () => {
@@ -2911,6 +2996,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
 
     if (typeof navigator !== "undefined" && navigator.onLine === false) {
       avantReponse();
+      setChargement(false);
       signalerErreur("Pas de connexion internet pour le moment : l'assistant a besoin du réseau pour répondre.");
       return;
     }
@@ -2921,7 +3007,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     const encoreEnAttente = actions.length > 0 && !prefixe;
     if (encoreEnAttente) {
       const derniere = historique[historique.length - 1];
-      derniere.content = `${derniere.content}\n\n(Note de l'application : propositions encore affichées en attente de validation : ${actions.map((a) => a.resume).join(" ; ")}. Si l'utilisateur les corrige, refais la proposition corrigée — elle remplacera l'ancienne. Tu ne peux pas les valider toi-même : il valide en disant « oui » ou avec le bouton.)`;
+      derniere.content = `${derniere.content}\n\n(Note de l'application : propositions encore affichées en attente de validation : ${actions.map((a) => `[id ${a.id}] ${a.resume}`).join(" ; ")}. Si l'utilisateur en corrige une, refais la proposition corrigée en indiquant son id dans « remplace » : elle remplacera l'ancienne. Tu ne peux pas les valider toi-même : il valide en disant « oui » ou avec le bouton.)`;
     }
     avantReponse();
     setChargement(true);
@@ -2988,6 +3074,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     transcriptionRef.current = "";
     let refusee = false;
     try {
+      reveillerAssistant();
       reconnaissanceRef.current = ecoutePatiente(Reconnaissance, {
         onDebut: () => { ecouteRef.current = true; setEcoute(true); },
         onPartiel: (texte) => {
@@ -7348,7 +7435,7 @@ function dateCourte(iso) {
   return new Date(iso + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
 }
 
-function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, onToggleRappel, onCreateReport, onDelete }) {
+function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, onToggleRappel, onCreateReport, onDelete, dateDemandee }) {
   const interventions = planning.filter((p) => p.categorie !== "relance" && !estVacances(p));
   const grouped = {};
   interventions.forEach((p) => joursDeTache(p).forEach((jour) => (grouped[jour] = grouped[jour] || []).push(p)));
@@ -7367,8 +7454,17 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
   // ancienne date programmée). Si l'application reste ouverte au passage de
   // minuit, ou revient au premier plan un autre jour, la sélection bascule
   // automatiquement sur le nouveau jour.
-  const [selectedDate, setSelectedDate] = useState(() => toLocalISODate(new Date()));
+  const [selectedDate, setSelectedDate] = useState(() => dateDemandee?.date || toLocalISODate(new Date()));
   const jourAffiche = useRef(toLocalISODate(new Date()));
+  // Ouvert depuis un jour précis (tableau de bord) : ce jour est affiché, et
+  // on descend jusqu'à son détail.
+  const detailJourRef = useRef(null);
+  useEffect(() => {
+    if (!dateDemandee?.date) return undefined;
+    setSelectedDate(dateDemandee.date);
+    const t = setTimeout(() => detailJourRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+    return () => clearTimeout(t);
+  }, [dateDemandee?.token]);
 
   useEffect(() => {
     const verifierJour = () => {
@@ -7434,7 +7530,7 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
       <MiniCalendar dateCounts={dateCounts} dateHeures={dateHeures} joursVacances={joursVacances} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
 
       {selectedDate && (
-        <section className="card planning-day">
+        <section className="card planning-day" ref={detailJourRef} style={{ scrollMarginTop: 70 }}>
           <h3>{new Date(selectedDate).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</h3>
           {vacancesDuJour(selectedDate).map((v) => (
             <div key={v.id} className="bandeau-vacances">
