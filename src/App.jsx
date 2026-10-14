@@ -1047,6 +1047,7 @@ function AppContenu() {
   const { items: fournisseurs, upsert: upsertFournisseur, remove: removeFournisseur, error: erreurFournisseurs } = useSyncedCollection("fournisseurs", initialFournisseurs);
   // Rangement automatique des rapports validés et des contrats dans OneDrive.
   const oneDrive = useRangementOneDrive({ reports: reportsRaw, clients, settings, upsertReport, upsertClient });
+  useRangementPhotos({ reports: reportsRaw, clients, upsertReport, upsertClient });
 
   const dataLoading = loadingClients || loadingReports || loadingPlanning || loadingDevisAFaire || loadingDevisEnCours || loadingFacturation || loadingSettings;
 
@@ -1135,7 +1136,7 @@ function AppContenu() {
       return (async () => {
         const r = reportsRaw.find((x) => String(x.id) === String(action.item.rapport.id));
         if (!r) throw new Error("rapport introuvable (supprimé ?)");
-        const contenu = await genererPdfBase64(buildReportHtml(r, settings, clients));
+        const contenu = await genererPdfBase64(await htmlRapportAvecPhotos(r, settings, clients));
         await appelerAssistantExecution({
           ...action,
           item: { ...action.item, pieces_jointes_contenu: [{ nom: action.item.rapport.nom || "Rapport.pdf", contenu }] },
@@ -1360,8 +1361,8 @@ function AppContenu() {
     removeReport(r.id);
   };
 
-  const handlePrint = (r) => {
-    setPdfPreviewHtml(buildReportHtml(r, settings, clients));
+  const handlePrint = async (r) => {
+    setPdfPreviewHtml(await htmlRapportAvecPhotos(r, settings, clients));
   };
 
   // Passer d'un onglet à l'autre referme les formulaires de saisie : sans cela,
@@ -4196,7 +4197,7 @@ function useRangementOneDrive({ reports, clients, settings, upsertReport, upsert
           ecrireStockage(CLE_PDF_EN_COURS, { id: r.id, client: r.client, debut: Date.now() });
           let contenu;
           try {
-            contenu = await genererPdfBase64(buildReportHtml(r, settings, clients));
+            contenu = await genererPdfBase64(await htmlRapportAvecPhotos(r, settings, clients));
           } finally {
             ecrireStockage(CLE_PDF_EN_COURS, null);
           }
@@ -5104,7 +5105,7 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
           </div>
 
           {viewTab === "pdf" ? (
-            <iframe className="report-pdf-preview" srcDoc={buildReportHtml(r, settings, clients)} title="Aperçu PDF du rapport" />
+            <ApercuPdfRapport r={r} settings={settings} clients={clients} />
           ) : (
             <>
               {r.type === "mise_en_service" && (
@@ -5189,7 +5190,7 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
           )}
           {r.photos && r.photos.length > 0 && (
             <div className="photo-strip">
-              {r.photos.map((src, i) => <img key={i} src={src} alt="photo intervention" />)}
+              {r.photos.map((src, i) => <ImageStockee key={i} src={src} alt="photo intervention" />)}
             </div>
           )}
           {(r.signatureTech || r.signatureClient) && (
@@ -5824,6 +5825,236 @@ function preparerImage(fichier, maxCote = 1600, qualite = 0.72) {
     };
     lecteur.readAsDataURL(fichier);
   });
+}
+
+/* ---------- Photos rangées à part (Supabase Storage) ----------
+   Les photos des rapports (et des matériels) étaient enregistrées à
+   l'intérieur des rapports : chaque modification d'un rapport faisait
+   retélécharger toutes ses photos par chaque appareil (l'essentiel du trafic
+   Supabase). Elles sont désormais rangées dans l'espace « photos » de
+   Supabase ; le rapport ne garde qu'une référence « stockage:… ». Chaque
+   appareil télécharge une photo une seule fois et la garde (IndexedDB).
+   Une photo n'est retirée d'un rapport qu'une fois sa copie bien enregistrée. */
+const PREFIXE_STOCKAGE = "stockage:";
+const SEAU_PHOTOS = "photos";
+const TAILLE_MIN_PHOTO = 30000; // en dessous (signatures…), on laisse dans le rapport
+
+const estPhotoStockee = (s) => typeof s === "string" && s.startsWith(PREFIXE_STOCKAGE);
+const estPhotoEnLigne = (s) => typeof s === "string" && s.startsWith("data:image/") && s.length > TAILLE_MIN_PHOTO;
+
+// Empreinte d'une photo : la même sur tous les appareils, donc le même
+// fichier (pas de doublon si deux appareils la rangent en même temps).
+function empreintePhoto(s) {
+  let h1 = 2166136261, h2 = 5381;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 16777619);
+    h2 = (Math.imul(h2, 33) ^ c) | 0;
+  }
+  return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36) + s.length.toString(36);
+}
+
+// Petite base locale des photos déjà téléchargées.
+let basePhotos = null;
+function ouvrirBasePhotos() {
+  if (!basePhotos) {
+    basePhotos = new Promise((ok) => {
+      // Base locale bloquée ou indisponible : on s'en passe (téléchargement direct).
+      const delai = setTimeout(() => ok(null), 2000);
+      const fin = (db) => { clearTimeout(delai); ok(db); };
+      try {
+        const req = indexedDB.open("techni-pac-photos", 1);
+        req.onupgradeneeded = () => req.result.createObjectStore("photos");
+        req.onsuccess = () => fin(req.result);
+        req.onerror = () => fin(null);
+      } catch (_e) { fin(null); }
+    });
+  }
+  return basePhotos;
+}
+async function lirePhotoLocale(chemin) {
+  const db = await ouvrirBasePhotos();
+  if (!db) return null;
+  return new Promise((ok) => {
+    try {
+      const req = db.transaction("photos").objectStore("photos").get(chemin);
+      req.onsuccess = () => ok(req.result || null);
+      req.onerror = () => ok(null);
+    } catch (_e) { ok(null); }
+  });
+}
+async function ecrirePhotoLocale(chemin, blob) {
+  const db = await ouvrirBasePhotos();
+  if (!db) return;
+  try { db.transaction("photos", "readwrite").objectStore("photos").put(blob, chemin); } catch (_e) { /* ignoré */ }
+}
+
+function dataUrlEnBlob(dataUrl) {
+  const [entete, donnees] = dataUrl.split(",");
+  const type = (entete.match(/^data:([^;]+)/) || [])[1] || "image/jpeg";
+  const binaire = atob(donnees);
+  const octets = new Uint8Array(binaire.length);
+  for (let i = 0; i < binaire.length; i++) octets[i] = binaire.charCodeAt(i);
+  return new Blob([octets], { type });
+}
+function blobEnDataUrl(blob) {
+  return new Promise((ok, ko) => {
+    const lecteurFichier = new FileReader();
+    lecteurFichier.onload = () => ok(lecteurFichier.result);
+    lecteurFichier.onerror = () => ko(new Error("photo illisible"));
+    lecteurFichier.readAsDataURL(blob);
+  });
+}
+
+// Blob d'une photo rangée : d'abord sur l'appareil, sinon téléchargée une fois.
+const photosEnCoursDeLecture = new Map();
+function blobPhoto(src) {
+  const chemin = src.slice(PREFIXE_STOCKAGE.length);
+  if (!photosEnCoursDeLecture.has(chemin)) {
+    photosEnCoursDeLecture.set(chemin, (async () => {
+      const locale = await lirePhotoLocale(chemin);
+      if (locale) return locale;
+      const { data, error } = await supabase.storage.from(SEAU_PHOTOS).download(chemin);
+      if (error || !data) throw new Error(error?.message || "photo introuvable");
+      ecrirePhotoLocale(chemin, data);
+      return data;
+    })().catch((e) => { photosEnCoursDeLecture.delete(chemin); throw e; }));
+  }
+  return photosEnCoursDeLecture.get(chemin);
+}
+
+const urlsPhotos = new Map();
+async function urlPhoto(src) {
+  if (!estPhotoStockee(src)) return src;
+  if (urlsPhotos.has(src)) return urlsPhotos.get(src);
+  const url = URL.createObjectURL(await blobPhoto(src));
+  urlsPhotos.set(src, url);
+  return url;
+}
+
+// Image qui accepte indifféremment une photo classique ou rangée à part.
+function ImageStockee({ src, alt, className }) {
+  const [url, setUrl] = useState(() => (estPhotoStockee(src) ? urlsPhotos.get(src) || "" : src));
+  const [erreur, setErreur] = useState(false);
+  useEffect(() => {
+    let actif = true;
+    setErreur(false);
+    if (!estPhotoStockee(src)) { setUrl(src); return undefined; }
+    urlPhoto(src).then((u) => { if (actif) setUrl(u); }).catch(() => { if (actif) setErreur(true); });
+    return () => { actif = false; };
+  }, [src]);
+  if (erreur) return <span className={"photo-indisponible " + (className || "")} title="Photo indisponible (hors ligne ?)"><Icon name="photo" size={18} /></span>;
+  if (!url) return <span className={"photo-chargement " + (className || "")} aria-label="Photo en cours de chargement" />;
+  return <img src={url} alt={alt} className={className} />;
+}
+
+// Copie d'un objet (rapport…) dont les photos rangées sont remises en ligne :
+// pour fabriquer le PDF, qui a besoin des images elles-mêmes.
+async function avecPhotosEnLigne(valeur) {
+  if (estPhotoStockee(valeur)) {
+    try { return await blobEnDataUrl(await blobPhoto(valeur)); } catch (_e) { return ""; }
+  }
+  if (Array.isArray(valeur)) return Promise.all(valeur.map(avecPhotosEnLigne));
+  if (valeur && typeof valeur === "object") {
+    const sortie = {};
+    for (const [cle, v] of Object.entries(valeur)) sortie[cle] = await avecPhotosEnLigne(v);
+    return sortie;
+  }
+  return valeur;
+}
+async function htmlRapportAvecPhotos(r, settings, clients) {
+  return buildReportHtml(await avecPhotosEnLigne(r), settings, clients);
+}
+
+// Photos encore « en ligne » dans un objet.
+function photosEnLigne(valeur, liste = []) {
+  if (estPhotoEnLigne(valeur)) liste.push(valeur);
+  else if (Array.isArray(valeur)) valeur.forEach((v) => photosEnLigne(v, liste));
+  else if (valeur && typeof valeur === "object") Object.values(valeur).forEach((v) => photosEnLigne(v, liste));
+  return liste;
+}
+function remplacerPhotos(valeur, table) {
+  if (estPhotoEnLigne(valeur) && table.has(valeur)) return table.get(valeur);
+  if (Array.isArray(valeur)) return valeur.map((v) => remplacerPhotos(v, table));
+  if (valeur && typeof valeur === "object") {
+    const sortie = {};
+    for (const [cle, v] of Object.entries(valeur)) sortie[cle] = remplacerPhotos(v, table);
+    return sortie;
+  }
+  return valeur;
+}
+
+// Range une photo dans Supabase Storage et renvoie sa référence.
+async function rangerPhoto(dossier, dataUrl) {
+  const blob = dataUrlEnBlob(dataUrl);
+  const ext = blob.type === "image/png" ? "png" : blob.type === "image/heic" ? "heic" : "jpg";
+  const chemin = `${dossier}/${empreintePhoto(dataUrl)}.${ext}`;
+  const { error } = await supabase.storage.from(SEAU_PHOTOS).upload(chemin, blob, { contentType: blob.type, upsert: true });
+  if (error) throw new Error(error.message);
+  ecrirePhotoLocale(chemin, blob);
+  return PREFIXE_STOCKAGE + chemin;
+}
+
+/* Rangement progressif : les rapports et fiches clients qui contiennent
+   encore des photos (anciens, ou tout juste enregistrés) voient leurs photos
+   rangées à part, un élément à la fois, puis l'élément est réenregistré avec
+   les seules références. Si l'espace « photos » n'existe pas encore (script
+   SQL pas lancé) ou sans réseau, on réessaie plus tard, sans rien perdre. */
+function useRangementPhotos({ reports, clients, upsertReport, upsertClient }) {
+  const enCours = useRef(false);
+  const pause = useRef(0);
+  const reportsRef = useRef(reports);
+  const clientsRef = useRef(clients);
+  reportsRef.current = reports;
+  clientsRef.current = clients;
+  const [tic, setTic] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTic((x) => x + 1), 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (enCours.current || Date.now() < pause.current) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    const aRanger = [
+      ...reports.filter((r) => photosEnLigne(r).length).map((r) => ({ table: "rapports", element: r })),
+      ...clients.filter((c) => photosEnLigne(c.machines || []).length).map((c) => ({ table: "clients", element: c })),
+    ];
+    if (!aRanger.length) return;
+    enCours.current = true;
+    (async () => {
+      try {
+        for (const { table, element } of aRanger.slice(0, 5)) {
+          const table2 = new Map();
+          for (const photo of photosEnLigne(table === "clients" ? element.machines : element)) {
+            if (!table2.has(photo)) table2.set(photo, await rangerPhoto(`${table}/${element.id}`, photo));
+          }
+          // Version la plus récente de l'élément (il a pu changer pendant l'envoi).
+          const actuel = (table === "rapports" ? reportsRef.current : clientsRef.current).find((x) => x.id === element.id);
+          if (!actuel) continue;
+          if (table === "rapports") {
+            const nouveau = remplacerPhotos(actuel, table2);
+            // Le PDF déjà rangé dans OneDrive reste le bon : mêmes photos.
+            if (actuel.onedrive?.signature && actuel.onedrive.signature === empreinteRapport(actuel)) {
+              nouveau.onedrive = { ...actuel.onedrive, signature: empreinteRapport(nouveau) };
+            }
+            upsertReport(nouveau);
+          } else {
+            upsertClient({ ...actuel, machines: remplacerPhotos(actuel.machines, table2) });
+          }
+        }
+      } catch (e) {
+        // Espace photos absent, réseau… : nouvel essai dans 10 minutes.
+        console.warn("Rangement des photos :", e?.message || e);
+        pause.current = Date.now() + 10 * 60000;
+      } finally {
+        enCours.current = false;
+        // Il en reste : on enchaîne (sauf en pause après une erreur).
+        if (aRanger.length > 5 && Date.now() >= pause.current) setTimeout(() => setTic((x) => x + 1), 1500);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reports, clients, tic]);
 }
 
 /* ---------- Champ d'adresse avec suggestions ----------
@@ -6632,7 +6863,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
           <div className="photo-strip">
             {photos.map((src, i) => (
               <div key={i} className="photo-vignette">
-                <img src={src} alt={"Photo " + (i + 1)} />
+                <ImageStockee src={src} alt={"Photo " + (i + 1)} />
                 <button type="button" className="icon-btn" onClick={() => retirerPhoto(i)} title="Retirer cette photo">
                   <Icon name="trash" size={13} />
                 </button>
@@ -6709,13 +6940,13 @@ function MachineBlock({ machine }) {
         <div className="machine-photos">
           {extUnits.map((u, idx) => u.photo && (
             <div key={"pe" + idx} className="machine-photo-item">
-              <img src={u.photo} alt="Groupe extérieur" />
+              <ImageStockee src={u.photo} alt="Groupe extérieur" />
               <span>Groupe extérieur{extUnits.length > 1 ? ` ${idx + 1}` : ""}</span>
             </div>
           ))}
           {intUnits.map((u, idx) => u.photo && (
             <div key={"pi" + idx} className="machine-photo-item">
-              <img src={u.photo} alt="Unité intérieure" />
+              <ImageStockee src={u.photo} alt="Unité intérieure" />
               <span>Unité intérieure{intUnits.length > 1 ? ` ${idx + 1}` : ""}</span>
             </div>
           ))}
@@ -7154,7 +7385,7 @@ function SinglePhotoField({ label, value, onChange }) {
       <div className="signature-label">{label}</div>
       {value ? (
         <div className="single-photo-preview">
-          <img src={value} alt={label} />
+          <ImageStockee src={value} alt={label} />
           <button type="button" className="icon-btn" onClick={() => onChange("")}><Icon name="trash" size={14} /></button>
         </div>
       ) : (
@@ -8941,6 +9172,19 @@ function ConfirmationModal({ titre, children, onConfirmer, onAnnuler, libelleCon
   );
 }
 
+// Aperçu PDF dans la fiche du rapport : les photos rangées à part sont
+// d'abord rapatriées (une fois par appareil).
+function ApercuPdfRapport({ r, settings, clients }) {
+  const [html, setHtml] = useState(() => (photosEnLigne(r).length || !JSON.stringify(r).includes(PREFIXE_STOCKAGE) ? buildReportHtml(r, settings, clients) : ""));
+  useEffect(() => {
+    let actif = true;
+    htmlRapportAvecPhotos(r, settings, clients).then((h) => { if (actif) setHtml(h); }).catch(() => {});
+    return () => { actif = false; };
+  }, [r, settings, clients]);
+  if (!html) return <p className="hint">Préparation de l'aperçu…</p>;
+  return <iframe className="report-pdf-preview" srcDoc={html} title="Aperçu PDF du rapport" />;
+}
+
 function PdfPreviewModal({ html, onClose }) {
   const iframeRef = useRef(null);
 
@@ -9669,7 +9913,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .mb-lg { margin-bottom: 30px; }
 
 .photo-strip { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-.photo-strip img { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; border: 1px solid var(--trait); }
+.photo-strip img, .photo-strip .photo-chargement, .photo-strip .photo-indisponible { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; border: 1px solid var(--trait); }
+.photo-chargement { display: inline-block; background: linear-gradient(90deg, var(--fond-doux), var(--trait-clair), var(--fond-doux)); background-size: 200% 100%; animation: photoCharge 1.2s linear infinite; }
+.photo-indisponible { display: inline-flex; align-items: center; justify-content: center; color: var(--encre-3); background: var(--fond-doux); }
+@keyframes photoCharge { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
 .devis-note { display: flex; gap: 10px; background: var(--orange-clair); color: var(--orange-fonce); padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-top: 8px; }
 .devis-note svg { flex-shrink: 0; margin-top: 2px; }
