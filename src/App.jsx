@@ -7993,9 +7993,9 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
                       <Icon name="edit" size={15} /> Modifier
                     </button>
                     <button type="button" className="btn-ghost small btn-dupliquer" onClick={() => openDuplicateTaskForm(p)} aria-label="Dupliquer" title="Dupliquer">
-                      <Icon name="copier" size={15} />
+                      <Icon name="copier" size={15} /> <span className="libelle-bouton">Dupliquer</span>
                     </button>
-                    <DeleteButton onConfirm={() => onDelete(p.id)} label="" />
+                    <DeleteButton onConfirm={() => onDelete(p.id)} label={<span className="libelle-bouton">Supprimer</span>} />
                   </span>
                   <button className={"pill pill-clickable " + (p.rappel ? "pill-warm" : "pill-muted")} onClick={(e) => { e.stopPropagation(); onToggleRappel(p.id); }}>
                     <Icon name="bell" size={13} /> {p.rappel ? "Rappel actif" : "Sans rappel"}
@@ -10588,11 +10588,12 @@ input, select, textarea { border-radius: 10px; }
 .planning-day .tache-notes { font-size: 15.5px; line-height: 1.4; padding: 10px 12px; border-radius: 10px; margin-top: 10px; }
 .planning-day .tache-actions { margin-top: 14px; }
 .planning-day .tache-actions .btn-action { min-height: 48px; padding: 10px 18px; font-size: 16px; border-radius: 12px; }
-/* Boutons en bas de la carte, sur toute la largeur : on voit à quelle intervention ils appartiennent. */
-.planning-day .list > li.row > .groupe-modifier { grid-column: 1 / -1; display: flex; gap: 10px; padding-top: 12px; border-top: 1px solid var(--verre-bord); }
-.planning-day .list > li.row > .groupe-modifier .btn-action.modifier { flex: 1; min-height: 46px; font-size: 16px; justify-content: center; border-radius: 12px; }
-.planning-day .list > li.row > .groupe-modifier .btn-dupliquer,
-.planning-day .list > li.row > .groupe-modifier .btn-danger { min-width: 52px; min-height: 46px; justify-content: center; border-radius: 12px; }
+/* Boutons en bas de la carte : trois boutons de même taille, côte à côte. */
+.planning-day .list > li.row > .groupe-modifier { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 170px)); gap: 10px; padding-top: 12px; border-top: 1px solid var(--verre-bord); }
+.planning-day .list > li.row > .groupe-modifier > button { width: 100%; min-width: 0; margin: 0; box-sizing: border-box; min-height: 46px; padding: 8px 6px; font-size: 15px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 12px; white-space: nowrap; }
+.planning-day .list > li.row > .groupe-modifier .delete-confirm-group { grid-column: 1 / -1; display: flex; gap: 8px; }
+.planning-day .list > li.row > .groupe-modifier .delete-confirm-group button { flex: 1; margin: 0; min-height: 46px; font-size: 15px; border-radius: 12px; }
+@media (max-width: 480px) { .planning-day .list > li.row > .groupe-modifier > button { font-size: 14px; gap: 0; padding: 8px 4px; } .planning-day .list > li.row > .groupe-modifier > button svg { display: none; } }
 .planning-day .list > li.row > .pill { grid-column: 1 / -1; justify-self: start; font-size: 14px; padding: 7px 14px; }
 .planning-day .row.done .row-title { color: var(--encre-3); }
 
