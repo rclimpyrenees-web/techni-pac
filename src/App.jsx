@@ -1088,6 +1088,20 @@ function AppContenu() {
     }
     // E-mail, rangement d'une pièce jointe dans OneDrive, règle de
     // classement : exécutés côté serveur, là où se trouvent les accès.
+    // E-mail avec un rapport d'intervention joint : le PDF est fabriqué ici,
+    // au moment de l'envoi (inutile qu'il soit déjà dans OneDrive).
+    if (action.type === "email" && action.item?.rapport?.id) {
+      return (async () => {
+        const r = reportsRaw.find((x) => String(x.id) === String(action.item.rapport.id));
+        if (!r) throw new Error("rapport introuvable (supprimé ?)");
+        const contenu = await genererPdfBase64(buildReportHtml(r, settings, clients));
+        await appelerAssistantExecution({
+          ...action,
+          item: { ...action.item, pieces_jointes_contenu: [{ nom: action.item.rapport.nom || "Rapport.pdf", contenu }] },
+        });
+        return true;
+      })();
+    }
     if (["email", "classer_pj", "regle", "dossier", "pennylane_fournisseur", "debrief_valider"].includes(action.type) && action.item) {
       return appelerAssistantExecution(action).then(() => true);
     }
