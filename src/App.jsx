@@ -887,6 +887,36 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
   );
 }
 
+// Mémoire de l'assistant (Paramètres) : ce qu'il a retenu, modifiable à la main.
+function MemoireAssistant({ memoire, onChange }) {
+  const [nouvelle, setNouvelle] = useState("");
+  const ajouter = () => {
+    const texte = nouvelle.replace(/\s+/g, " ").trim().slice(0, 300);
+    if (!texte) return;
+    onChange([...memoire, { id: "m" + Date.now().toString(36), texte, le: toLocalISODate(new Date()) }].slice(-40));
+    setNouvelle("");
+  };
+  return (
+    <section className="card memoire-assistant">
+      <h3>Mémoire de l'assistant</h3>
+      <p className="hint">Les consignes que tu lui as données pour la suite (« mets mon numéro dans la signature des mails »…). Il les applique à chaque demande. Tu peux aussi lui dire « oublie… ».</p>
+      {memoire.length === 0 && <p className="empty">Rien pour l'instant.</p>}
+      <ul className="memoire-liste">
+        {memoire.map((m) => (
+          <li key={m.id}>
+            <span className="grow">{m.texte}</span>
+            <button type="button" className="icon-btn" onClick={() => onChange(memoire.filter((x) => x.id !== m.id))} aria-label="Oublier cette consigne" title="Oublier"><Icon name="trash" size={15} /></button>
+          </li>
+        ))}
+      </ul>
+      <div className="memoire-ajout">
+        <input value={nouvelle} onChange={(e) => setNouvelle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") ajouter(); }} placeholder="Ajouter une consigne…" />
+        <button type="button" className="btn-ghost small" onClick={ajouter} disabled={!nouvelle.trim()}>Ajouter</button>
+      </div>
+    </section>
+  );
+}
+
 // Réglages de l'accueil (Paramètres → Apparence), propres à cet appareil.
 function ReglagesAccueil({ onRevoir }) {
   const [actif, setActif] = useState(accueilActif);
@@ -1054,6 +1084,17 @@ function AppContenu() {
   // Enregistre une action proposée par l'assistant, une fois validée par
   // l'utilisateur. On passe par les mêmes fonctions que les formulaires, donc
   // tout se synchronise comme une saisie à la main.
+  // Mémoire de l'assistant : consignes durables (« mets mon numéro dans la
+  // signature »), enregistrées tout de suite dans les Paramètres.
+  const appliquerMemoireAssistant = (actionsMemoire) => {
+    let memoire = Array.isArray(settings.memoireAssistant) ? settings.memoireAssistant : [];
+    for (const a of actionsMemoire) {
+      if (a.item?.ajouter) memoire = [...memoire, a.item.ajouter].slice(-40);
+      if (a.item?.retirer) memoire = memoire.filter((m) => m.id !== a.item.retirer);
+    }
+    saveSettings({ ...settings, memoireAssistant: memoire });
+  };
+
   const appliquerActionAssistant = (action) => {
     if (action.type === "planning" && action.item) {
       upsertPlanning(action.item);
@@ -1606,6 +1647,7 @@ function AppContenu() {
             actions={assistantActions}
             setActions={setAssistantActions}
             onAppliquerAction={appliquerActionAssistant}
+            onMemoire={appliquerMemoireAssistant}
             texteAEnvoyer={assistantTexteAEnvoyer}
             onTexteEnvoye={() => setAssistantTexteAEnvoyer(null)}
           />
@@ -1769,9 +1811,15 @@ function AppContenu() {
 /* ---------- Dashboard ---------- */
 function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, reports, rappelsActifs, onToggle, onNavigate, onOpenReport, settings }) {
   const todayIso = toLocalISODate(new Date());
-  const estIntervention = (p) => !p.fait && p.categorie !== "relance" && !estVacances(p);
-  const next = planning.filter((p) => estIntervention(p) && couvreJour(p, todayIso));
-  const enVacances = planning.some((p) => estVacances(p) && couvreJour(p, todayIso));
+  // Jour affiché dans le bandeau et la carte du dessous (aujourd'hui par défaut).
+  const [jourChoisi, setJourChoisi] = useState(todayIso);
+  const estIntervention = (p) => p.categorie !== "relance" && !estVacances(p);
+  // Toutes les interventions du jour choisi, faites ou non (les faites restent
+  // affichées, cochées).
+  const duJour = planning.filter((p) => estIntervention(p) && couvreJour(p, jourChoisi));
+  const restantes = duJour.filter((p) => !p.fait);
+  const enVacances = planning.some((p) => estVacances(p) && couvreJour(p, jourChoisi));
+  const estAujourdhui = jourChoisi === todayIso;
 
   const now = new Date();
   const moisEnCours = now.getMonth() + 1;
@@ -1794,41 +1842,76 @@ function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, r
   const dateLongue = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
   const salut = now.getHours() >= 18 ? "Bonsoir" : "Bonjour";
 
-  // Semaine en cours, du lundi au dimanche, avec un point les jours chargés.
+  // Bandeau coulissant : 4 semaines avant, la semaine en cours, 12 semaines
+  // après, du lundi au dimanche, avec un point les jours où il y a des
+  // interventions (plein s'il en reste à faire).
+  const SEMAINES_AVANT = 4, SEMAINES_APRES = 12;
   const lundi = new Date(now);
-  lundi.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-  const semaine = Array.from({ length: 7 }, (_, i) => {
+  lundi.setDate(now.getDate() - ((now.getDay() + 6) % 7) - 7 * SEMAINES_AVANT);
+  const semaines = Array.from({ length: SEMAINES_AVANT + 1 + SEMAINES_APRES }, (_, s) => Array.from({ length: 7 }, (_, i) => {
     const d = new Date(lundi);
-    d.setDate(lundi.getDate() + i);
+    d.setDate(lundi.getDate() + s * 7 + i);
     const iso = toLocalISODate(d);
+    const interventions = planning.filter((p) => estIntervention(p) && couvreJour(p, iso));
     return {
       iso,
+      date: d,
       nom: d.toLocaleDateString("fr-FR", { weekday: "short" }).replace(".", ""),
       num: d.getDate(),
-      charge: planning.some((p) => estIntervention(p) && couvreJour(p, iso)),
+      charge: interventions.length > 0,
+      resteAFaire: interventions.some((p) => !p.fait),
       vacances: planning.some((p) => estVacances(p) && couvreJour(p, iso)),
       aujourdhui: iso === todayIso,
     };
-  });
+  }));
+  const bandeauRef = useRef(null);
+  const [semaineVisible, setSemaineVisible] = useState(SEMAINES_AVANT);
+  // Au premier affichage : la semaine en cours.
+  useEffect(() => {
+    const el = bandeauRef.current;
+    if (el) el.scrollLeft = el.clientWidth * SEMAINES_AVANT;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const surDefilement = () => {
+    const el = bandeauRef.current;
+    if (el && el.clientWidth) setSemaineVisible(Math.round(el.scrollLeft / el.clientWidth));
+  };
+  const allerSemaine = (n) => {
+    const el = bandeauRef.current;
+    if (el) el.scrollTo({ left: el.clientWidth * Math.max(0, Math.min(semaines.length - 1, n)), behavior: "smooth" });
+  };
+  const premierJourVisible = semaines[semaineVisible]?.[3]?.date || now; // jeudi : mois « majoritaire » de la semaine
+  const moisBandeauBrut = premierJourVisible.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+  const moisBandeau = moisBandeauBrut.charAt(0).toUpperCase() + moisBandeauBrut.slice(1);
 
-  // Prochaine intervention : la première encore à venir aujourd'hui, sinon la première du jour.
+  // Prochaine intervention : aujourd'hui, la première encore à venir et non
+  // faite ; un autre jour, la première non faite.
   const heureMin = (p) => (p.heure && p.heure !== "—" ? p.heure : "99:99");
-  const triees = [...next].sort((a, b) => heureMin(a).localeCompare(heureMin(b)));
+  const triees = [...duJour].sort((a, b) => heureMin(a).localeCompare(heureMin(b)));
+  const restantesTriees = triees.filter((p) => !p.fait);
   const maintenant = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-  const prochaine = triees.find((p) => heureMin(p) >= maintenant) || triees[0] || null;
+  const prochaine = (estAujourdhui ? restantesTriees.find((p) => heureMin(p) >= maintenant) : null) || restantesTriees[0] || null;
+  const dateChoisie = new Date(jourChoisi + "T12:00:00");
+  const demainIso = toLocalISODate(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
+  const libelleJourBrut = estAujourdhui ? "Aujourd'hui" : jourChoisi === demainIso ? "Demain" : dateChoisie.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+  const libelleJour = libelleJourBrut.charAt(0).toUpperCase() + libelleJourBrut.slice(1);
+  const nbFaites = duJour.length - restantes.length;
   const ficheProchaine = prochaine ? clients.find((c) => c.nom === prochaine.client) : null;
   const adresseProchaine = prochaine ? ((prochaine.adresse && prochaine.adresse.trim()) || ficheProchaine?.adresse || "") : "";
 
-  // Météo du jour (domicile), déjà en cache le plus souvent grâce à l'accueil.
+  // Météo du jour choisi (domicile), pour les 7 prochains jours seulement.
   const [meteo, setMeteo] = useState(null);
+  const ecartJours = Math.round((new Date(jourChoisi + "T12:00:00") - new Date(todayIso + "T12:00:00")) / 86400000);
   useEffect(() => {
     let actif = true;
-    chargerMeteo(todayIso, "domicile", { adresse: settings?.entreprise?.adresse, ville: settings?.entreprise?.codePostalVille })
+    setMeteo(null);
+    if (ecartJours < 0 || ecartJours > 7) return undefined;
+    chargerMeteo(jourChoisi, "domicile", { adresse: settings?.entreprise?.adresse, ville: settings?.entreprise?.codePostalVille })
       .then((m) => { if (actif) setMeteo(m); })
       .catch(() => {});
     return () => { actif = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [todayIso]);
+  }, [jourChoisi]);
 
   const raccourcis = [
     { onglet: "planning", label: "Planning", icone: "calendar", ton: "acc" },
@@ -1853,20 +1936,35 @@ function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, r
         </div>
       </header>
 
-      <div className="sig-semaine" role="list">
-        {semaine.map((j) => (
-          <button
-            key={j.iso}
-            type="button"
-            role="listitem"
-            className={"sig-jour" + (j.aujourdhui ? " actif" : "") + (j.vacances ? " vacances" : "")}
-            onClick={() => onNavigate("planning", { date: j.iso })}
-            aria-label={`${j.nom} ${j.num}${j.charge ? ", interventions prévues" : ""}`}
-          >
-            <span className="sig-jour-nom">{j.nom}</span>
-            <span className="sig-jour-num">{j.num}</span>
-            <span className={"sig-jour-point" + (j.charge ? " plein" : "")} />
-          </button>
+      <div className="sig-bandeau-tete">
+        <span className="sig-bandeau-mois">{moisBandeau}</span>
+        <span className="sig-bandeau-nav">
+          {(semaineVisible !== SEMAINES_AVANT || !estAujourdhui) && (
+            <button type="button" className="sig-lien" onClick={() => { setJourChoisi(todayIso); allerSemaine(SEMAINES_AVANT); }}>Aujourd'hui</button>
+          )}
+          <button type="button" className="sig-fleche" aria-label="Semaine précédente" onClick={() => allerSemaine(semaineVisible - 1)} disabled={semaineVisible === 0}><Icon name="chevronLeft" size={18} /></button>
+          <button type="button" className="sig-fleche" aria-label="Semaine suivante" onClick={() => allerSemaine(semaineVisible + 1)} disabled={semaineVisible === semaines.length - 1}><Icon name="chevronRight" size={18} /></button>
+        </span>
+      </div>
+      <div className="sig-semaines" ref={bandeauRef} onScroll={surDefilement}>
+        {semaines.map((semaine, s) => (
+          <div className="sig-semaine" role="list" key={s}>
+            {semaine.map((j) => (
+              <button
+                key={j.iso}
+                type="button"
+                role="listitem"
+                className={"sig-jour" + (j.iso === jourChoisi ? " actif" : "") + (j.aujourdhui ? " aujourdhui" : "") + (j.vacances ? " vacances" : "")}
+                onClick={() => setJourChoisi(j.iso)}
+                aria-label={`${j.nom} ${j.num}${j.charge ? ", interventions prévues" : ""}`}
+                aria-pressed={j.iso === jourChoisi}
+              >
+                <span className="sig-jour-nom">{j.nom}</span>
+                <span className="sig-jour-num">{j.num}</span>
+                <span className={"sig-jour-point" + (j.resteAFaire ? " plein" : j.charge ? " fait" : "")} />
+              </button>
+            ))}
+          </div>
         ))}
       </div>
 
@@ -1874,18 +1972,23 @@ function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, r
         <span className="sig-hero-cercle grand" aria-hidden="true" />
         <span className="sig-hero-cercle petit" aria-hidden="true" />
         <div className="sig-hero-haut">
-          <span className="sig-hero-titre">Aujourd'hui</span>
+          <span className="sig-hero-titre">{libelleJour}</span>
           {meteo && (
             <span className="sig-meteo">{meteo.icone} {meteo.matin}° / {meteo.apresMidi}°</span>
           )}
         </div>
         <div className="sig-hero-nombre">
-          {enVacances ? "En vacances 🌴" : next.length === 0 ? "Aucune intervention" : `${next.length} intervention${next.length > 1 ? "s" : ""}`}
+          {enVacances && duJour.length === 0 ? "En vacances 🌴" : duJour.length === 0 ? "Aucune intervention" : `${duJour.length} intervention${duJour.length > 1 ? "s" : ""}`}
         </div>
+        {duJour.length > 0 && nbFaites > 0 && (
+          <div className="sig-hero-etat">
+            <Icon name="check" size={15} /> {nbFaites === duJour.length ? (duJour.length > 1 ? "Toutes effectuées" : "Effectuée") : `${nbFaites} effectuée${nbFaites > 1 ? "s" : ""} sur ${duJour.length}`}
+          </div>
+        )}
         {prochaine && (
           <div className="sig-prochaine">
-            <button type="button" className="sig-prochaine-texte" onClick={() => onNavigate("planning")}>
-              <span className="sig-prochaine-quand">{heureMin(prochaine) !== "99:99" && heureMin(prochaine) >= maintenant ? "Prochaine" : "Au programme"}{prochaine.heure && prochaine.heure !== "—" ? ` · ${prochaine.heure.replace(":", "h")}` : ""}</span>
+            <button type="button" className="sig-prochaine-texte" onClick={() => onNavigate("planning", { date: jourChoisi })}>
+              <span className="sig-prochaine-quand">{estAujourdhui && heureMin(prochaine) !== "99:99" && heureMin(prochaine) >= maintenant ? "Prochaine" : estAujourdhui ? "Au programme" : "Première"}{prochaine.heure && prochaine.heure !== "—" ? ` · ${prochaine.heure.replace(":", "h")}` : ""}</span>
               <span className="sig-prochaine-titre">{prochaine.titre}</span>
               <span className="sig-prochaine-client">{nomAffiche(prochaine.client, clients)}</span>
             </button>
@@ -1917,13 +2020,21 @@ function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, r
       </div>
 
       <section className="card">
-        <div className="sig-carte-tete"><h3>Programme du jour</h3><button type="button" className="sig-lien" onClick={() => onNavigate("planning")}>Tout voir</button></div>
-        {triees.length === 0 && <p className="empty">Aucune intervention prévue aujourd'hui.</p>}
+        <div className="sig-carte-tete"><h3>{estAujourdhui ? "Programme du jour" : `Programme — ${libelleJourBrut}`}</h3><button type="button" className="sig-lien" onClick={() => onNavigate("planning", { date: jourChoisi })}>Tout voir</button></div>
+        {triees.length === 0 && <p className="empty">{estAujourdhui ? "Aucune intervention prévue aujourd'hui." : "Aucune intervention prévue ce jour-là."}</p>}
         <ul className="sig-frise">
           {triees.map((p) => (
-            <li key={p.id} className={"sig-frise-item" + (prochaine && p.id === prochaine.id ? " actif" : "")}>
-              <span className="sig-frise-point" aria-hidden="true" />
-              <button type="button" className="sig-frise-texte" onClick={() => onNavigate("planning")}>
+            <li key={p.id} className={"sig-frise-item" + (prochaine && p.id === prochaine.id ? " actif" : "") + (p.fait ? " fait" : "")}>
+              <button
+                type="button"
+                className="sig-frise-point"
+                onClick={() => onToggle(p.id)}
+                aria-label={p.fait ? "Effectuée — toucher pour annuler" : "Marquer comme effectuée"}
+                title={p.fait ? "Effectuée" : "Marquer comme effectuée"}
+              >
+                {p.fait && <Icon name="check" size={11} />}
+              </button>
+              <button type="button" className="sig-frise-texte" onClick={() => onNavigate("planning", { date: jourChoisi })}>
                 <span className="sig-frise-heure">{p.heure && p.heure !== "—" ? p.heure.replace(":", "h") : "Dans la journée"}{p.duree ? ` · ${p.duree}` : ""}</span>
                 <span className="sig-frise-titre">{p.titre}</span>
                 <span className="sig-frise-client">{nomAffiche(p.client, clients)}</span>
@@ -2174,6 +2285,15 @@ function analyserConfirmation(texte) {
   // « oui mais à 15h », « ok attends » : il reste des mots, donc ce n'est
   // jamais un oui simple (correction ou nouvelle demande).
   return { sens, reste: reste.replace(/[.!?,\s]+$/, "").trim() };
+}
+
+// Fin de conversation : l'utilisateur conclut, ou l'assistant prend congé.
+const FIN_UTILISATEUR = /^(merci|merci beaucoup|merci bien|c'est tout|ce sera tout|rien d'autre|non merci|non c'est bon|non c'est tout|au revoir|à plus|a plus|à tout à l'heure|bonne (soirée|journée|nuit|fin de journée)|ok merci|parfait merci|super merci|top merci|nickel merci)(?![\p{L}'-])/u;
+const AU_REVOIR_ASSISTANT = /(bonne (soirée|journée|nuit|fin de journée|route|continuation)|à (plus tard|bientôt|demain|tout à l'heure)|au revoir)\s*[!.]*\s*$/i;
+function estFinDeConversation(question, reponse) {
+  const q = String(question || "").toLowerCase().replace(/[’‘]/g, "'").trim();
+  const courte = q.split(/\s+/).length <= 8;
+  return (courte && FIN_UTILISATEUR.test(q)) || AU_REVOIR_ASSISTANT.test(String(reponse || "").trim());
 }
 
 // Deux propositions de planning pour le même créneau : la nouvelle remplace
@@ -2581,6 +2701,9 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin })
 
   demarrer(); // peut lever une erreur : à l'appelant de la gérer
   onDebut?.();
+  // Filet : si l'iPhone n'entend rien du tout (micro pas vraiment ouvert après
+  // la voix de l'assistant), on ne reste pas bloqué sur « Je t'écoute… ».
+  minuterie = setTimeout(() => { if (!entendu) terminer(); }, 8000);
   return {
     envoyer: () => terminer(),
     annuler: () => { annule = true; terminer(); try { rec?.abort(); } catch (_e) { /* rien */ } },
@@ -2825,7 +2948,7 @@ function CarteDebrief() {
   );
 }
 
-function Assistant({ messages, setMessages, actions, setActions, onAppliquerAction, texteAEnvoyer, onTexteEnvoye }) {
+function Assistant({ messages, setMessages, actions, setActions, onAppliquerAction, onMemoire, texteAEnvoyer, onTexteEnvoye }) {
   const [saisie, setSaisie] = useState("");
   const [chargement, setChargement] = useState(false);
   const [ecoute, setEcoute] = useState(false);
@@ -2880,7 +3003,8 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     const reprendre = () => {
       setParle(false);
       if (relancer && conversationRef.current && !modeTexteRef.current) {
-        setTimeout(() => ecouterRef.current?.({ auto: true }), 350);
+        // Petit temps pour que l'iPhone libère le haut-parleur avant le micro.
+        setTimeout(() => ecouterRef.current?.({ auto: true }), 600);
       }
     };
     if (!voixActive || !syntheseDispo) {
@@ -3029,7 +3153,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     const encoreEnAttente = actions.length > 0 && !prefixe;
     if (encoreEnAttente) {
       const derniere = historique[historique.length - 1];
-      derniere.content = `${derniere.content}\n\n(Note de l'application : propositions encore affichées en attente de validation : ${actions.map((a) => `[id ${a.id}] ${a.resume}`).join(" ; ")}. Si l'utilisateur en corrige une, refais la proposition corrigée en indiquant son id dans « remplace » : elle remplacera l'ancienne. Tu ne peux pas les valider toi-même : il valide en disant « oui » ou avec le bouton.)`;
+      derniere.content = `${derniere.content}\n\n(Note de l'application : propositions encore affichées en attente de validation : ${actions.map((a) => `[id ${a.id}] ${a.resume}`).join(" ; ")}. Si l'utilisateur en corrige une, refais la proposition corrigée en indiquant son id dans « remplace » : elle remplacera l'ancienne. S'il les confirme, même avec d'autres mots (« ok tu peux l'envoyer »), appelle confirmer_propositions : l'application les exécute.)`;
     }
     avantReponse();
     setChargement(true);
@@ -3037,8 +3161,18 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       const { reply, actions: recues } = await appelerAssistant(historique);
       // Un appel n'est pas une proposition à valider : bouton « Appeler »
       // dans la réponse, et l'iPhone demande lui-même confirmation.
+      // L'assistant a reconnu une confirmation dite autrement (« ok tu peux
+      // l'envoyer ») : on valide exactement comme avec le bouton.
+      if ((Array.isArray(recues) ? recues : []).some((a) => a.type === "confirmer") && actions.length > 0) {
+        setChargement(false);
+        validerTout();
+        return;
+      }
       const appel = (Array.isArray(recues) ? recues : []).find((a) => a.type === "appel" && a.item?.numero);
-      const nouvelles = (Array.isArray(recues) ? recues : []).filter((a) => a.type !== "appel");
+      // Consignes à retenir : enregistrées tout de suite, sans validation.
+      const memoires = (Array.isArray(recues) ? recues : []).filter((a) => a.type === "memoire");
+      if (memoires.length && onMemoire) onMemoire(memoires);
+      const nouvelles = (Array.isArray(recues) ? recues : []).filter((a) => a.type !== "appel" && a.type !== "confirmer" && a.type !== "memoire");
       ajouterMessage("assistant", reply, appel ? { appel: appel.item } : {});
       if (nouvelles.length > 0) setActions((liste) => [...liste.filter((a) => !nouvelles.some((n) => memeCreneau(a, n))), ...nouvelles]);
       setChargement(false);
@@ -3049,7 +3183,11 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
         if (voixActive && syntheseDispo) { setParle(true); setTimeout(() => lireAVoixHaute(prefixe ? `${prefixe} ${reply}` : reply, () => { setParle(false); composer(); }), 250); }
         else composer();
       } else {
-        parler(prefixe ? `${prefixe} ${reply}` : reply);
+        // Fin de conversation (« merci », « bonne soirée ») : l'assistant
+        // répond, puis le micro s'arrête de lui-même.
+        const fin = estFinDeConversation(texte, reply) && nouvelles.length === 0;
+        if (fin) changerConversation(false);
+        parler(prefixe ? `${prefixe} ${reply}` : reply, { relancer: !fin });
       }
     } catch (e) {
       setChargement(false);
@@ -4382,6 +4520,11 @@ function Parametres({ settings, setSettings, theme, setTheme, accent, setAccent,
   useEffect(() => {
     if (!reglesModifiees.current) setDraft((d) => ({ ...d, reglesClassementListe: settings.reglesClassementListe, reglesClassement: settings.reglesClassement }));
   }, [settings.reglesClassementListe, settings.reglesClassement]);
+  // La mémoire de l'assistant se modifie hors de ce formulaire : on la garde
+  // à jour ici, pour qu'un « Enregistrer » ne l'efface pas.
+  useEffect(() => {
+    setDraft((d) => ({ ...d, memoireAssistant: settings.memoireAssistant }));
+  }, [settings.memoireAssistant]);
 
   // Rubrique ouverte (une seule à la fois) et modèle en cours de modification.
   const [rubrique, setRubrique] = useState(null);
@@ -4551,6 +4694,11 @@ function Parametres({ settings, setSettings, theme, setTheme, accent, setAccent,
       <GmailSection />
       {oneDrive && <OneDriveSection etat={oneDrive.etat} onChange={oneDrive.rafraichir} />}
       <IncidentsSection />
+
+      <MemoireAssistant
+        memoire={settings.memoireAssistant || []}
+        onChange={(liste) => setSettings({ ...settings, memoireAssistant: liste })}
+      />
 
       <Rubrique id="regles" titre="Règles de classement" resume={n(listeRegles.length, "règle")} ouverte={rubrique === "regles"} onBasculer={basculer}>
         <ReglesClassement
@@ -9417,6 +9565,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .recherche-client input { width: 100%; padding-right: 36px; }
 .recherche-client .icon-btn { position: absolute; right: 4px; color: var(--encre-3); }
 .recherche-rapports { margin: 4px 0 8px; }
+.memoire-liste { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.memoire-liste li { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--fond-doux); font-size: 14.5px; }
+.memoire-ajout { display: flex; gap: 8px; margin-top: 8px; }
+.memoire-ajout input { flex: 1; min-width: 0; }
 .recherche-rapports input::-webkit-search-cancel-button { display: none; }
 .client-detail-actions { display: flex; gap: 8px; }
 .fiche-bandeau { gap: 12px; }
@@ -10097,12 +10249,23 @@ input, select, textarea { border-radius: 10px; }
 .sig-avatar span { width: 100%; height: 100%; border-radius: 50%; background: var(--carte); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; color: var(--acc-texte); }
 .sig-date { font-size: 13px; color: var(--encre-3); }
 .sig-salut { margin: 0; font-weight: 800; font-size: 22px; letter-spacing: -0.3px; }
-.sig-semaine { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.sig-bandeau-tete { display: flex; justify-content: space-between; align-items: center; margin: 0 2px -4px; }
+.sig-bandeau-mois { font-weight: 700; font-size: 14px; color: var(--encre-2); }
+.sig-bandeau-nav { display: inline-flex; align-items: center; gap: 4px; }
+.sig-fleche { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--verre-bord); background: var(--verre); color: var(--encre-2); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.sig-fleche:disabled { opacity: 0.35; cursor: default; }
+.sig-semaines { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; scrollbar-width: none; overscroll-behavior-x: contain; }
+.sig-semaines::-webkit-scrollbar { display: none; }
+.sig-semaine { flex: 0 0 100%; scroll-snap-align: start; scroll-snap-stop: always; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; padding: 4px 0 8px; }
 .sig-jour { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 0 7px; border: none; border-radius: 14px; background: transparent; color: var(--encre); font: inherit; cursor: pointer; min-height: 44px; }
 .sig-jour-nom { font-size: 11px; color: var(--encre-3); text-transform: capitalize; }
 .sig-jour-num { font-weight: 700; font-size: 15px; }
 .sig-jour-point { width: 5px; height: 5px; border-radius: 50%; margin-top: 2px; }
 .sig-jour-point.plein { background: var(--acc-2); }
+.sig-jour-point.fait { background: var(--encre-3); opacity: 0.55; }
+.sig-jour.aujourdhui:not(.actif) .sig-jour-num { color: var(--acc-texte); }
+.sig-jour.aujourdhui:not(.actif) { box-shadow: inset 0 0 0 1.5px var(--acc-mi, var(--acc-2)); }
+.sig-hero-etat { position: relative; display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 13px; font-weight: 600; opacity: 0.95; }
 .sig-jour.vacances .sig-jour-num { color: var(--vacances-2); }
 .sig-jour.actif { background: linear-gradient(160deg, var(--acc-1), var(--acc-2)); color: #FFFFFF; box-shadow: 0 8px 18px var(--acc-ombre); }
 .sig-jour.actif .sig-jour-nom { color: rgba(255,255,255,0.88); }
@@ -10141,11 +10304,14 @@ input, select, textarea { border-radius: 10px; }
 .sig-carte-tete h3 { margin: 0; }
 .sig-lien { background: none; border: none; color: var(--acc-texte); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 6px 0; }
 .sig-frise { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.sig-frise-item { position: relative; display: flex; align-items: flex-start; gap: 12px; padding: 0 0 14px 22px; }
+.sig-frise-item { position: relative; display: flex; align-items: flex-start; gap: 12px; padding: 0 0 14px 28px; }
 .sig-frise-item:last-child { padding-bottom: 0; }
-.sig-frise-item::before { content: ""; position: absolute; left: 4px; top: 16px; bottom: -2px; width: 2px; background: var(--trait); }
+.sig-frise-item::before { content: ""; position: absolute; left: 4px; top: 21px; bottom: -2px; width: 2px; background: var(--trait); }
 .sig-frise-item:last-child::before { display: none; }
-.sig-frise-point { position: absolute; left: 0; top: 5px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--trait-fonce); background: var(--carte); }
+.sig-frise-point { position: absolute; left: -4px; top: 1px; width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 2px solid var(--trait-fonce); background: var(--carte); color: #FFFFFF; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.sig-frise-item.fait .sig-frise-point { border: none; background: var(--vert); }
+.sig-frise-item.fait .sig-frise-titre { text-decoration: line-through; text-decoration-color: var(--encre-3); color: var(--encre-3); }
+.sig-frise-item.fait .sig-frise-heure, .sig-frise-item.fait .sig-frise-client { opacity: 0.7; }
 .sig-frise-item.actif .sig-frise-point { border: none; background: linear-gradient(135deg, var(--acc-1), var(--acc-2)); }
 .sig-frise-texte { flex: 1; min-width: 0; display: flex; flex-direction: column; text-align: left; background: none; border: none; padding: 0; color: var(--encre); font: inherit; cursor: pointer; }
 .sig-frise-heure { font-size: 12px; font-weight: 600; color: var(--encre-3); }
@@ -10157,5 +10323,30 @@ input, select, textarea { border-radius: 10px; }
 .logout-link:hover { color: var(--nav-encre-clair); }
 /* L'écran d'accueil garde sa typographie d'origine. */
 .bienvenue-salut, .bienvenue-mark { font-family: 'Barlow Condensed', sans-serif; }
+
+/* ---- Planning : affichage agrandi (lisible sur le terrain) ---- */
+.planning-day > h3 { font-size: 22px; font-weight: 800; letter-spacing: -0.3px; margin-bottom: 14px; text-transform: capitalize; }
+.planning-day .list { gap: 14px; }
+.planning-day .list > li.row {
+  display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: start; column-gap: 14px; row-gap: 14px;
+  padding: 16px; border-radius: 18px; background: var(--verre); border: 1px solid var(--verre-bord); box-shadow: var(--ombre-carte);
+}
+.planning-day .list > li.row:hover { background: var(--verre); }
+.planning-day .list > li.row .check-circle { width: 36px; height: 36px; margin-top: 2px; }
+.planning-day .list > li.row .check-circle svg { width: 18px; height: 18px; }
+.planning-day .row-title { font-size: 19px; font-weight: 700; line-height: 1.25; }
+.planning-day .row-sub { font-size: 16px; margin-top: 4px; color: var(--encre-2); }
+.planning-day .adresse-lien, .planning-day .telephone-lien { font-size: 16px; margin-top: 8px; gap: 8px; }
+.planning-day .adresse-lien svg, .planning-day .telephone-lien svg { width: 18px; height: 18px; }
+.planning-day .tache-notes { font-size: 15.5px; line-height: 1.4; padding: 10px 12px; border-radius: 10px; margin-top: 10px; }
+.planning-day .tache-actions { margin-top: 14px; }
+.planning-day .tache-actions .btn-action { min-height: 48px; padding: 10px 18px; font-size: 16px; border-radius: 12px; }
+/* Boutons en bas de la carte, sur toute la largeur : on voit à quelle intervention ils appartiennent. */
+.planning-day .list > li.row > .groupe-modifier { grid-column: 1 / -1; display: flex; gap: 10px; padding-top: 12px; border-top: 1px solid var(--verre-bord); }
+.planning-day .list > li.row > .groupe-modifier .btn-action.modifier { flex: 1; min-height: 46px; font-size: 16px; justify-content: center; border-radius: 12px; }
+.planning-day .list > li.row > .groupe-modifier .btn-dupliquer,
+.planning-day .list > li.row > .groupe-modifier .btn-danger { min-width: 52px; min-height: 46px; justify-content: center; border-radius: 12px; }
+.planning-day .list > li.row > .pill { grid-column: 1 / -1; justify-self: start; font-size: 14px; padding: 7px 14px; }
+.planning-day .row.done .row-title { color: var(--encre-3); }
 
 `;
