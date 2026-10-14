@@ -2156,9 +2156,9 @@ const REPONSE_NON = /^(non|annule|annuler|laisse tomber|stop|pas maintenant)\b/i
 // « oui », « oui vas-y tu peux le faire », « oui, c'est un dépannage »,
 // « non, mets plutôt jeudi ». sens = oui / non / null ; reste = la suite de
 // la phrase une fois retirés les mots de confirmation.
-const DEBUT_OUI = /^(oui|ouais|ouai|ok|okay|d'accord|daccord|je valide|valide|valider|validé|vas-y|vas y|go|confirme|confirmer|confirmé|c'est bon|c'est parfait|parfait|exact|exactement|c'est ça|yes|tu peux y aller|tu peux le faire|tu peux valider|tu peux enregistrer|enregistre|enregistre-le|nickel|impeccable|carrément|bien sûr|absolument|top|super)(?![\p{L}'-])/u;
+const DEBUT_OUI = /^(oui|ouais|ouai|ok|okay|d'accord|daccord|je valide|valide|valider|validé|vas-y|vas y|go|confirme|confirmer|confirmé|c'est bon|c'est parfait|parfait|exact|exactement|c'est ça|yes|tu peux y aller|tu peux le faire|tu peux valider|tu peux enregistrer|enregistre|enregistre-le|nickel|impeccable|carrément|bien sûr|absolument|top|super|envoie-le|envoie-la|envoie le|envoie la|envoie|tu peux l'envoyer|tu peux envoyer)(?![\p{L}'-])/u;
 const DEBUT_NON = /^(non|annule|annuler|laisse tomber|pas maintenant|surtout pas|attends|attend)(?![\p{L}'-])/u;
-const REMPLISSAGE = /^(oui|ouais|ouai|ok|okay|d'accord|daccord|vas-y|vas y|go|c'est bon|c'est parfait|parfait|nickel|impeccable|merci|merci beaucoup|s'il te plaît|s'il te plait|stp|je valide|valide|validé|valider|confirme|confirmé|tu peux y aller|tu peux le faire|tu peux valider|tu peux l'enregistrer|tu peux enregistrer|tu peux l'envoyer|tu peux envoyer|envoie-le|envoie-la|envoie|enregistre-le|enregistre|c'est ça|exact|exactement|bien sûr|carrément|absolument|super|top|génial|non|annule|annuler|laisse tomber|et|alors|donc|du coup|les deux|tout)(?![\p{L}'-])[\s,.!;:?-]*/u;
+const REMPLISSAGE = /^(oui|ouais|ouai|ok|okay|d'accord|daccord|vas-y|vas y|go|c'est bon|c'est parfait|parfait|nickel|impeccable|merci|merci beaucoup|s'il te plaît|s'il te plait|stp|je valide|valide|validé|valider|confirme|confirmé|tu peux y aller|tu peux le faire|tu peux valider|tu peux l'enregistrer|tu peux enregistrer|tu peux l'envoyer|tu peux envoyer|envoie-le|envoie-la|envoie|enregistre-le|enregistre|c'est ça|exact|exactement|bien sûr|carrément|absolument|super|top|génial|non|annule|annuler|laisse tomber|et|alors|donc|du coup|le mail|le e-mail|l'e-mail|l'email|le message|le rapport|le brouillon|ce mail|ce message|maintenant|les deux|tout)(?![\p{L}'-])[\s,.!;:?-]*/u;
 
 function analyserConfirmation(texte) {
   const t = String(texte || "").toLowerCase().replace(/[’‘]/g, "'").replace(/^[\s,.!;:?-]+/, "").trim();
@@ -2181,6 +2181,12 @@ function analyserConfirmation(texte) {
 function memeCreneau(a, b) {
   // L'assistant indique lui-même la proposition qu'il corrige.
   if (b.remplace && b.remplace === a.id) return true;
+  // Un nouveau brouillon d'e-mail au même destinataire remplace l'ancien
+  // (sinon un « oui » enverrait les deux).
+  if (a.type === "email" && b.type === "email") return String(a.item?.a || "").toLowerCase() === String(b.item?.a || "").toLowerCase();
+  // Même suppression, même rangement de pièce jointe : pas de doublon.
+  if (a.type === "suppression" && b.type === "suppression") return a.item?.table === b.item?.table && a.item?.id === b.item?.id;
+  if (a.type === "classer_pj" && b.type === "classer_pj") return a.item?.email_id === b.item?.email_id && a.item?.piece_jointe_id === b.item?.piece_jointe_id;
   if (a.type !== "planning" || b.type !== "planning") return false;
   const x = a.item || {}, y = b.item || {};
   const heureReelle = (h) => /^\d{2}:\d{2}$/.test(String(h || ""));
@@ -2946,7 +2952,9 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
   };
 
   const validerTout = async ({ silencieux = false } = {}) => {
-    const aFaire = actions;
+    // Filet de sécurité : jamais deux fois le même e-mail (même destinataire),
+    // seul le plus récent part.
+    const aFaire = actions.filter((a, i) => !actions.slice(i + 1).some((b) => memeCreneau(a, b)));
     setActionsEnCours(true);
     let nb = 0;
     for (const a of aFaire) if (await executerAction(a)) nb++;
