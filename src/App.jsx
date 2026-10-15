@@ -432,6 +432,9 @@ const lireJson = (cle) => { try { return JSON.parse(lireLocal(cle) || "null"); }
 
 const accueilActif = () => lireLocal(CLE_ACCUEIL_ACTIF) !== "false";
 const voixAccueilActive = () => lireLocal(CLE_ACCUEIL_VOIX) !== "false";
+// Débrief du jour lu juste après le mini-point du matin.
+const CLE_ACCUEIL_DEBRIEF = "techni-pac-accueil-debrief";
+const debriefAccueilActif = () => lireLocal(CLE_ACCUEIL_DEBRIEF) !== "false";
 
 // Ouverture par un raccourci Siri ou une notification (?onglet=...) : on va
 // droit au but, sans accueil. Lu au chargement, avant que l'adresse soit nettoyée.
@@ -711,6 +714,24 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
   const reduit = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
   const programme = pret ? programmeDuJour(planning, jourCible(moment)) : null;
+  // Le matin, le débrief du jour est lu juste après le mini-point.
+  const debriefRef = useRef("");
+  const [litDebrief, setLitDebrief] = useState(false);
+  useEffect(() => {
+    if (!voixDemandee || moment !== "matin" || !debriefAccueilActif()) return;
+    lireDernierDebrief().then((d) => {
+      if (!d || d.date !== toLocalISODate(new Date()) || !String(d.texte || "").trim()) return;
+      const texte = "Voici ton débrief du jour. " + String(d.texte).trim();
+      debriefRef.current = texte;
+      // Le son est préparé pendant l'accueil : pas de blanc entre les deux.
+      const voixG = voixGoogleChoisie();
+      if (voixG && !voixGoogleIndisponible) {
+        const propre = textepourVoix(texte).trim();
+        if (propre.length <= 3000) premierePhrase(propre).filter(Boolean).forEach((morceau) => syntheseGoogle(morceau, voixG).catch(() => {}));
+      }
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const meteoRef = useRef(null);
   const programmeRef = useRef(null);
   meteoRef.current = meteo;
@@ -757,6 +778,18 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
         ecrireLocal(CLE_ACCUEIL_VOIX_JOUR, toLocalISODate(new Date()));
       },
       onFin: () => {
+        // Puis le débrief du jour, s'il est prêt.
+        if (demarree && debriefRef.current && !etat.current.debriefLu && !etat.current.termine) {
+          etat.current.debriefLu = true;
+          setLitDebrief(true);
+          lireAVoixHaute(debriefRef.current, () => {
+            etat.current.parle = false;
+            setParle(false);
+            setLitDebrief(false);
+            programmerSortie(1200);
+          });
+          return;
+        }
         etat.current.parle = false;
         setParle(false);
         // L'écran reste encore un peu après la dernière phrase.
@@ -881,6 +914,7 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
           </div>
         )}
         {boutonVoix && <div className="bienvenue-puce ecouter" style={{ animationDelay: "0s" }}>🔊 Touche pour m'écouter</div>}
+        {litDebrief && <div className="bienvenue-puce debrief" style={{ animationDelay: "0s" }}>📋 Débrief du jour · <b>touche pour passer</b></div>}
         {parle && <div className="bienvenue-onde" aria-hidden="true"><i /><i /><i /></div>}
       </div>
     </div>
@@ -921,6 +955,7 @@ function MemoireAssistant({ memoire, onChange }) {
 function ReglagesAccueil({ onRevoir }) {
   const [actif, setActif] = useState(accueilActif);
   const [voix, setVoix] = useState(voixAccueilActive);
+  const [debriefLu, setDebriefLu] = useState(debriefAccueilActif);
   const [position, setPosition] = useState(meteoPositionActive);
   return (
     <div className="reglages-accueil">
@@ -931,6 +966,10 @@ function ReglagesAccueil({ onRevoir }) {
       <label className="check-inline">
         <input type="checkbox" checked={voix} disabled={!actif} onChange={(e) => { setVoix(e.target.checked); ecrireLocal(CLE_ACCUEIL_VOIX, String(e.target.checked)); }} />
         Mini-point à voix haute le matin (première ouverture de la journée)
+      </label>
+      <label className="check-inline">
+        <input type="checkbox" checked={debriefLu} disabled={!actif || !voix} onChange={(e) => { setDebriefLu(e.target.checked); ecrireLocal(CLE_ACCUEIL_DEBRIEF, String(e.target.checked)); }} />
+        Puis le débrief du jour à voix haute
       </label>
       <label className="check-inline">
         <input type="checkbox" checked={position} disabled={!actif} onChange={(e) => { setPosition(e.target.checked); ecrireLocal(CLE_METEO_POSITION, String(e.target.checked)); }} />
@@ -995,6 +1034,65 @@ function ChoixVoix() {
         La voix Google sert pour l'accueil et l'assistant. Si elle ne répond pas (pas de réseau, clé pas encore
         installée), la voix de l'iPhone prend le relais automatiquement.
       </span>
+    </div>
+  );
+}
+
+/* ---------- Mise à jour de l'application ---------- */
+
+// Nom du fichier JavaScript principal d'une page (ex. "/assets/index-AbC123.js").
+// Il change à chaque nouvelle version publiée sur Vercel.
+function scriptPrincipal(html) {
+  const m = String(html || "").match(/<script[^>]+src="([^"]*\/assets\/[^"]+\.js)"/);
+  return m ? m[1] : "";
+}
+
+// Compare la version affichée avec celle qui est en ligne. À l'ouverture,
+// une version périmée est remplacée tout de suite (rien n'est encore en cours) ;
+// plus tard, un bandeau propose la mise à jour pour ne pas perdre une saisie.
+function useNouvelleVersion() {
+  const [disponible, setDisponible] = useState(false);
+  useEffect(() => {
+    const balise = document.querySelector('script[type="module"][src*="/assets/"]');
+    if (!balise) return undefined; // mode développement
+    const actuel = new URL(balise.getAttribute("src"), location.href).pathname;
+    const ouvertA = Date.now();
+    let annule = false;
+    const verifier = async () => {
+      if (annule || !navigator.onLine) return;
+      try {
+        const rep = await fetch("/?v=" + Date.now(), { cache: "no-store" });
+        if (!rep.ok) return;
+        const enLigne = scriptPrincipal(await rep.text());
+        if (!enLigne || new URL(enLigne, location.href).pathname === actuel) return;
+        if (Date.now() - ouvertA < 15000 && !sessionStorage.getItem("techni-pac-maj")) {
+          sessionStorage.setItem("techni-pac-maj", "1"); // une seule fois, jamais en boucle
+          location.reload();
+          return;
+        }
+        setDisponible(true);
+      } catch (_e) { /* hors ligne : on réessaiera */ }
+    };
+    const auRetour = () => {
+      if (document.visibilityState !== "visible") return;
+      navigator.serviceWorker?.getRegistration?.().then((r) => r && r.update()).catch(() => {});
+      verifier();
+    };
+    verifier();
+    document.addEventListener("visibilitychange", auRetour);
+    window.addEventListener("online", verifier);
+    return () => { annule = true; document.removeEventListener("visibilitychange", auRetour); window.removeEventListener("online", verifier); };
+  }, []);
+  return disponible;
+}
+
+function BandeauNouvelleVersion() {
+  const disponible = useNouvelleVersion();
+  if (!disponible) return null;
+  return (
+    <div className="bandeau-maj" role="status">
+      <span>Une nouvelle version de l'application est disponible.</span>
+      <button type="button" className="btn-primary small" onClick={() => location.reload()}>Mettre à jour</button>
     </div>
   );
 }
@@ -1772,6 +1870,8 @@ function AppContenu() {
 
         {tab === "parametres" && <Parametres settings={settings} setSettings={saveSettings} loading={loadingSettings} theme={theme} setTheme={setTheme} accent={accent} setAccent={setAccent} oneDrive={oneDrive} onRevoirAccueil={revoirAccueil} />}
       </main>
+
+      <BandeauNouvelleVersion />
 
       {tab !== "assistant" && (
         <BoutonMicroFlottant
@@ -2645,7 +2745,9 @@ function assemblerDictee(resultats) {
   return texte;
 }
 
-function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin }) {
+function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, patience = 8000 }) {
+  const debutEcoute = Date.now();
+  let relances = 0;
   let dejaDicte = "";      // texte des écoutes précédentes (après relance)
   let enCours = "";        // texte de l'écoute en cours
   let minuterie = null;
@@ -2695,6 +2797,13 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin })
         enCours = "";
         try { demarrer(); return; } catch (_e) { /* relance refusée */ }
       }
+      // L'iPhone coupe parfois l'écoute au bout de quelques secondes sans
+      // parole : on la relance tant que le délai de patience n'est pas écoulé
+      // (le temps de réfléchir à sa réponse).
+      if (Date.now() - debutEcoute < patience && relances < 15) {
+        relances++;
+        try { demarrer(); return; } catch (_e) { /* relance refusée */ }
+      }
       terminer();
     };
     rec.start();
@@ -2704,7 +2813,7 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin })
   onDebut?.();
   // Filet : si l'iPhone n'entend rien du tout (micro pas vraiment ouvert après
   // la voix de l'assistant), on ne reste pas bloqué sur « Je t'écoute… ».
-  minuterie = setTimeout(() => { if (!entendu) terminer(); }, 8000);
+  minuterie = setTimeout(() => { if (!entendu) terminer(); }, patience);
   return {
     envoyer: () => terminer(),
     annuler: () => { annule = true; terminer(); try { rec?.abort(); } catch (_e) { /* rien */ } },
@@ -2821,7 +2930,8 @@ async function lireDernierDebrief() {
 
 function CarteDebrief() {
   const [debrief, setDebrief] = useState(undefined); // undefined = chargement, null = aucun
-  const [ouvert, setOuvert] = useState(true);
+  // Toujours fermée à l'ouverture : on la déplie si besoin.
+  const [ouvert, setOuvert] = useState(false);
   const [enCours, setEnCours] = useState(false);
   const [preparation, setPreparation] = useState(false);
   const [message, setMessage] = useState(null);
@@ -2838,7 +2948,7 @@ function CarteDebrief() {
     }
   };
   useEffect(() => {
-    charger().then((d) => setOuvert(!!d && d.date === toLocalISODate(new Date())));
+    charger();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2967,6 +3077,11 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
   const envoyerRef = useRef(null);
   const ecouterRef = useRef(null);
   const ecouteRef = useRef(false);
+  // Lus au moment de la reprise automatique de l'écoute.
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const conversationRef = useRef(false);
   const modeTexteRef = useRef(modeTexte);
   modeTexteRef.current = modeTexte;
@@ -3234,9 +3349,14 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     setTranscription("");
     transcriptionRef.current = "";
     let refusee = false;
+    // Une réponse est attendue (proposition à valider, question posée) :
+    // on laisse largement le temps de réfléchir avant de couper le micro.
+    const derniere = [...(messagesRef.current || [])].reverse().find((m) => m.role === "assistant");
+    const reponseAttendue = (actionsRef.current || []).length > 0 || /\?\s*$/.test(String(derniere?.content || "").trim());
     try {
       reveillerAssistant();
       reconnaissanceRef.current = ecoutePatiente(Reconnaissance, {
+        patience: auto ? (reponseAttendue ? 25000 : 15000) : 10000,
         onDebut: () => { ecouteRef.current = true; setEcoute(true); },
         onPartiel: (texte) => {
           transcriptionRef.current = texte;
@@ -3263,8 +3383,10 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
             setAttenteAppui(true);
           } else {
             if (!auto && !erreur) setInfoMicro("Je n'ai rien entendu, réessaie.");
-            // Silence : la conversation se met en veille.
+            // Silence : la conversation se met en veille. Si une réponse
+            // était attendue, le bouton invite à reprendre là où on en était.
             changerConversation(false);
+            if (auto && reponseAttendue) setAttenteAppui(true);
           }
         },
       });
@@ -10081,6 +10203,8 @@ textarea { resize: vertical; }
 .groupe-modifier { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .btn-dupliquer { min-height: 34px; padding: 5px 10px; color: var(--acc-texte, var(--bleu)); }
 .bandeau-copie svg { flex-shrink: 0; }
+.bandeau-maj { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top, 0px) + 10px); z-index: 2000; display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 24px); padding: 10px 12px 10px 16px; border-radius: 14px; background: var(--carte, #1B2733); color: var(--encre, #fff); border: 1px solid var(--verre-bord, rgba(255,255,255,0.15)); box-shadow: 0 8px 24px rgba(0,0,0,0.35); font-size: 14.5px; }
+.bandeau-maj button { flex-shrink: 0; white-space: nowrap; }
 .bandeau-copie { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 9px 12px; border-radius: 10px; background: var(--acc-doux, var(--fond-doux)); color: var(--encre-2); font-size: 13.5px; line-height: 1.4; }
 .micro-flottant-astuce { margin-top: 4px; font-size: 11.5px; opacity: 0.7; }
 .incidents { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
