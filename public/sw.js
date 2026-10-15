@@ -1,4 +1,4 @@
-const CACHE_NAME = "techni-pac-cache-v1";
+const CACHE_NAME = "techni-pac-cache-v2";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -17,8 +17,11 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
+  // Les pages (index.html) sont toujours redemandées au serveur, sans passer par
+  // le cache du navigateur : sinon l'iPhone peut rouvrir une ancienne version.
+  const page = event.request.mode === "navigate";
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, page ? { cache: "no-store" } : undefined)
       .then((response) => {
         const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
