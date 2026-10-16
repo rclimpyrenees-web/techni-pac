@@ -1967,18 +1967,44 @@ function Dashboard({ clients, upcoming, devisAFaireCount, aFacturer, planning, r
   }));
   const bandeauRef = useRef(null);
   const [semaineVisible, setSemaineVisible] = useState(SEMAINES_AVANT);
-  // Au premier affichage : la semaine en cours.
+  // Semaine que le bandeau doit montrer (la semaine en cours au départ).
+  const semaineCible = useRef(SEMAINES_AVANT);
+  const placementFait = useRef(false);
+  // Au premier affichage : la semaine en cours. Sur iPhone, le bandeau peut
+  // n'avoir encore aucune largeur à ce moment-là (écran d'accueil par-dessus,
+  // mise en page pas finie) : on le place dès qu'il a sa vraie largeur, et on
+  // le replace si la largeur change (rotation de l'écran).
   useEffect(() => {
     const el = bandeauRef.current;
-    if (el) el.scrollLeft = el.clientWidth * SEMAINES_AVANT;
+    if (!el) return undefined;
+    const placer = () => {
+      if (!el.clientWidth) return;
+      el.scrollLeft = el.clientWidth * semaineCible.current;
+      placementFait.current = Math.abs(el.scrollLeft - el.clientWidth * semaineCible.current) < 2;
+      if (placementFait.current) setSemaineVisible(semaineCible.current);
+    };
+    placer();
+    const image = requestAnimationFrame(placer);
+    const minuteries = [150, 500, 1200].map((ms) => setTimeout(() => { if (!placementFait.current) placer(); }, ms));
+    let largeur = el.clientWidth;
+    const obs = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
+      if (el.clientWidth !== largeur) { largeur = el.clientWidth; placer(); }
+    }) : null;
+    obs?.observe(el);
+    return () => { cancelAnimationFrame(image); minuteries.forEach(clearTimeout); obs?.disconnect(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const surDefilement = () => {
     const el = bandeauRef.current;
-    if (el && el.clientWidth) setSemaineVisible(Math.round(el.scrollLeft / el.clientWidth));
+    // Tant que le bandeau n'est pas placé, un défilement n'est pas un choix.
+    if (!el || !el.clientWidth || !placementFait.current) return;
+    const n = Math.round(el.scrollLeft / el.clientWidth);
+    semaineCible.current = n;
+    setSemaineVisible(n);
   };
   const allerSemaine = (n) => {
     const el = bandeauRef.current;
+    semaineCible.current = Math.max(0, Math.min(semaines.length - 1, n));
     if (el) el.scrollTo({ left: el.clientWidth * Math.max(0, Math.min(semaines.length - 1, n)), behavior: "smooth" });
   };
   const premierJourVisible = semaines[semaineVisible]?.[3]?.date || now; // jeudi : mois « majoritaire » de la semaine
