@@ -479,7 +479,7 @@ function programmeDuJour(planning, iso) {
     .filter((p) => !p.fait && p.categorie !== "relance" && !estVacances(p) && couvreJour(p, iso))
     .sort((a, b) => String(a.heure && a.heure !== "—" ? a.heure : "99").localeCompare(String(b.heure && b.heure !== "—" ? b.heure : "99")));
   const avecHeure = taches.find((p) => heureLisible(p.heure));
-  return { nombre: taches.length, premiere: avecHeure ? heureLisible(avecHeure.heure) : "", vacances };
+  return { nombre: taches.length, premiere: avecHeure ? heureLisible(avecHeure.heure) : "", vacances, taches };
 }
 
 /* --- Météo (Open-Meteo : gratuit, sans clé) --- */
@@ -616,14 +616,32 @@ function phraseMeteo(m, demain) {
   return t;
 }
 
+// Une intervention racontée : l'heure, son titre et chez qui
+// (« À 8h30, entretien annuel Multi 5 chez OSSAU Gautier. »).
+function phraseIntervention(p, { avecHeure = true } = {}) {
+  const heure = heureLisible(p.heure);
+  const titre = String(p.titre || "").trim().replace(/[.\s]+$/, "") || "une intervention";
+  const client = String(p.client || "").trim();
+  const t = `${avecHeure && heure ? `À ${heure}, ` : ""}${titre}${client ? ` chez ${client}` : ""}`;
+  return t.charAt(0).toUpperCase() + t.slice(1) + ".";
+}
+
 function texteDuPoint({ salut, programme, meteo, demain }) {
   const quand = demain ? "demain" : "aujourd'hui";
   let t = `${salut}.`;
   if (programme) {
+    const taches = programme.taches || [];
     if (programme.vacances) t += demain ? " Demain, tu es en vacances." : " Tu es en vacances aujourd'hui, profite bien.";
     else if (programme.nombre === 0) t += ` Tu n'as pas d'intervention prévue ${quand}.`;
-    else if (programme.nombre === 1) t += ` Tu as une intervention ${quand}${programme.premiere ? `, à ${programme.premiere}` : ""}.`;
-    else t += ` Tu as ${programme.nombre} interventions ${quand}${programme.premiere ? `, la première à ${programme.premiere}` : ""}.`;
+    else if (programme.nombre === 1) {
+      const heure = heureLisible(taches[0]?.heure);
+      t += ` Tu as une intervention ${quand}${heure ? `, à ${heure}` : ""}.`;
+      if (taches[0]) t += " " + phraseIntervention(taches[0], { avecHeure: false });
+    } else {
+      t += ` Tu as ${programme.nombre} interventions ${quand}.`;
+      taches.slice(0, 4).forEach((p) => { t += " " + phraseIntervention(p); });
+      if (taches.length > 4) t += ` Et ${taches.length - 4} autre${taches.length - 4 > 1 ? "s" : ""} dans la journée.`;
+    }
   }
   if (meteo) t += " " + phraseMeteo(meteo, demain);
   return t;
@@ -721,7 +739,10 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
     if (!voixDemandee || moment !== "matin" || !debriefAccueilActif()) return;
     lireDernierDebrief().then((d) => {
       if (!d || d.date !== toLocalISODate(new Date()) || !String(d.texte || "").trim()) return;
-      const texte = "Voici ton débrief du jour. " + String(d.texte).trim();
+      // Le débrief commence souvent par « Bonjour Adrian » : déjà dit.
+      const corps = String(d.texte).trim().replace(/^(bonjour|salut|hello|coucou)\b[^.!?\n]{0,40}[.!?,]?\s*/i, "");
+      if (!corps) return;
+      const texte = "Côté débrief. " + corps;
       debriefRef.current = texte;
       // Le son est préparé pendant l'accueil : pas de blanc entre les deux.
       const voixG = voixGoogleChoisie();
@@ -10213,8 +10234,8 @@ textarea { resize: vertical; }
 .assistant-fil { flex: 1; display: flex; flex-direction: column; gap: 10px; padding-bottom: 12px; }
 .assistant-accueil p { margin: 0 0 14px; color: var(--encre-2); font-size: 14px; line-height: 1.5; }
 .assistant-suggestions { display: flex; flex-wrap: wrap; gap: 8px; }
-.assistant-suggestion { background: var(--bleu-clair); color: var(--bleu-fonce); border: 1px solid var(--bleu-clair-2); border-radius: 18px; padding: 8px 14px; font-size: 13.5px; cursor: pointer; text-align: left; }
-.assistant-suggestion:hover { background: var(--bleu-clair-2); }
+.assistant-suggestion { background: var(--acc-doux, var(--fond-doux)); color: var(--acc-texte, var(--encre)); border: 1px solid var(--acc-mi, var(--verre-bord)); border-radius: 18px; padding: 9px 15px; font-size: 14px; font-weight: 600; cursor: pointer; text-align: left; }
+.assistant-suggestion:hover, .assistant-suggestion:active { filter: brightness(1.12); }
 .assistant-bulle { max-width: 82%; padding: 11px 14px; border-radius: 14px; font-size: 14.5px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
 .bulle-moi { align-self: flex-end; background: var(--bleu); color: #fff; border-bottom-right-radius: 4px; }
 .bulle-assistant { align-self: flex-start; background: var(--carte); color: var(--encre); border: 1px solid var(--trait); border-bottom-left-radius: 4px; }
