@@ -8053,6 +8053,32 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
       window.removeEventListener("focus", verifierJour);
     };
   }, []);
+  // Recherche : un client, un titre, une ville… Les rendez-vous à venir
+  // d'abord (du plus proche au plus lointain), puis les passés (du plus récent).
+  const [recherche, setRecherche] = useState("");
+  const motsRecherche = normaliserRecherche(recherche).trim().split(/\s+/).filter(Boolean);
+  const aujourdhuiIso = toLocalISODate(new Date());
+  const resultatsRecherche = motsRecherche.length ? planning
+    .filter((p) => p.categorie !== "relance")
+    .filter((p) => {
+      const fiche = clients.find((c) => c.nom === p.client);
+      const texte = normaliserRecherche([p.titre, p.client, nomAffiche(p.client, clients), p.notes, p.adresse, fiche?.adresse, fiche?.ville, fiche?.telephone, estVacances(p) ? "vacances" : ""].filter(Boolean).join(" "));
+      return motsRecherche.every((m) => texte.includes(m));
+    })
+    .sort((a, b) => {
+      const aVenir = (p) => finDeTache(p) >= aujourdhuiIso;
+      if (aVenir(a) !== aVenir(b)) return aVenir(a) ? -1 : 1;
+      const cle = (p) => `${p.date} ${p.heure && p.heure !== "—" ? p.heure : "99"}`;
+      return aVenir(a) ? cle(a).localeCompare(cle(b)) : cle(b).localeCompare(cle(a));
+    }) : [];
+  const ouvrirResultat = (p) => {
+    // Rendez-vous sur plusieurs jours déjà commencé : on montre aujourd'hui.
+    const jour = p.date < aujourdhuiIso && finDeTache(p) >= aujourdhuiIso ? aujourdhuiIso : p.date;
+    setSelectedDate(jour);
+    setRecherche("");
+    setTimeout(() => detailJourRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+  };
+
   const [editingTask, setEditingTask] = useState(null);
   // Duplication : le formulaire s'ouvre rempli avec la tâche d'origine, mais
   // enregistre une nouvelle tâche (l'originale ne bouge pas).
@@ -8095,6 +8121,50 @@ function Planning({ planning, clients, showForm, setShowForm, onAdd, onToggle, o
           onSubmit={(t) => { onAdd(t); closeTaskForm(); }}
         />
         </div>
+      )}
+
+      <div className="recherche-client recherche-planning">
+        <input
+          type="search"
+          value={recherche}
+          onChange={(e) => setRecherche(e.target.value)}
+          placeholder="Rechercher un rendez-vous : client, intervention, ville…"
+        />
+        {recherche && (
+          <button type="button" className="icon-btn" onClick={() => setRecherche("")} title="Effacer la recherche">
+            <Icon name="close" size={15} />
+          </button>
+        )}
+      </div>
+      {motsRecherche.length > 0 && (
+        <section className="card resultats-planning">
+          <h3>{resultatsRecherche.length === 0 ? "Aucun rendez-vous trouvé" : `${resultatsRecherche.length} rendez-vous trouvé${resultatsRecherche.length > 1 ? "s" : ""}`}</h3>
+          {resultatsRecherche.length > 0 && (
+            <ul className="list">
+              {resultatsRecherche.slice(0, 40).map((p) => {
+                const passe = finDeTache(p) < aujourdhuiIso;
+                return (
+                  <li key={p.id} className={"row clickable" + (p.fait ? " done" : "") + (passe ? " passe" : "")} onClick={() => ouvrirResultat(p)}>
+                    <div className="resultat-date">
+                      <span className="resultat-jour">{new Date(p.date + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "short" }).replace(".", "")}</span>
+                      <span className="resultat-num">{new Date(p.date + "T12:00:00").getDate()}</span>
+                      <span className="resultat-mois">{new Date(p.date + "T12:00:00").toLocaleDateString("fr-FR", { month: "short", ...(p.date.slice(0, 4) !== aujourdhuiIso.slice(0, 4) ? { year: "2-digit" } : {}) }).replace(".", "")}</span>
+                    </div>
+                    <div className="grow">
+                      <div className="row-title">{estVacances(p) ? `🌴 ${p.titre || "Vacances"}` : p.titre}</div>
+                      <div className="row-sub">
+                        {!estVacances(p) && nomAffiche(p.client, clients)}{p.heure && p.heure !== "—" ? ` · ${p.heure.replace(":", "h")}` : ""}{p.duree ? ` · ${p.duree}` : ""}
+                        {finDeTache(p) !== p.date ? ` · jusqu'au ${dateCourte(finDeTache(p))}` : ""}
+                      </div>
+                    </div>
+                    {p.fait ? <span className="pill pill-ok">Fait</span> : passe ? <span className="pill pill-muted">Passé</span> : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {resultatsRecherche.length > 40 && <p className="hint">Les 40 premiers sont affichés : précise ta recherche.</p>}
+        </section>
       )}
 
       <MiniCalendar dateCounts={dateCounts} dateHeures={dateHeures} joursVacances={joursVacances} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
@@ -9978,6 +10048,14 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .recherche-client input { width: 100%; padding-right: 36px; }
 .recherche-client .icon-btn { position: absolute; right: 4px; color: var(--encre-3); }
 .recherche-rapports { margin: 4px 0 8px; }
+.recherche-planning { margin: 4px 0 12px; }
+.recherche-planning input::-webkit-search-cancel-button { display: none; }
+.resultats-planning h3 { margin-bottom: 6px; }
+.resultats-planning .list > li.row { gap: 14px; align-items: center; }
+.resultats-planning .list > li.passe { opacity: 0.7; }
+.resultat-date { display: flex; flex-direction: column; align-items: center; min-width: 46px; padding: 6px 4px; border-radius: 12px; background: var(--acc-doux, var(--fond-doux)); color: var(--acc-texte, var(--encre)); line-height: 1.1; }
+.resultat-jour, .resultat-mois { font-size: 11.5px; text-transform: capitalize; }
+.resultat-num { font-size: 19px; font-weight: 700; }
 .memoire-liste { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .memoire-liste li { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--fond-doux); font-size: 14.5px; }
 .memoire-ajout { display: flex; gap: 8px; margin-top: 8px; }
