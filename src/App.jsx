@@ -28,7 +28,7 @@ const DEFAULT_ENTRETIEN_CHECKLIST = [
 
 const defaultSettings = {
   technicien: { nom: "" },
-  entreprise: { nom: "", adresse: "", codePostalVille: "", telephone: "", email: "", siret: "", attestationCapacite: "", logo: "", clausePied: "" },
+  entreprise: { nom: "", formeJuridique: "", adresse: "", codePostalVille: "", telephone: "", email: "", siret: "", attestationCapacite: "", mediateurNom: "", mediateurCoordonnees: "", logo: "", clausePied: "" },
   pennylane: { active: false, tvaParDefaut: "FR_200" },
   tableaux: [
     {
@@ -86,6 +86,180 @@ const installTypes = [
   "PAC air/air",
   "Chauffe-eau thermodynamique",
 ];
+
+/* ---------- Contrats de maintenance ----------
+   Le contrat est construit dans l'application à partir de la fiche client :
+   le matériel, l'adresse et les coordonnées sont repris automatiquement, le
+   montant reste saisi à la main, et la signature se fait à l'écran.
+   Les articles reprennent mot pour mot les modèles validés (version
+   particulier et version B2B, pour la PAC air/air et la PAC air/eau). */
+
+const TYPES_CONTRAT = [
+  {
+    id: "air_air",
+    label: "Pompe à chaleur air/air",
+    machines: ["PAC air/air", "Climatiseur split", "Climatisation gainable"],
+    puissance: "Puissance frigorifique nominale",
+    interieurLabel: "Unité intérieure",
+    compteLabel: "Nombre d'unités intérieures",
+  },
+  {
+    id: "air_eau",
+    label: "Pompe à chaleur air/eau",
+    machines: ["PAC air/eau", "Chauffe-eau thermodynamique"],
+    puissance: "Puissance thermique nominale",
+    interieurLabel: "Module hydraulique",
+    compteLabel: "",
+  },
+];
+
+const MOIS_LISIBLES = ["", "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+
+// Déduit le type de contrat le plus probable à partir du matériel de la fiche.
+function typeContratSuggere(machines) {
+  const types = (machines || []).map((m) => m.type);
+  const trouve = TYPES_CONTRAT.find((t) => types.some((x) => t.machines.includes(x)));
+  return (trouve || TYPES_CONTRAT[0]).id;
+}
+
+const CONTRAT_OBJET = {
+  air_air:
+    "Le présent contrat a pour objet de définir les conditions dans lesquelles le Prestataire assure l'entretien périodique et le suivi de l'installation de pompe à chaleur air/air désignée ci-après, appartenant au Client ou dont il a la jouissance.",
+  air_eau:
+    "Le présent contrat a pour objet de définir les conditions dans lesquelles le Prestataire assure l'entretien périodique et le suivi de l'installation de pompe à chaleur air/eau désignée ci-après, appartenant au Client ou dont il a la jouissance.",
+};
+
+const CONTRAT_PRESTATIONS = {
+  air_air: [
+    "Contrôle visuel de l'état général des unités intérieures et extérieures.",
+    "Nettoyage ou remplacement des filtres des unités intérieures.",
+    "Nettoyage de l'échangeur et de la turbine si nécessaire.",
+    "Contrôle de l'étanchéité du circuit frigorifique et détection de fuites éventuelles, conformément à la réglementation sur les fluides frigorigènes fluorés (règlement (UE) n° 517/2014 dit « F-Gas »).",
+    "Vérification des pressions, températures et intensités de fonctionnement.",
+    "Contrôle des organes de sécurité et des raccordements électriques.",
+    "Vérification de l'écoulement des condensats.",
+    "Mise à jour de la fiche d'intervention et, le cas échéant, du carnet d'entretien de l'installation.",
+    "Conseils d'utilisation et d'optimisation énergétique.",
+  ],
+  air_eau: [
+    "Nettoyage général du groupe extérieur et du module hydraulique.",
+    "Nettoyage ou remplacement des filtres du circuit hydraulique.",
+    "Contrôle et reprise de la pression du vase d'expansion du circuit de chauffage.",
+    "Contrôle de l'étanchéité du circuit frigorifique et détection de fuites éventuelles, conformément à la réglementation sur les fluides frigorigènes fluorés (règlement (UE) n° 517/2014 dit « F-Gas »).",
+    "Vérification de l'ensemble des valeurs de fonctionnement du circuit frigorifique (pressions, températures), vérification des températures du circuit hydraulique.",
+    "Contrôle des organes de sécurité, du groupe de sécurité et des raccordements électriques.",
+    "Contrôle du ballon d'eau chaude sanitaire associé, le cas échéant (anode, entartrage).",
+    "Vérification du bon fonctionnement des émetteurs de chauffage (radiateurs, plancher chauffant…).",
+    "Mise à jour de la fiche d'intervention et, le cas échéant, du carnet d'entretien de l'installation.",
+    "Conseils d'utilisation et d'optimisation énergétique.",
+  ],
+};
+
+const CONTRAT_MENTION_REGLEMENTAIRE = {
+  air_air:
+    "Pour les installations dont la puissance frigorifique nominale est supérieure à 4 kW et assurant une fonction de rafraîchissement, une visite annuelle au moins répond à l'obligation d'entretien prévue aux articles R. 224-41-13 à R. 224-41-22 du Code de l'environnement (décret n° 2009-649 et arrêté du 15 septembre 2009 modifiés). Le Prestataire remet au Client, à l'issue de chaque visite, une attestation d'entretien reprenant les éléments requis par la réglementation.",
+  air_eau:
+    "Si l'installation assure également une fonction de rafraîchissement actif avec une puissance frigorifique nominale supérieure à 4 kW, une visite annuelle au moins répond à l'obligation d'entretien prévue aux articles R. 224-41-13 à R. 224-41-22 du Code de l'environnement (décret n° 2009-649 et arrêté du 15 septembre 2009 modifiés). Pour les installations assurant uniquement une fonction de chauffage, cette visite annuelle est réalisée conformément aux préconisations du fabricant et aux conditions de garantie. Le Prestataire remet au Client, à l'issue de chaque visite, une attestation d'entretien.",
+};
+
+const CONTRAT_OBLIGATIONS_PRESTATAIRE = [
+  "Réaliser les prestations avec soin, selon les règles de l'art et la réglementation applicable.",
+  "Prendre en charge les interventions de diagnostic de panne dans le cadre du présent contrat, sans frais supplémentaire de déplacement ou de main-d'œuvre pour le diagnostic lui-même.",
+  "Employer un personnel qualifié, titulaire des attestations de capacité requises pour la manipulation des fluides frigorigènes.",
+  "Informer le Client de toute anomalie constatée et, le cas échéant, établir un devis pour les réparations non comprises dans le présent contrat.",
+  "Assurer la traçabilité des interventions et des quantités de fluide frigorigène ajoutées ou récupérées.",
+  "Souscrire une assurance responsabilité civile professionnelle couvrant les activités concernées.",
+];
+
+const CONTRAT_OBLIGATIONS_CLIENT = {
+  b2c: [
+    "Permettre l'accès à l'installation aux dates convenues pour la réalisation des visites d'entretien. En cas d'absence non signalée au moins 48 heures à l'avance, le déplacement sera facturé (ou la visite sera considérée comme due).",
+    "Signaler sans délai au Prestataire tout dysfonctionnement, bruit anormal ou fuite constatée.",
+    "Ne pas faire intervenir un tiers sur l'installation pendant la durée du contrat sans en informer le Prestataire. L'intervention d'un tiers non agréé sur le circuit frigorifique ou électrique entraîne la suspension immédiate de la garantie de service ou la résiliation du contrat aux torts exclusifs du Client.",
+    "Utiliser l'installation conformément aux préconisations du fabricant et du Prestataire.",
+    "Régler le prix des prestations selon les modalités prévues à l'article Prix et modalités de paiement.",
+  ],
+  b2b: [
+    "Permettre l'accès à l'installation aux dates convenues pour la réalisation des visites d'entretien.",
+    "Signaler sans délai au Prestataire tout dysfonctionnement, bruit anormal ou fuite constatée.",
+    "Ne pas faire intervenir un tiers sur l'installation pendant la durée du contrat sans en informer le Prestataire.",
+    "Utiliser l'installation conformément aux préconisations du fabricant et du Prestataire.",
+    "Régler le prix des prestations selon les modalités prévues à l'article Prix et modalités de paiement.",
+  ],
+};
+
+const CONTRAT_RECONDUCTION = {
+  b2c:
+    "En cas de contrat assorti d'une clause de reconduction tacite, le Prestataire reproduit ci-dessous, conformément à l'article L. 215-4 du Code de la consommation, les dispositions légales applicables :\n\n" +
+    "Article L. 215-1 du Code de la consommation :\n" +
+    "« Pour les contrats de prestations de services conclus pour une durée déterminée avec une clause de reconduction tacite, le professionnel prestataire de services informe le consommateur par écrit, par lettre nominative ou courrier électronique dédié, au plus tôt trois mois et au plus tard un mois avant le terme de la période autorisant le rejet de la reconduction, de la possibilité de ne pas reconduire le contrat qu'il a conclu avec une clause de reconduction tacite. Cette information, délivrée dans des termes clairs et compréhensibles, mentionne, dans un encadré apparent, la date limite de résiliation.\n\n" +
+    "Lorsque cette information ne lui a pas été adressée conformément aux dispositions du premier alinéa, le consommateur peut mettre fin gratuitement au contrat, à tout moment, à compter de la date de reconduction.\n\n" +
+    "Les avances effectuées après la dernière date de reconduction ou, s'agissant des contrats à durée indéterminée, après la date de transformation du contrat initial à durée déterminée, sont dans ce cas remboursées dans un délai de trente jours à compter de la date de résiliation, déduction faite des sommes correspondant, jusqu'à celle-ci, à l'exécution du contrat. »\n\n" +
+    "Article L. 215-3 du Code de la consommation :\n" +
+    "« Les dispositions du présent chapitre sont également applicables aux contrats conclus entre des professionnels et des non-professionnels. »\n\n" +
+    "Article L. 241-3 du Code de la consommation :\n" +
+    "« Lorsque le professionnel n'a pas procédé aux remboursements dans les conditions prévues à l'article L. 215-1, les sommes dues sont productives d'intérêts au taux légal. »",
+  b2b:
+    "À l'issue de sa durée initiale mentionnée ci-dessus, le présent contrat se renouvelle de plein droit par tacite reconduction pour des périodes successives de douze (12) mois, sauf dénonciation par l'une ou l'autre des parties.\n\n" +
+    "Pour faire obstacle à la reconduction tacite, la partie qui souhaite résilier le contrat devra notifier sa décision à l'autre partie par lettre recommandée avec accusé de réception (LRAR). Cette notification devra être reçue au moins trois (3) mois avant la date d'échéance de la période annuelle en cours.\n\n" +
+    "À défaut de résiliation dans ce délai de préavis, le contrat est reconduit pour une nouvelle année complète et les redevances de maintenance correspondantes sont intégralement dues par le Client.",
+};
+
+const CONTRAT_EXCLUSIONS =
+  "Sont exclus du présent contrat, sauf stipulation contraire, et feront l'objet d'un devis séparé : les réparations, le remplacement de pièces détachées, les recharges de fluide frigorigène consécutives à une fuite, les dommages résultant d'un usage anormal, d'un défaut d'alimentation électrique, d'un cas de force majeure, d'une intervention d'un tiers non autorisée, ou de tout événement extérieur à l'installation (dégât des eaux, choc, surtension, etc.).";
+
+const CONTRAT_RESILIATION =
+  "En cas de manquement grave de l'une des parties à ses obligations, non réparé dans un délai de trente (30) jours suivant une mise en demeure adressée par lettre recommandée avec accusé de réception restée sans effet, le contrat pourra être résilié de plein droit par la partie la plus diligente, sans préjudice de tous dommages et intérêts qui pourraient être réclamés.";
+
+const CONTRAT_RETRACTATION =
+  "Lorsque le contrat est conclu hors établissement ou à distance avec un Client consommateur, celui-ci dispose d'un délai de quatorze (14) jours francs à compter de sa conclusion pour exercer son droit de rétractation, sans avoir à justifier de motif ni à supporter de pénalités, conformément aux articles L. 221-18 et suivants du Code de la consommation. Ce droit ne s'applique pas lorsque le contrat est conclu dans les locaux professionnels du Prestataire, ni, sous réserve de l'accord exprès du Client pour une exécution immédiate, aux prestations pleinement exécutées avant la fin du délai de rétractation.";
+
+const CONTRAT_FLUIDES =
+  "Le Prestataire s'engage à respecter la réglementation relative à la manipulation, à la récupération et à la traçabilité des fluides frigorigènes fluorés (règlement (UE) n° 517/2014 et ses arrêtés d'application, décret n° 2015-1790), ainsi que les obligations relatives à l'élimination des déchets d'équipements électriques et électroniques (DEEE) en fin de vie de l'installation.";
+
+const CONTRAT_RGPD =
+  "Les données à caractère personnel communiquées par le Client dans le cadre du présent contrat sont traitées par le Prestataire aux seules fins de gestion de la relation contractuelle, conformément au règlement (UE) 2016/679 (RGPD) et à la loi n° 78-17 du 6 janvier 1978 modifiée. Le Client dispose d'un droit d'accès, de rectification, d'effacement et d'opposition qu'il peut exercer auprès du Prestataire.";
+
+const CONTRAT_REVISION_INTRO =
+  "Les prix stipulés au présent contrat sont révisés automatiquement chaque année, à la date anniversaire du contrat, afin de tenir compte de l'évolution des coûts de main-d'œuvre et de structure.\n\nLa révision s'effectue selon la formule de calcul suivante :";
+
+const CONTRAT_REVISION_PUCES = [
+  "P : Prix révisé applicable pour l'année à venir.",
+  "P0 : Prix d'origine du contrat (ou prix de l'année précédente).",
+  "S : Dernier indice Syntec publié par l'INSEE à la date de la révision.",
+  "S0 : Indice Syntec de référence, correspondant au dernier indice connu à la date de signature du contrat (ou à la précédente date anniversaire).",
+];
+
+const CONTRAT_REVISION_FIN =
+  "Si l'indice choisi venait à disparaître, la formule serait appliquée en utilisant l'indice de substitution officiellement désigné, ou à défaut, l'indice le plus proche de la profession. La révision de prix s'impose aux deux parties.";
+
+const CONTRAT_MEDIATION =
+  "En cas de litige, le Client est invité à adresser sa réclamation par écrit au Prestataire. À défaut de solution amiable, et conformément aux articles L. 616-1 et suivants du Code de la consommation, le Client consommateur a la possibilité de recourir gratuitement au service de médiation suivant :";
+
+const CONTRAT_DROIT_APPLICABLE =
+  "Le présent contrat est soumis au droit français. À défaut de résolution amiable ou de recours à la médiation, tout litige relatif à sa formation, son exécution ou son interprétation relève de la compétence des juridictions du ressort du domicile du défendeur ou, si le Client est un professionnel, du tribunal compétent du siège du Prestataire, sous réserve des règles d'ordre public applicables aux consommateurs.";
+
+// Date du jour au format AAAA-MM-JJ, en heure locale (pas de décalage UTC).
+function isoLocalAujourdhui() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function dateFrDepuisIso(iso) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
+}
+
+// Montants : saisie libre à la française (virgule acceptée), TTC calculé.
+function nombreDepuisSaisie(v) {
+  const n = parseFloat(String(v || "").replace(/\s/g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+function montantLisible(n) {
+  if (n === null || n === undefined) return "";
+  return n.toFixed(2).replace(".", ",").replace(/,00$/, "");
+}
 
 const initialReports = [];
 
@@ -4801,6 +4975,16 @@ function Parametres({ settings, setSettings, theme, setTheme, accent, setAccent,
           <label>SIRET / n° TVA
             <input value={draft.entreprise.siret} onChange={(e) => updateEntreprise({ siret: e.target.value })} placeholder="Ex : 123 456 789 00012" />
           </label>
+          <label>Forme juridique et capital
+            <input value={draft.entreprise.formeJuridique || ""} onChange={(e) => updateEntreprise({ formeJuridique: e.target.value })} placeholder="Ex : SARLU" />
+          </label>
+          <label>Médiateur de la consommation
+            <input value={draft.entreprise.mediateurNom || ""} onChange={(e) => updateEntreprise({ mediateurNom: e.target.value })} placeholder="Ex : BATIRMEDIATION" />
+          </label>
+          <label>Coordonnées du médiateur
+            <input value={draft.entreprise.mediateurCoordonnees || ""} onChange={(e) => updateEntreprise({ mediateurCoordonnees: e.target.value })} placeholder="Adresse ou site internet" />
+          </label>
+          <span className="hint">Ces informations alimentent les contrats de maintenance générés depuis les fiches clients.</span>
 
           <div className="block mt">
             <SinglePhotoField label="Logo de l'entreprise" value={draft.entreprise.logo} onChange={(logo) => updateEntreprise({ logo })} />
@@ -7298,6 +7482,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
           <ClientForm
             key={editingClient ? editingClient.id : "new"}
             editingClient={editingClient}
+            settings={settings}
             onCancel={closeForm}
             onSubmit={(c) => { editingClient ? onUpdate(c) : onAdd(c); closeForm(); setSelected(c.id); }}
           />
@@ -7637,6 +7822,13 @@ function MachineEditor({ machine, onChange, onRemove, removable }) {
                 placeholder="Ex : 2,45"
               />
             </label>
+            <label>Puissance nominale
+              <input
+                value={u.puissance || ""}
+                onChange={(e) => updateExtAt(idx, { puissance: e.target.value })}
+                placeholder="Ex : 6,5 kW"
+              />
+            </label>
           </div>
           {u.fluide && !fluides.includes(u.fluide) && (
             <label className="block">Fluide (saisie libre)
@@ -7691,7 +7883,7 @@ function MachineEditor({ machine, onChange, onRemove, removable }) {
 const fluides = ["R32", "R410A", "R454B", "R290", "R134a", "R407C", "R1234ze", "R744 (CO2)", "R600a"];
 
 function unitePropre(u) {
-  return { marque: "", modele: "", serie: "", photo: "", fluide: "", quantiteFluide: "", ...(u || {}) };
+  return { marque: "", modele: "", serie: "", photo: "", fluide: "", quantiteFluide: "", puissance: "", ...(u || {}) };
 }
 
 function normalizeUnits(u) {
@@ -7722,7 +7914,221 @@ function blankMachine() {
   };
 }
 
-function ClientForm({ editingClient, onCancel, onSubmit }) {
+/* ---------- Création du contrat de maintenance depuis la fiche client ----------
+   Reprend le matériel, l'adresse et les coordonnées déjà saisis, bascule
+   automatiquement sur la version particulier ou B2B, laisse le montant libre,
+   fait signer à l'écran et produit le PDF du contrat. */
+
+function ContratForm({ client, settings, onClose, onGenerated }) {
+  const machinesDispo = client.machines || [];
+  const [reference] = useState(() => "CTR-" + new Date().getFullYear() + "-" + String(Date.now()).slice(-5));
+  const [typeContrat, setTypeContrat] = useState(() => typeContratSuggere(machinesDispo));
+  const [b2b, setB2b] = useState(!!client.professionnel);
+  const [selection, setSelection] = useState(() => machinesDispo.map((m) => m.id));
+  const [visites, setVisites] = useState("1");
+  const [mois, setMois] = useState(client.moisEcheance || "");
+  const [periodicite, setPeriodicite] = useState("");
+  const [dateDebut, setDateDebut] = useState(isoLocalAujourdhui());
+  const [duree, setDuree] = useState("1");
+  const [montantHT, setMontantHT] = useState("");
+  const [tauxTva, setTauxTva] = useState("20");
+  const [modalitesPaiement, setModalitesPaiement] = useState("À réception de facture");
+  const [adresseSite, setAdresseSite] = useState(client.adresse || "");
+  const [ballonEcs, setBallonEcs] = useState("");
+  const [emetteurs, setEmetteurs] = useState("");
+  const [lieu, setLieu] = useState(settings?.entreprise?.codePostalVille || "");
+  const [conditionsParticulieres, setConditionsParticulieres] = useState("");
+  const [showParticulieres, setShowParticulieres] = useState(false);
+  const [signatureTech, setSignatureTech] = useState("");
+  const [signatureClient, setSignatureClient] = useState("");
+  const [enCours, setEnCours] = useState(false);
+  const [erreur, setErreur] = useState("");
+
+  const basculer = (id) => setSelection((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
+  const machinesRetenues = machinesDispo.filter((m) => selection.includes(m.id)).map(({ id, ...m }) => m);
+
+  const ht = nombreDepuisSaisie(montantHT);
+  const taux = nombreDepuisSaisie(tauxTva);
+  const ttc = ht !== null && taux !== null ? ht * (1 + taux / 100) : null;
+
+  const resumeMachine = (m) => {
+    const ext = normalizeUnits(m.exterieur)[0];
+    return [m.type, ext?.marque, ext?.modele].filter(Boolean).join(" — ") || "Matériel";
+  };
+
+  const generer = async () => {
+    setErreur("");
+    setEnCours(true);
+    try {
+      const donnees = {
+        reference, typeContrat, b2b, machines: machinesRetenues, visites, mois, periodicite,
+        dateDebut, duree, montantHT, tauxTva, modalitesPaiement, adresseSite, ballonEcs, emetteurs, lieu,
+        conditionsParticulieres, signatureTech, signatureClient, dateSignature: isoLocalAujourdhui(),
+      };
+      const html = buildContratHtml(donnees, client, settings);
+      const data = await genererPdfBase64(html);
+      // On garde les paramètres du contrat (pas les signatures, déjà dans le
+      // PDF) pour pouvoir le refaire plus tard.
+      const details = {
+        reference, typeContrat, b2b, machines: machinesRetenues, visites, mois, periodicite,
+        dateDebut, duree, montantHT, tauxTva, modalitesPaiement, adresseSite, ballonEcs, emetteurs, lieu,
+        conditionsParticulieres, dateSignature: donnees.dateSignature,
+      };
+      onGenerated(
+        {
+          nom: "Contrat maintenance - " + (client.raisonSociale || client.nom || "client") + ".pdf",
+          data,
+          dateAjout: new Date().toLocaleDateString("fr-FR"),
+          ajouteLe: Date.now(),
+          signe: !!signatureClient,
+          details,
+        },
+        mois
+      );
+    } catch (e) {
+      noterIncident("contrat", "Génération du contrat impossible", String(e?.message || e));
+      setErreur("La génération du PDF a échoué. Réessaie, ou allège le contrat (moins de matériel) si l'appareil manque de mémoire.");
+    } finally {
+      setEnCours(false);
+    }
+  };
+
+  return (
+    <div className="pdf-modal-overlay" onClick={onClose}>
+      <div className="pdf-modal-box contrat-modal-box" onClick={(e) => e.stopPropagation()}>
+        <div className="pdf-modal-toolbar">
+          <span className="pdf-modal-title"><Icon name="report" size={16} /> Contrat de maintenance — {client.raisonSociale || client.nom}</span>
+          <button className="btn-ghost small" onClick={onClose}>Fermer</button>
+        </div>
+
+        <div className="contrat-form-corps">
+          <div className="form-grid">
+            <label>Type d'installation
+              <select value={typeContrat} onChange={(e) => setTypeContrat(e.target.value)}>
+                {TYPES_CONTRAT.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+              </select>
+            </label>
+            <label>Version du contrat
+              <select value={b2b ? "b2b" : "b2c"} onChange={(e) => setB2b(e.target.value === "b2b")}>
+                <option value="b2c">Particulier (Code de la consommation)</option>
+                <option value="b2b">Professionnel — B2B</option>
+              </select>
+            </label>
+          </div>
+          <span className="hint">
+            {b2b
+              ? "Version B2B : reconduction tacite avec préavis de 3 mois par LRAR, sans droit de rétractation ni clause de médiation de la consommation."
+              : "Version particulier : reproduction des articles L. 215-1 et suivants, droit de rétractation de 14 jours et médiateur de la consommation."}
+          </span>
+
+          <div className="form-grid mt">
+            <label>Date de début du contrat
+              <input type="date" value={dateDebut} onChange={(e) => setDateDebut(e.target.value)} />
+            </label>
+            <label>Durée initiale
+              <select value={duree} onChange={(e) => setDuree(e.target.value)}>
+                <option value="1">1 an</option>
+                <option value="2">2 ans</option>
+                <option value="3">3 ans</option>
+              </select>
+            </label>
+            <label>Visites d'entretien par an
+              <select value={visites} onChange={(e) => setVisites(e.target.value)}>
+                <option value="1">1 visite</option>
+                <option value="2">2 visites</option>
+                <option value="3">3 visites</option>
+                <option value="4">4 visites</option>
+              </select>
+            </label>
+            <label>Mois d'intervention
+              <select value={mois} onChange={(e) => setMois(e.target.value)}>
+                <option value="">Non précisé</option>
+                {MOIS_LISIBLES.map((m, i) => (i === 0 ? null : <option key={i} value={String(i)}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>))}
+              </select>
+            </label>
+          </div>
+          <label className="block">Périodicité (texte du contrat)
+            <input value={periodicite} onChange={(e) => setPeriodicite(e.target.value)} placeholder={mois ? "Annuelle, au mois de " + MOIS_LISIBLES[Number(mois)] : "Annuelle"} />
+          </label>
+
+          <div className="form-grid mt">
+            <label>Prix annuel HT (€)
+              <input inputMode="decimal" value={montantHT} onChange={(e) => setMontantHT(e.target.value)} placeholder="Ex : 150" />
+            </label>
+            <label>TVA (%)
+              <input inputMode="decimal" value={tauxTva} onChange={(e) => setTauxTva(e.target.value)} placeholder="Ex : 20" />
+            </label>
+          </div>
+          <p className="hint contrat-ttc">{ttc !== null ? "Prix annuel TTC : " + montantLisible(ttc) + " €" : "Prix annuel TTC : —"}</p>
+          <label className="block">Modalités et échéance de paiement
+            <input value={modalitesPaiement} onChange={(e) => setModalitesPaiement(e.target.value)} placeholder="Ex : à réception de facture" />
+          </label>
+
+          <label className="block mt">Adresse d'installation
+            <input value={adresseSite} onChange={(e) => setAdresseSite(e.target.value)} placeholder="Reprise de la fiche client" />
+          </label>
+
+          {typeContrat === "air_eau" && (
+            <div className="form-grid">
+              <label>Ballon ECS associé
+                <input value={ballonEcs} onChange={(e) => setBallonEcs(e.target.value)} placeholder="Marque / volume" />
+              </label>
+              <label>Type d'émetteurs de chauffage
+                <input value={emetteurs} onChange={(e) => setEmetteurs(e.target.value)} placeholder="Ex : plancher chauffant" />
+              </label>
+            </div>
+          )}
+
+          <label className="block mt">Matériel couvert ({selection.length}/{machinesDispo.length})</label>
+          {machinesDispo.length === 0 && (
+            <p className="empty">Aucun matériel sur la fiche client. Ajoute-le d'abord : marque, modèle, n° de série, puissance et charge de fluide sont repris automatiquement dans le contrat.</p>
+          )}
+          <div className="contrat-machines">
+            {machinesDispo.map((m) => (
+              <label key={m.id} className="check-inline contrat-machine-ligne">
+                <input type="checkbox" checked={selection.includes(m.id)} onChange={() => basculer(m.id)} />
+                <span>{resumeMachine(m)}</span>
+              </label>
+            ))}
+          </div>
+
+          <button type="button" className="machine-section-toggle section-toggle-bar mt" onClick={() => setShowParticulieres(!showParticulieres)}>
+            <span>Conditions particulières (facultatif)</span>
+            <Icon name={showParticulieres ? "chevronDown" : "chevronRight"} size={18} />
+          </button>
+          {showParticulieres && (
+            <>
+              <textarea className="contrat-clauses" value={conditionsParticulieres} onChange={(e) => setConditionsParticulieres(e.target.value)} rows={5} placeholder="Ex : première visite offerte, remise fidélité, accès par le portail arrière…" />
+              <span className="hint">Ajouté en dernier article du contrat. Les articles standards ne bougent pas.</span>
+            </>
+          )}
+
+          <label className="block mt">Fait à
+            <input value={lieu} onChange={(e) => setLieu(e.target.value)} placeholder="Ville" />
+          </label>
+
+          <label className="block mt">Signatures — précédées de la mention « Lu et approuvé »</label>
+          <div className="signatures-edit">
+            <SignaturePad label="Pour le Prestataire" value={signatureTech} onChange={setSignatureTech} />
+            <SignaturePad label="Pour le Client" value={signatureClient} onChange={setSignatureClient} />
+          </div>
+          <span className="hint">Le client signe directement à l'écran, au doigt ou au stylet. La signature est intégrée au PDF.</span>
+
+          {erreur && <p className="hint alerte"><Icon name="alert" size={13} /> {erreur}</p>}
+        </div>
+
+        <div className="form-actions contrat-form-actions">
+          <button className="btn-ghost" onClick={onClose} disabled={enCours}>Annuler</button>
+          <button className="btn-primary" onClick={generer} disabled={enCours}>
+            {enCours ? "Génération du PDF…" : "Générer le contrat"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
   const isEditing = !!editingClient;
   const [nom, setNom] = useState(editingClient?.nom || "");
   const [raisonSociale, setRaisonSociale] = useState(editingClient?.raisonSociale || "");
@@ -7750,6 +8156,7 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
   const [contrat, setContrat] = useState(editingClient?.contrat || null);
   const [blankContractType, setBlankContractType] = useState(null); // "air_air" | "air_eau" | "air_air_b2b" | "air_eau_b2b" | null
   const [showOwnContract, setShowOwnContract] = useState(false);
+  const [showContratForm, setShowContratForm] = useState(false);
   const contractFileRef = useRef();
 
   const addMachine = () => setMachines((list) => [...list, blankMachine()]);
@@ -7883,8 +8290,18 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
 
       <label className="block mt">Contrat de maintenance</label>
       <div className="contract-box">
-        <div className="contract-templates-group">
-          <span className="contract-templates-label">Standard</span>
+        <div className="contrat-creer">
+          <button type="button" className="btn-primary small" onClick={() => setShowContratForm(true)}>
+            <Icon name="report" size={14} /> Créer le contrat depuis cette fiche
+          </button>
+          <span className="hint">
+            Le matériel, l'adresse et les coordonnées de la fiche sont repris automatiquement. Montant libre,
+            signature à l'écran, PDF enregistré sur la fiche et rangé dans le dossier du client.
+          </span>
+        </div>
+
+        <div className="contract-templates-group contrat-modeles-vierges">
+          <span className="contract-templates-label">Modèles vierges — Standard</span>
           <div className="contract-templates">
             <button type="button" className="btn-ghost small btn-b2b" onClick={() => setBlankContractType("air_air")}>
               <Icon name="report" size={14} /> PAC air/air
@@ -7962,6 +8379,20 @@ function ClientForm({ editingClient, onCancel, onSubmit }) {
           filename={contrat.nom || "contrat.pdf"}
           title={"Contrat — " + nom}
           onClose={() => setShowOwnContract(false)}
+        />
+      )}
+
+      {showContratForm && (
+        <ContratForm
+          client={{ nom, raisonSociale, adresse, email, tel, siren, tva, professionnel: estProfessionnel, moisEcheance, machines }}
+          settings={settings}
+          onClose={() => setShowContratForm(false)}
+          onGenerated={(doc, moisChoisi) => {
+            setContrat(doc);
+            if (moisChoisi && !moisEcheance) setMoisEcheance(moisChoisi);
+            setShowContratForm(false);
+            setShowOwnContract(true);
+          }}
         />
       )}
 
@@ -9594,6 +10025,309 @@ function buildReportHtml(report, settings, clients) {
 </html>`;
 }
 
+/* ---------- PDF du contrat de maintenance ----------
+   Reprend les modèles validés : même suite d'articles, version particulier
+   ou version B2B selon le client, pour la PAC air/air et la PAC air/eau. */
+
+function ligneMateriel(label, valeur) {
+  if (!valeur) return "";
+  return `<div class="pdf-mat-ligne"><span class="pdf-mat-label">${escapeHtml(label)} :</span><span class="pdf-mat-valeur">${escapeHtml(valeur)}</span></div>`;
+}
+
+function materielContratHtml(machines, type, extra) {
+  const conf = TYPES_CONTRAT.find((t) => t.id === type) || TYPES_CONTRAT[0];
+  let html = "";
+  let numExt = 0;
+  let numInt = 0;
+  (machines || []).forEach((m) => {
+    const ext = normalizeUnits(m.exterieur);
+    const int = normalizeUnits(m.interieur);
+    ext.forEach((u) => {
+      if (!u.marque && !u.modele && !u.serie && !u.puissance) return;
+      numExt += 1;
+      const fluide = [(u.fluide || "").trim(), u.quantiteFluide ? String(u.quantiteFluide).replace(".", ",") + " kg" : ""].filter(Boolean).join(" — ");
+      html += `<div class="pdf-mat-bloc pdf-bloc-insecable">
+        <p class="pdf-mat-titre">Groupe extérieur ${numExt}</p>
+        ${ligneMateriel("Marque", u.marque)}
+        ${ligneMateriel("Modèle", u.modele)}
+        ${ligneMateriel("Numéro de série", u.serie)}
+        ${ligneMateriel(conf.puissance, u.puissance)}
+        ${ligneMateriel("Type et charge de fluide frigorigène", fluide)}
+      </div>`;
+    });
+    int.forEach((u) => {
+      if (!u.marque && !u.modele && !u.serie) return;
+      numInt += 1;
+      html += `<div class="pdf-mat-bloc pdf-bloc-insecable">
+        <p class="pdf-mat-titre">${escapeHtml(conf.interieurLabel)} ${numInt}</p>
+        ${ligneMateriel("Marque", u.marque)}
+        ${ligneMateriel("Modèle", u.modele)}
+        ${ligneMateriel("Numéro de série", u.serie)}
+      </div>`;
+    });
+  });
+  if (numInt > 0 && conf.compteLabel) {
+    html = `<p class="pdf-mat-compte"><strong>${escapeHtml(conf.compteLabel)} :</strong> ${numInt}</p>` + html;
+  }
+  // Air/eau : deux informations qui ne figurent pas sur la fiche client.
+  if (extra && (extra.ballonEcs || extra.emetteurs)) {
+    html += `<div class="pdf-mat-bloc pdf-bloc-insecable">
+      ${ligneMateriel("Ballon ECS associé (marque / volume)", extra.ballonEcs)}
+      ${ligneMateriel("Type d'émetteurs de chauffage", extra.emetteurs)}
+    </div>`;
+  }
+  return html || `<p class="pdf-clause-texte">Aucun matériel renseigné.</p>`;
+}
+
+function buildContratHtml(contrat, client, settings) {
+  const entreprise = settings?.entreprise || {};
+  const conf = TYPES_CONTRAT.find((t) => t.id === contrat.typeContrat) || TYPES_CONTRAT[0];
+  const pro = !!contrat.b2b;
+  const cle = pro ? "b2b" : "b2c";
+  const clientNom = client.raisonSociale || client.nom || "";
+
+  let n = 0;
+  // Un article est gardé d'un seul tenant (jamais coupé entre deux pages),
+  // sauf s'il est trop long pour tenir sur une page : dans ce cas on laisse
+  // la coupure se faire, en gardant le titre collé à son premier paragraphe
+  // et les puces et lignes de tableau insécables.
+  const LONGUEUR_MAX_INSECABLE = 1800;
+  const art = (t, contenu) => {
+    n += 1;
+    const texte = String(contenu).replace(/<[^>]+>/g, " ");
+    const court = texte.length <= LONGUEUR_MAX_INSECABLE;
+    return `<div class="pdf-article-bloc${court ? " pdf-bloc-insecable" : ""}">` +
+      `<h3 class="pdf-article">Article ${n} — ${escapeHtml(t)}</h3>${contenu}</div>`;
+  };
+  const para = (t) => `<p class="pdf-clause-texte">${nl2br(escapeHtml(t))}</p>`;
+  const puces = (l) => `<ul class="pdf-puces">${l.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`;
+  const champ = (label, valeur) => `<tr><td class="pdf-champ-label">${escapeHtml(label)}</td><td>${escapeHtml(valeur || "")}</td></tr>`;
+
+  let body = "";
+
+  /* En-tête */
+  if (entreprise.logo) body += `<div class="pdf-contrat-logo"><img src="${entreprise.logo}" alt="" /></div>`;
+  body += `<h1>Contrat de maintenance${pro ? " B2B" : ""}</h1>`;
+  body += `<p class="pdf-contrat-soustitre">${escapeHtml(conf.label)}${contrat.reference ? ` — n° ${escapeHtml(contrat.reference)}` : ""}</p>`;
+
+  /* Les parties */
+  body += `<h3 class="pdf-article">Le Prestataire</h3>`;
+  body += `<table class="pdf-table pdf-bloc-insecable"><tbody>
+    ${champ("Raison sociale", entreprise.nom)}
+    ${entreprise.formeJuridique ? champ("Forme juridique et capital", entreprise.formeJuridique) : ""}
+    ${champ("Adresse du siège", [entreprise.adresse, entreprise.codePostalVille].filter(Boolean).join(" "))}
+    ${champ("Téléphone", entreprise.telephone)}
+    ${champ("Email", entreprise.email)}
+    ${champ("SIRET", entreprise.siret)}
+    ${champ("Attestation de capacité fluides frigorigènes n°", entreprise.attestationCapacite)}
+    ${champ("Représenté par", settings?.technicien?.nom)}
+  </tbody></table>`;
+  body += `<p class="pdf-contrat-denomination">Ci-après dénommé « le Prestataire »,</p>`;
+  body += `<p class="pdf-contrat-et">ET</p>`;
+  body += `<h3 class="pdf-article">Le Client</h3>`;
+  body += `<table class="pdf-table pdf-bloc-insecable"><tbody>
+    ${champ("Nom / raison sociale", clientNom)}
+    ${client.raisonSociale && client.nom ? champ("Représenté par", client.nom) : ""}
+    ${champ("Adresse", client.adresse)}
+    ${champ("Téléphone", client.tel)}
+    ${champ("Email", client.email)}
+    ${client.siren ? champ("SIREN", client.siren) : ""}
+    ${client.tva ? champ("N° TVA intracommunautaire", client.tva) : ""}
+  </tbody></table>`;
+  body += `<p class="pdf-contrat-denomination">Ci-après dénommé « le Client »,</p>`;
+  body += `<p class="pdf-contrat-convenu">Il a été convenu ce qui suit :</p>`;
+
+  /* Article 1 — Objet */
+  body += art("Objet du contrat", para(CONTRAT_OBJET[conf.id]));
+
+  /* Article 2 — Désignation de l'installation */
+  body += art(
+    "Désignation de l'installation (matériel concerné)",
+    `<p class="pdf-clause-texte"><strong>Adresse d'installation :</strong> ${escapeHtml(contrat.adresseSite || client.adresse || "")}</p>` +
+      materielContratHtml(contrat.machines, conf.id, { ballonEcs: contrat.ballonEcs, emetteurs: contrat.emetteurs })
+  );
+
+  /* Article 3 — Nature et périodicité */
+  body += art(
+    "Nature et périodicité des prestations",
+    `<table class="pdf-table pdf-bloc-insecable"><tbody>
+      ${champ("Nombre de visites d'entretien programmées", String(contrat.visites || "1"))}
+      ${champ("Périodicité", contrat.periodicite || (contrat.mois ? "Annuelle, au mois de " + MOIS_LISIBLES[Number(contrat.mois)] : "Annuelle"))}
+    </tbody></table>` +
+      para("Lors de chaque visite, le Prestataire s'engage à réaliser notamment :") +
+      puces(CONTRAT_PRESTATIONS[conf.id]) +
+      para(CONTRAT_MENTION_REGLEMENTAIRE[conf.id])
+  );
+
+  /* Article 4 — Obligations du Prestataire */
+  body += art("Obligations du Prestataire", puces(CONTRAT_OBLIGATIONS_PRESTATAIRE));
+
+  /* Article 5 — Obligations du Client */
+  body += art("Obligations du Client", puces(CONTRAT_OBLIGATIONS_CLIENT[cle]));
+
+  /* Article 6 — Reconduction tacite */
+  body += art(pro ? "Reconduction tacite" : "Reconduction tacite : information légale", para(CONTRAT_RECONDUCTION[cle]));
+
+  /* Article 7 — Exclusions */
+  body += art("Exclusions", para(CONTRAT_EXCLUSIONS));
+
+  /* Article 8 — Prix */
+  const ht = nombreDepuisSaisie(contrat.montantHT);
+  const taux = nombreDepuisSaisie(contrat.tauxTva);
+  const ttc = ht !== null && taux !== null ? ht * (1 + taux / 100) : null;
+  body += art(
+    "Prix et modalités de paiement",
+    `<table class="pdf-table pdf-bloc-insecable"><tbody>
+      ${champ("Prix annuel de l'entretien (HT)", ht !== null ? montantLisible(ht) + " €" : "")}
+      ${champ("TVA applicable", taux !== null ? montantLisible(taux) + " %" : "")}
+      ${champ("Prix annuel TTC", ttc !== null ? montantLisible(ttc) + " €" : "")}
+      ${champ("Modalités et échéance de paiement", contrat.modalitesPaiement)}
+    </tbody></table>` +
+      para("Le prix est révisable chaque année à la date anniversaire du contrat, selon les modalités convenues entre les parties.")
+  );
+
+  /* Article 9 — Durée et reconduction */
+  body += art(
+    "Durée et reconduction",
+    `<table class="pdf-table pdf-bloc-insecable"><tbody>
+      ${champ("Date de début du contrat", dateFrDepuisIso(contrat.dateDebut))}
+      ${champ("Durée initiale", String(contrat.duree || "1") + " an" + (Number(contrat.duree) > 1 ? "s" : ""))}
+    </tbody></table>` +
+      para(
+        pro
+          ? "Les modalités de reconduction tacite du présent contrat sont précisées à l'article 6 ci-avant."
+          : "Les dispositions légales applicables en cas de reconduction tacite du présent contrat sont reproduites à l'article 6 ci-avant."
+      )
+  );
+
+  /* Article 10 — Résiliation */
+  body += art("Résiliation", para(CONTRAT_RESILIATION));
+
+  /* Article 11 — Droit de rétractation (particuliers uniquement) */
+  if (!pro) body += art("Droit de rétractation", para(CONTRAT_RETRACTATION));
+
+  /* Fluides, RGPD, révision du prix */
+  body += art("Fluides frigorigènes et environnement", para(CONTRAT_FLUIDES));
+  body += art("Protection des données personnelles", para(CONTRAT_RGPD));
+  body += art(
+    "Révision du prix du contrat",
+    para(CONTRAT_REVISION_INTRO) +
+      `<p class="pdf-formule">P = P0 × (S / S0)</p>` +
+      puces(CONTRAT_REVISION_PUCES) +
+      para(CONTRAT_REVISION_FIN)
+  );
+
+  /* Médiation (particuliers uniquement) */
+  if (!pro) {
+    body += art(
+      "Médiation et réclamations",
+      para(CONTRAT_MEDIATION) +
+        `<table class="pdf-table pdf-bloc-insecable"><tbody>
+          ${champ("Médiateur de la consommation compétent", entreprise.mediateurNom)}
+          ${champ("Coordonnées / site internet du médiateur", entreprise.mediateurCoordonnees)}
+        </tbody></table>`
+    );
+  }
+
+  body += art("Droit applicable et juridiction compétente", para(CONTRAT_DROIT_APPLICABLE));
+
+  /* Conditions particulières ajoutées à la volée */
+  if (contrat.conditionsParticulieres && contrat.conditionsParticulieres.trim()) {
+    body += art("Conditions particulières", para(contrat.conditionsParticulieres.trim()));
+  }
+
+  /* Signatures */
+  const lieu = contrat.lieu || entreprise.codePostalVille || "";
+  body += `<div class="pdf-bloc-insecable pdf-signature-zone">
+    <h3 class="pdf-article">Signatures</h3>
+    <table class="pdf-table pdf-table-fait"><tbody>
+      <tr>
+        <td>Fait à</td><td>${escapeHtml(lieu)}</td>
+        <td>le</td><td>${escapeHtml(dateFrDepuisIso(contrat.dateSignature) || dateFrDepuisIso(contrat.dateDebut))}</td>
+      </tr>
+    </tbody></table>
+    <p class="pdf-clause-texte">En deux exemplaires originaux, dont un remis à chaque partie. Le Client reconnaît avoir reçu un exemplaire du présent contrat avant sa signature.</p>
+    <div class="pdf-signatures">
+      <div>
+        <strong>Pour le Prestataire</strong>
+        <span class="pdf-sig-nom">${escapeHtml(settings?.technicien?.nom || entreprise.nom || "")} — « Lu et approuvé »</span>
+        ${contrat.signatureTech ? `<img class="pdf-sig" src="${contrat.signatureTech}" />` : `<div class="pdf-sig-vide"></div>`}
+      </div>
+      <div>
+        <strong>Pour le Client</strong>
+        <span class="pdf-sig-nom">${escapeHtml(clientNom)} — « Lu et approuvé »</span>
+        ${contrat.signatureClient ? `<img class="pdf-sig" src="${contrat.signatureClient}" />` : `<div class="pdf-sig-vide"></div>`}
+      </div>
+    </div>
+    ${contrat.signatureClient ? `<p class="pdf-contrat-mention">Signé électroniquement le ${escapeHtml(dateFrDepuisIso(contrat.dateSignature))} par ${escapeHtml(clientNom)}.</p>` : ""}
+  </div>`;
+
+  if (entreprise.clausePied && entreprise.clausePied.trim()) {
+    body += `<div class="pdf-footer-clause">${nl2br(entreprise.clausePied.trim())}</div>`;
+  }
+
+  return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>Contrat de maintenance — ${escapeHtml(clientNom)}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600&display=swap');
+  * { box-sizing: border-box; }
+  body { font-family: 'Inter', -apple-system, sans-serif; color: #1B2733; margin: 0; background: #EEF2F1; }
+  .pdf-toolbar { position: sticky; top: 0; background: #fff; padding: 14px 24px; border-bottom: 1px solid #D7DEDD; display: flex; justify-content: flex-end; z-index: 10; }
+  .pdf-toolbar button { display: inline-flex; align-items: center; gap: 6px; background: #2F6FA3; color: #fff; border: none; padding: 10px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .pdf-page { max-width: 760px; margin: 30px auto; background: #fff; padding: 48px; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 30px; font-weight: 700; margin: 0 0 4px; text-align: center; text-transform: uppercase; letter-spacing: 0.5px; }
+  p { font-size: 13.5px; line-height: 1.55; margin: 0 0 10px; }
+  .pdf-contrat-logo { text-align: center; margin-bottom: 14px; }
+  .pdf-contrat-logo img { max-width: 220px; max-height: 120px; object-fit: contain; }
+  .pdf-contrat-soustitre { font-family: 'Barlow Condensed', sans-serif; font-size: 19px; color: #2F6FA3; margin: 0 0 24px; text-align: center; }
+  .pdf-article-bloc { margin-bottom: 2px; }
+  .pdf-article { font-family: 'Inter', sans-serif; font-size: 15px; font-weight: 700; color: #1B2733; margin: 22px 0 6px; text-decoration: underline; text-underline-offset: 3px; break-after: avoid; page-break-after: avoid; }
+  .pdf-clause-texte { font-size: 13.5px; line-height: 1.55; color: #26323B; margin: 0 0 10px; }
+  .pdf-puces { margin: 4px 0 12px; padding-left: 20px; }
+  .pdf-puces li { font-size: 13.5px; line-height: 1.5; margin-bottom: 6px; break-inside: avoid; page-break-inside: avoid; }
+  .pdf-table { width: 100%; border-collapse: collapse; margin: 10px 0 14px; font-size: 13px; border: 1px solid #C7D0CE; }
+  .pdf-table td { border: 1px solid #C7D0CE; padding: 7px 9px; vertical-align: top; }
+  .pdf-table tr { break-inside: avoid; page-break-inside: avoid; }
+  .pdf-champ-label { width: 42%; color: #4A5860; }
+  .pdf-table-fait td:nth-child(1), .pdf-table-fait td:nth-child(3) { width: 12%; color: #4A5860; }
+  .pdf-table-fait td:nth-child(2) { width: 48%; font-weight: 600; }
+  .pdf-table-fait td:nth-child(4) { font-weight: 600; }
+  .pdf-bloc-insecable { break-inside: avoid; page-break-inside: avoid; }
+  .pdf-mat-bloc { margin: 0 0 14px; padding: 10px 12px; border: 1px solid #C7D0CE; border-radius: 6px; }
+  .pdf-mat-titre { font-weight: 700; font-size: 14px; margin: 0 0 6px; text-decoration: underline; text-underline-offset: 3px; }
+  .pdf-mat-ligne { display: flex; gap: 8px; font-size: 13px; line-height: 1.5; }
+  .pdf-mat-label { color: #4A5860; min-width: 230px; }
+  .pdf-mat-valeur { font-weight: 600; }
+  .pdf-mat-compte { font-size: 13.5px; margin: 0 0 12px; }
+  .pdf-contrat-denomination { font-size: 12.5px; font-style: italic; color: #4A5860; margin: -6px 0 14px; }
+  .pdf-contrat-et { text-align: center; font-weight: 700; margin: 10px 0 14px; }
+  .pdf-contrat-convenu { font-weight: 600; margin: 16px 0 4px; }
+  .pdf-formule { text-align: center; font-size: 16px; font-weight: 700; margin: 10px 0 14px; }
+  .pdf-signature-zone { margin-top: 26px; }
+  .pdf-signatures { display: flex; gap: 40px; margin-top: 12px; }
+  .pdf-signatures > div { flex: 1; font-size: 13px; }
+  .pdf-sig-nom { display: block; font-size: 12px; color: #6D7A80; margin: 2px 0 4px; }
+  .pdf-sig { max-width: 210px; max-height: 85px; display: block; margin-top: 6px; }
+  .pdf-sig-vide { height: 85px; border-bottom: 1px solid #C7D0CE; }
+  .pdf-contrat-mention { font-size: 11.5px; color: #6D7A80; margin-top: 10px; }
+  .pdf-footer-clause { margin-top: 28px; padding-top: 14px; border-top: 1px solid #EAEDEC; font-size: 11px; line-height: 1.5; color: #8A959A; white-space: pre-wrap; }
+  @media print {
+    .pdf-toolbar { display: none; }
+    body { background: #fff; }
+    .pdf-page { box-shadow: none; margin: 0; max-width: 100%; padding: 0; }
+  }
+</style>
+</head>
+<body>
+  <div class="pdf-toolbar"><button onclick="window.print()">Imprimer / Enregistrer en PDF</button></div>
+  <div class="pdf-page">${body}</div>
+</body>
+</html>`;
+}
+
 /* ---------- CSS ---------- */
 const css = `
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Barlow+Condensed:wght@500;600;700&display=swap');
@@ -10092,6 +10826,16 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .contract-templates { display: flex; gap: 8px; flex-wrap: wrap; }
 .contract-templates-group { display: flex; flex-direction: column; gap: 6px; }
 .contract-templates-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; color: var(--encre-4); }
+.contrat-creer { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding-bottom: 14px; margin-bottom: 12px; border-bottom: 1px solid var(--trait); }
+.contrat-creer .hint { margin: 0; }
+.contrat-modeles-vierges { opacity: 0.9; }
+.contrat-modal-box { height: auto; max-width: 720px; max-height: 92vh; display: flex; flex-direction: column; }
+.contrat-form-corps { padding: 18px 20px 4px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.contrat-form-actions { padding: 0 20px 18px; margin-top: 10px; }
+.contrat-machines { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.contrat-machine-ligne { margin-bottom: 6px; }
+.contrat-ttc { font-weight: 600; color: var(--bleu); margin: -6px 0 10px; }
+.contrat-clauses { width: 100%; font-family: inherit; font-size: 13px; line-height: 1.5; padding: 12px; border: 1px solid var(--trait); border-radius: 8px; background: var(--fond); color: var(--encre); margin: 8px 0 4px; }
 .btn-b2b { border-color: var(--orange); color: var(--orange-fonce); }
 .btn-b2b:hover { background: var(--orange-clair); }
 .contract-import { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
