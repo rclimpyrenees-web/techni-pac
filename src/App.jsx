@@ -4728,7 +4728,8 @@ function useRangementOneDrive({ reports, clients, settings, upsertReport, upsert
           const res = await appelerOneDrive("ranger", {
             client: [c.nom, c.raisonSociale, libelleClient(c)].filter(Boolean),
             sous_dossier: "CONTRAT",
-            nom_fichier: `{NOM} ${datePourFichier(c.contrat.dateAjout)} CONTRAT.${extension}`,
+            // Même nom que le contrat généré : « Contrat maintenance - AGULLO Maxime.pdf ».
+            nom_fichier: `Contrat maintenance - ${String(c.raisonSociale || c.nom || "client").replace(/[\\/:*?"<>|]/g, "-").trim()}.${extension}`,
             contenu: c.contrat.data,
             item_id: c.onedriveContrat?.itemId || undefined,
           });
