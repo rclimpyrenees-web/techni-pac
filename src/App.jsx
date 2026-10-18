@@ -1849,6 +1849,13 @@ function AppContenu() {
     syncFactureToPennylane(itemAvecMontantAJour, report);
   };
 
+  // Facture marquée payée par erreur : elle repasse en impayée.
+  const handleImpayer = (id) => {
+    const item = facturation.find((f) => f.id === id);
+    if (!item) return;
+    upsertFacturation({ ...item, payee: false, pennylaneStatus: item.pennylaneInvoiceId ? "envoyée" : item.pennylaneStatus });
+  };
+
   const handleDeleteFacturation = (id) => {
     removeFacturation(id);
   };
@@ -2090,6 +2097,7 @@ function AppContenu() {
             onNavigate={allerAOnglet}
             focusClient={focusClient}
             onDeleteFacturation={handleDeleteFacturation}
+            onImpayer={handleImpayer}
             settings={settings}
           />
         )}
@@ -2163,6 +2171,7 @@ function AppContenu() {
             onSyncPennylane={actualiserFacturePennylane}
             onRetryPennylane={handleRetryPennylane}
             onDeleteFacturation={handleDeleteFacturation}
+            onImpayer={handleImpayer}
             onOpenClient={goToClient}
           />
         )}
@@ -3756,15 +3765,62 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
   const derniereReponse = [...messages].reverse().find((m) => m.role === "assistant");
   const derniereErreur = derniereReponse && derniereReponse.erreur ? derniereReponse.content : "";
 
+  // Chaque proposition dans sa propre carte, comme le reste de l'appli.
+  const [apercusOuverts, setApercusOuverts] = useState({});
+  const LIBELLES_ACTION = {
+    email: "E-mail", planning: "Planning", planning_fait: "Intervention faite", devis_a_faire: "Devis à faire",
+    devis_a_faire_maj: "Prix fournisseur", classer_pj: "Rangement OneDrive", regle: "Règle de classement",
+    dossier: "Dossier OneDrive", pennylane_fournisseur: "Pennylane", debrief_valider: "Débrief", suppression: "Suppression",
+  };
+  const ICONES_ACTION = { email: "mail", suppression: "trash", planning: "calendar", planning_fait: "check", devis_a_faire: "quote", devis_a_faire_maj: "quote", classer_pj: "folder", dossier: "folder", pennylane_fournisseur: "invoice" };
+  const detailsEmail = (a) => {
+    const it = a.item || {};
+    const pj = [
+      ...(Array.isArray(it.pieces_jointes) ? it.pieces_jointes.map((x) => x?.nom) : []),
+      it.rapport?.nom, it.contrat?.nom,
+    ].filter(Boolean);
+    let objet = it.objet || "";
+    if (!objet) { const m = String(a.resume || "").match(/«\s*([^»]+?)\s*»/); if (m) objet = m[1]; }
+    if (!pj.length) { const m = String(a.resume || "").match(/pièces? jointes? : (.+)$/); if (m) pj.push(...m[1].split(", ")); }
+    let dest = it.a || "";
+    if (!dest) { const m = String(a.resume || "").match(/E-mail à (\S+@\S+?|[^—]+?) —/); if (m) dest = m[1].trim(); }
+    return { dest, objet, pj };
+  };
   const carteActions = actions.length > 0 && (
-    <div className="card assistant-actions">
-      <div className="assistant-actions-titre">À valider</div>
-      {actions.map((a) => (
-        <div key={a.id} className="assistant-action">
-          <div className="assistant-action-texte">
-            {a.resume}
-            {a.apercu && <div className="assistant-action-apercu">{a.apercu}</div>}
+    <div className="assistant-actions-liste">
+      <div className="assistant-actions-titre">À valider{actions.length > 1 ? ` · ${actions.length}` : ""}</div>
+      {actions.map((a) => {
+        const mail = a.type === "email" ? detailsEmail(a) : null;
+        const ouvert = !!apercusOuverts[a.id];
+        const long = String(a.apercu || "").split("\n").length > 7 || String(a.apercu || "").length > 360;
+        return (
+        <div key={a.id} className={"card assistant-action-carte" + (a.type === "suppression" ? " danger" : "")}>
+          <div className="assistant-action-tete">
+            <span className="assistant-action-type"><Icon name={ICONES_ACTION[a.type] || "check"} size={13} /> {LIBELLES_ACTION[a.type] || "Proposition"}</span>
           </div>
+          {mail && mail.dest ? (
+            <div className="assistant-action-mail">
+              <div className="assistant-action-titre">{mail.dest}</div>
+              {mail.objet && <div className="assistant-action-sous">{mail.objet}</div>}
+              {mail.pj.length > 0 && (
+                <div className="assistant-action-pj">
+                  {mail.pj.map((n) => <span key={n} className="assistant-pj"><Icon name="report" size={12} /> {n}</span>)}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="assistant-action-titre">{a.resume}</div>
+          )}
+          {a.apercu && (
+            <>
+              <div className={"assistant-action-apercu" + (long && !ouvert ? " replie" : "")}>{a.apercu}</div>
+              {long && (
+                <button type="button" className="assistant-action-voir" onClick={() => setApercusOuverts((o) => ({ ...o, [a.id]: !ouvert }))}>
+                  {ouvert ? "Réduire" : a.type === "email" ? "Lire tout le mail" : "Tout afficher"}
+                </button>
+              )}
+            </>
+          )}
           <div className="assistant-action-boutons">
             <button className="btn-ghost small" onClick={() => annulerAction(a)} disabled={actionsEnCours}>Annuler</button>
             <button className={"btn-small " + (a.type === "suppression" ? "btn-supprime" : "btn-valide")} onClick={() => validerAction(a)} disabled={actionsEnCours}>
@@ -3772,7 +3828,8 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
             </button>
           </div>
         </div>
-      ))}
+        );
+      })}
       {actions.length > 1 && (
         <button className="btn-primary assistant-tout-valider" onClick={validerTout} disabled={actionsEnCours}>Tout valider</button>
       )}
@@ -7477,7 +7534,7 @@ function MachineBlock({ machine }) {
   );
 }
 
-function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, focusClient, onDeleteFacturation, settings }) {
+function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, focusClient, onDeleteFacturation, onImpayer, settings }) {
   const [recherche, setRecherche] = useState("");
 
   // Tri alphabétique sur le libellé réellement affiché — la raison sociale pour
@@ -7644,7 +7701,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
       )}
 
       {client && (
-        <ClientHistory client={client} reports={reports} devisAFaire={devisAFaire} devisEnCours={devisEnCours} facturation={facturation} onOpenReport={onOpenReport} onNavigate={onNavigate} onDeleteFacturation={onDeleteFacturation} />
+        <ClientHistory client={client} reports={reports} devisAFaire={devisAFaire} devisEnCours={devisEnCours} facturation={facturation} onOpenReport={onOpenReport} onNavigate={onNavigate} onDeleteFacturation={onDeleteFacturation} onImpayer={onImpayer} />
       )}
 
       {showForm && (
@@ -7801,7 +7858,7 @@ function ClientFiche({ client, reports, ouverte, onToggle, showMachines, setShow
   );
 }
 
-function ClientHistory({ client, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, onDeleteFacturation }) {
+function ClientHistory({ client, reports, devisAFaire, devisEnCours, facturation, onOpenReport, onNavigate, onDeleteFacturation, onImpayer }) {
   const clientReports = reports.filter((r) => r.client === client.nom);
   const clientDevisAFaire = devisAFaire.filter((d) => d.client === client.nom);
   const clientDevisEnCours = devisEnCours.filter((d) => d.client === client.nom);
@@ -7877,7 +7934,7 @@ function ClientHistory({ client, reports, devisAFaire, devisEnCours, facturation
                   {!f.facture ? (
                     <span className="pill pill-muted">À facturer</span>
                   ) : f.payee ? (
-                    <span className="pill pill-ok">Payée</span>
+                    <PastillePayee onImpayer={onImpayer ? () => onImpayer(f.id) : null} />
                   ) : (
                     <span className="pill pill-alert">Impayée</span>
                   )}
@@ -9504,7 +9561,26 @@ function trierParDate(liste) {
   });
 }
 
-function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylane, onRetryPennylane, onDeleteFacturation, onOpenClient }) {
+// Pastille « Payée » : un appui permet de la repasser en impayée (erreur de
+// saisie), après confirmation.
+function PastillePayee({ onImpayer, avecIcone = false }) {
+  if (!onImpayer) return <span className="pill pill-ok">{avecIcone && <Icon name="check" size={13} />} Payée</span>;
+  return (
+    <button
+      type="button"
+      className="pill pill-ok pill-clickable"
+      title="Marquée payée par erreur ? Appuie pour la repasser en impayée"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (window.confirm("Cette facture n'est pas payée ?\n\nElle repasse dans les factures impayées.")) onImpayer();
+      }}
+    >
+      {avecIcone && <Icon name="check" size={13} />} Payée
+    </button>
+  );
+}
+
+function Facturation({ clients, facturation, onFacturer, onPayer, onImpayer, onSyncPennylane, onRetryPennylane, onDeleteFacturation, onOpenClient }) {
   const aFacturer = trierParDate(facturation.filter((f) => !f.facture));
   const impayees = trierParDate(facturation.filter((f) => f.facture && !f.payee));
   const payees = trierParDate(facturation.filter((f) => f.facture && f.payee));
@@ -9640,7 +9716,7 @@ function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylan
                   </div>
                 </div>
                 <div className="row-actions">
-                  <span className="pill pill-ok"><Icon name="check" size={13} /> Payée</span>
+                  <PastillePayee avecIcone onImpayer={onImpayer ? () => onImpayer(f.id) : null} />
                   <span className="row-delete-hover" onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
                 </div>
               </li>
@@ -11498,6 +11574,23 @@ textarea { resize: vertical; }
 .assistant-action-boutons .btn-ghost.small { margin: 0; background: var(--carte); }
 .assistant-action-boutons .btn-small { display: inline-flex; align-items: center; gap: 4px; }
 .assistant-tout-valider { margin-top: 8px; width: 100%; justify-content: center; }
+/* Propositions à valider : une carte par proposition, comme le reste de l'appli. */
+.assistant-actions-liste { display: flex; flex-direction: column; gap: 12px; margin-top: 4px; }
+.assistant-actions-liste .assistant-actions-titre { margin: 4px 4px 0; color: var(--acc-texte, var(--vert-fonce)); }
+.assistant-actions-liste .card.assistant-action-carte { margin: 0; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; }
+.assistant-action-carte.danger { border-color: rgba(229,83,75,0.45); }
+.assistant-action-tete { display: flex; align-items: center; justify-content: space-between; }
+.assistant-action-type { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--acc-doux, var(--fond-doux)); color: var(--acc-texte, var(--encre)); }
+.assistant-action-carte.danger .assistant-action-type { background: rgba(229,83,75,0.15); color: var(--rouge); }
+.assistant-action-titre { font-size: 16px; font-weight: 700; color: var(--encre); line-height: 1.35; overflow-wrap: anywhere; }
+.assistant-action-sous { font-size: 14px; color: var(--encre-3); margin-top: 2px; }
+.assistant-action-pj { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.assistant-pj { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 5px 10px; border-radius: 10px; font-size: 12.5px; background: var(--fond-doux); border: 1px solid var(--verre-bord, var(--trait)); color: var(--encre-2); overflow-wrap: anywhere; }
+.assistant-actions-liste .assistant-action-apercu { margin: 2px 0 0; padding: 0 0 0 12px; background: none; border: none; border-left: 3px solid var(--acc-mi, var(--trait)); border-radius: 0; font-size: 14px; line-height: 1.55; color: var(--encre-2); white-space: pre-wrap; max-height: none; overflow: visible; }
+.assistant-actions-liste .assistant-action-apercu.replie { max-height: 9.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 65%, transparent); mask-image: linear-gradient(#000 65%, transparent); }
+.assistant-action-voir { align-self: flex-start; background: none; border: none; padding: 2px 0; color: var(--acc-texte, var(--bleu)); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.assistant-actions-liste .assistant-action-boutons { justify-content: flex-end; margin-top: 4px; }
+.assistant-actions-liste .assistant-action-boutons button { min-height: 40px; padding: 8px 16px; border-radius: 12px; font-size: 14.5px; }
 .assistant-saisie { position: sticky; bottom: 0; background: var(--fond); padding: 10px 0 calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--trait-clair); }
 .assistant-info-micro { margin: 0 0 6px; color: var(--orange-fonce); }
 .assistant-saisie-ligne { display: flex; align-items: flex-end; gap: 8px; }
