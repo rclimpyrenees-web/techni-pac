@@ -1541,11 +1541,22 @@ function AppContenu() {
     const sansAccent = (t) => (t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
     const cible = sansAccent(nomRapport);
     if (!cible) return undefined;
-    return (
+    const exacte =
       clients.find((c) => c.nom === nomRapport) ||
       clients.find((c) => sansAccent(c.nom) === cible) ||
-      clients.find((c) => c.raisonSociale && sansAccent(c.raisonSociale) === cible)
-    );
+      clients.find((c) => c.raisonSociale && sansAccent(c.raisonSociale) === cible);
+    if (exacte) return exacte;
+    // Nom incomplet dans le rapport (« POUYFOURCAT » pour la fiche
+    // « POUYFOURCAT David ») : on prend la fiche si elle est la seule à
+    // contenir tous ces mots. Sinon, mieux vaut ne rien deviner.
+    const mots = (t) => sansAccent(t).replace(/[^a-z0-9]+/g, " ").split(" ").filter(Boolean);
+    const cherches = mots(nomRapport).filter((m) => m.length >= 3);
+    if (cherches.length === 0) return undefined;
+    const possibles = clients.filter((c) => {
+      const motsFiche = new Set([...mots(c.nom), ...mots(c.raisonSociale)]);
+      return cherches.every((m) => motsFiche.has(m));
+    });
+    return possibles.length === 1 ? possibles[0] : undefined;
   };
 
   const syncFactureToPennylane = async (facturationEntry, r) => {
@@ -7490,14 +7501,16 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
                     if (statut.moisNonDefini) {
                       return <span className="contrat-dot neutral" title="Mois d'entretien contractuel non renseigné" />;
                     }
-                    const classe = statut.doneThisYear ? "ok" : statut.isOverdue ? "late" : statut.isUrgent ? "todo" : "neutral";
+                    // Vert : contrat à jour (entretien fait, ou pas encore à
+                    // faire) ; orange : à programmer ; rouge : en retard.
+                    const classe = statut.isOverdue ? "late" : statut.isUrgent ? "todo" : "ok";
                     const titre = statut.doneThisYear
                       ? `Entretien ${statut.annee} effectué`
                       : statut.isOverdue
                       ? `Entretien ${statut.annee} en retard !`
                       : statut.isUrgent
                       ? `Entretien ${statut.annee} à faire`
-                      : `Échéance : ${statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })} ${statut.annee}`;
+                      : `Contrat à jour · prochain entretien : ${statut.dueDate.toLocaleDateString("fr-FR", { month: "long" })} ${statut.annee}`;
                     return <span className={"contrat-dot " + classe} title={titre} />;
                   })()}
                 </div>
