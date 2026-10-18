@@ -1779,6 +1779,7 @@ function AppContenu() {
     if (!item || !item.pennylaneInvoiceId) return;
     try {
       const status = await pennylaneCheckStatus(item.pennylaneInvoiceId);
+      if (status.introuvable) return; // vérification automatique : on ne touche à rien
       if (status.paid && !item.payee) {
         upsertFacturation({ ...item, payee: true, pennylaneStatus: "payée" });
       } else if (!status.paid && item.pennylaneStatus !== "envoyée") {
@@ -1787,6 +1788,37 @@ function AppContenu() {
     } catch (e) {
       upsertFacturation({ ...item, pennylaneStatus: "erreur", pennylaneError: String(e?.message || e) });
     }
+  };
+
+  // Bouton 🔄 d'une facture : met à jour son statut, et la remet dans
+  // Pennylane si elle n'y est plus (supprimée à la main) ou, après accord, la
+  // remplace si elle n'y est encore qu'un brouillon (fiche client corrigée…).
+  const actualiserFacturePennylane = async (id) => {
+    const item = facturation.find((f) => f.id === id);
+    if (!item?.pennylaneInvoiceId) return;
+    const report = reports.find((r) => r.id === item.reportId);
+    const renvoyer = (ligne) => {
+      if (!report || !report.montant) {
+        upsertFacturation({ ...ligne, pennylaneStatus: "erreur", pennylaneError: "Impossible de retrouver le montant du rapport d'origine — vérifiez-le sur le rapport concerné." });
+        return;
+      }
+      const enCours = { ...ligne, montant: `${report.montant} €`, pennylaneStatus: "envoi", pennylaneError: null };
+      upsertFacturation(enCours);
+      syncFactureToPennylane(enCours, report, { remplace: ligne.pennylaneInvoiceId });
+    };
+    upsertFacturation({ ...item, pennylaneStatus: "verification", pennylaneError: null });
+    let statut;
+    try {
+      statut = await pennylaneCheckStatus(item.pennylaneInvoiceId);
+    } catch (e) {
+      upsertFacturation({ ...item, pennylaneStatus: "erreur", pennylaneError: String(e?.message || e) });
+      return;
+    }
+    if (statut.introuvable) { renvoyer(item); return; }
+    if (statut.status === "draft" && !statut.paid) {
+      if (window.confirm("Cette facture est encore en brouillon dans Pennylane.\n\nLa remplacer par une version à jour (fiche client, montant, TVA) ?")) { renvoyer(item); return; }
+    }
+    upsertFacturation({ ...item, payee: item.payee || !!statut.paid, pennylaneStatus: statut.paid ? "payée" : "envoyée", pennylaneError: null });
   };
 
   // Relance manuelle : utile si l'envoi automatique n'a jamais abouti (coupure
@@ -2128,10 +2160,7 @@ function AppContenu() {
               const item = facturation.find((f) => f.id === id);
               if (item) upsertFacturation({ ...item, payee: true });
             }}
-            onSyncPennylane={(id) => {
-              const item = facturation.find((f) => f.id === id);
-              syncPennylaneStatus(item);
-            }}
+            onSyncPennylane={actualiserFacturePennylane}
             onRetryPennylane={handleRetryPennylane}
             onDeleteFacturation={handleDeleteFacturation}
             onOpenClient={goToClient}
@@ -9524,7 +9553,6 @@ function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylan
                 {f.pennylaneInvoiceId && (
                   <button
                     className="btn-ghost small"
-                    disabled={f.pennylaneStatus === "envoi"}
                     onClick={(e) => {
                       e.stopPropagation();
                       if (window.confirm("Renvoyer cette facture vers Pennylane ?\n\nLe brouillon actuel y sera supprimé et remplacé par une nouvelle facture, avec la fiche client à jour. Impossible si la facture a déjà été finalisée dans Pennylane.")) onRetryPennylane(f.id, { renvoi: true });
@@ -9555,6 +9583,9 @@ function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylan
                 <div className="row-sub">
                   {f.intervention}
                   {f.pennylaneInvoiceId && <span className="pill pill-pennylane">Pennylane</span>}
+                  {(f.pennylaneStatus === "verification" || f.pennylaneStatus === "envoi") && (
+                    <span className="pill pill-muted">{f.pennylaneStatus === "envoi" ? "Envoi vers Pennylane…" : "Vérification…"}</span>
+                  )}
                   {f.pennylaneStatus === "erreur" && (
                     <span className="pill pill-alert pennylane-error-pill" title={f.pennylaneError}>
                       <Icon name="alert" size={11} /> Correction Pennylane impossible
@@ -9564,7 +9595,7 @@ function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylan
               </div>
               <div className="row-actions">
                 {f.pennylaneInvoiceId && (
-                  <button className="icon-btn" title="Vérifier le statut sur Pennylane" onClick={(e) => { e.stopPropagation(); onSyncPennylane(f.id); }}>
+                  <button className="icon-btn" title="Mettre à jour depuis Pennylane (et l'y remettre si elle a été supprimée)" onClick={(e) => { e.stopPropagation(); onSyncPennylane(f.id); }}>
                     <Icon name="sync" size={14} />
                   </button>
                 )}
@@ -11898,4 +11929,3 @@ input, select, textarea { border-radius: 10px; }
 .planning-day .row.done .row-title { color: var(--encre-3); }
 
 `;
-    
