@@ -239,6 +239,18 @@ const CONTRAT_MEDIATION =
 const CONTRAT_DROIT_APPLICABLE =
   "Le présent contrat est soumis au droit français. À défaut de résolution amiable ou de recours à la médiation, tout litige relatif à sa formation, son exécution ou son interprétation relève de la compétence des juridictions du ressort du domicile du défendeur ou, si le Client est un professionnel, du tribunal compétent du siège du Prestataire, sous réserve des règles d'ordre public applicables aux consommateurs.";
 
+// La périodicité écrite sur le contrat : le texte saisi, complété tout seul
+// par le mois d'intervention choisi (sans le répéter s'il est déjà écrit).
+function textePeriodicite(saisie, mois) {
+  const base = String(saisie || "").trim() || "Annuelle";
+  const nomMois = mois ? MOIS_LISIBLES[Number(mois)] : "";
+  if (!nomMois) return base;
+  const sansAccent = (t) => String(t).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (sansAccent(base).includes(sansAccent(nomMois))) return base;
+  const liaison = /^[aeiouàâéèêîôû]/i.test(nomMois) ? "d'" : "de ";
+  return base.replace(/[\s,;.]+$/, "") + ", au mois " + liaison + nomMois;
+}
+
 // Date du jour au format AAAA-MM-JJ, en heure locale (pas de décalage UTC).
 function isoLocalAujourdhui() {
   const d = new Date();
@@ -7919,28 +7931,37 @@ function blankMachine() {
    automatiquement sur la version particulier ou B2B, laisse le montant libre,
    fait signer à l'écran et produit le PDF du contrat. */
 
-function ContratForm({ client, settings, onClose, onGenerated }) {
+function ContratForm({ client, settings, initial, onClose, onGenerated }) {
   const machinesDispo = client.machines || [];
-  const [reference] = useState(() => "CTR-" + new Date().getFullYear() + "-" + String(Date.now()).slice(-5));
-  const [typeContrat, setTypeContrat] = useState(() => typeContratSuggere(machinesDispo));
-  const [b2b, setB2b] = useState(!!client.professionnel);
-  const [selection, setSelection] = useState(() => machinesDispo.map((m) => m.id));
-  const [visites, setVisites] = useState("1");
-  const [mois, setMois] = useState(client.moisEcheance || "");
-  const [periodicite, setPeriodicite] = useState("");
-  const [dateDebut, setDateDebut] = useState(isoLocalAujourdhui());
-  const [duree, setDuree] = useState("1");
-  const [montantHT, setMontantHT] = useState("");
-  const [tauxTva, setTauxTva] = useState("20");
-  const [modalitesPaiement, setModalitesPaiement] = useState("À réception de facture");
-  const [adresseSite, setAdresseSite] = useState(client.adresse || "");
-  const [ballonEcs, setBallonEcs] = useState("");
-  const [emetteurs, setEmetteurs] = useState("");
-  const [lieu, setLieu] = useState(settings?.entreprise?.codePostalVille || "");
-  const [conditionsParticulieres, setConditionsParticulieres] = useState("");
-  const [showParticulieres, setShowParticulieres] = useState(false);
-  const [signatureTech, setSignatureTech] = useState("");
-  const [signatureClient, setSignatureClient] = useState("");
+  // `initial` : les paramètres d'un contrat déjà enregistré, pour le reprendre
+  // et le refaire sans tout ressaisir.
+  const d = initial || null;
+  const serieDesUnites = (m) => [...normalizeUnits(m.exterieur), ...normalizeUnits(m.interieur)].map((u) => String(u.serie || "").trim()).filter(Boolean);
+  const [reference] = useState(() => d?.reference || "CTR-" + new Date().getFullYear() + "-" + String(Date.now()).slice(-5));
+  const [typeContrat, setTypeContrat] = useState(() => d?.typeContrat || typeContratSuggere(machinesDispo));
+  const [b2b, setB2b] = useState(d ? !!d.b2b : !!client.professionnel);
+  const [selection, setSelection] = useState(() => {
+    const series = new Set((d?.machines || []).flatMap(serieDesUnites));
+    if (series.size === 0) return machinesDispo.map((m) => m.id);
+    const gardees = machinesDispo.filter((m) => serieDesUnites(m).some((x) => series.has(x))).map((m) => m.id);
+    return gardees.length > 0 ? gardees : machinesDispo.map((m) => m.id);
+  });
+  const [visites, setVisites] = useState(d?.visites || "1");
+  const [mois, setMois] = useState(d?.mois || client.moisEcheance || "");
+  const [periodicite, setPeriodicite] = useState(d?.periodicite || "");
+  const [dateDebut, setDateDebut] = useState(d?.dateDebut || isoLocalAujourdhui());
+  const [duree, setDuree] = useState(d?.duree || "1");
+  const [montantHT, setMontantHT] = useState(d?.montantHT || "");
+  const [tauxTva, setTauxTva] = useState(d?.tauxTva || "20");
+  const [modalitesPaiement, setModalitesPaiement] = useState(d?.modalitesPaiement || "À réception de facture");
+  const [adresseSite, setAdresseSite] = useState(d?.adresseSite || client.adresse || "");
+  const [ballonEcs, setBallonEcs] = useState(d?.ballonEcs || "");
+  const [emetteurs, setEmetteurs] = useState(d?.emetteurs || "");
+  const [lieu, setLieu] = useState(d?.lieu || settings?.entreprise?.codePostalVille || "");
+  const [conditionsParticulieres, setConditionsParticulieres] = useState(d?.conditionsParticulieres || "");
+  const [showParticulieres, setShowParticulieres] = useState(!!d?.conditionsParticulieres);
+  const [signatureTech, setSignatureTech] = useState(d?.signatureTech || "");
+  const [signatureClient, setSignatureClient] = useState(d?.signatureClient || "");
   const [enCours, setEnCours] = useState(false);
   const [erreur, setErreur] = useState("");
 
@@ -7967,12 +7988,12 @@ function ContratForm({ client, settings, onClose, onGenerated }) {
       };
       const html = buildContratHtml(donnees, client, settings);
       const data = await genererPdfBase64(html);
-      // On garde les paramètres du contrat (pas les signatures, déjà dans le
-      // PDF) pour pouvoir le refaire plus tard.
+      // On garde les paramètres du contrat, signatures comprises, pour pouvoir
+      // le reprendre et le refaire plus tard sans tout ressaisir.
       const details = {
         reference, typeContrat, b2b, machines: machinesRetenues, visites, mois, periodicite,
         dateDebut, duree, montantHT, tauxTva, modalitesPaiement, adresseSite, ballonEcs, emetteurs, lieu,
-        conditionsParticulieres, dateSignature: donnees.dateSignature,
+        conditionsParticulieres, signatureTech, signatureClient, dateSignature: donnees.dateSignature,
       };
       onGenerated(
         {
@@ -8000,7 +8021,7 @@ function ContratForm({ client, settings, onClose, onGenerated }) {
     <div className="pdf-modal-overlay" onClick={onClose}>
       <div className="pdf-modal-box contrat-modal-box" onClick={(e) => e.stopPropagation()}>
         <div className="pdf-modal-toolbar">
-          <span className="pdf-modal-title"><Icon name="report" size={16} /> Contrat de maintenance — {client.raisonSociale || client.nom}</span>
+          <span className="pdf-modal-title"><Icon name="report" size={16} /> {d ? "Modifier le contrat" : "Contrat de maintenance"} — {client.raisonSociale || client.nom}</span>
           <button className="btn-ghost small" onClick={onClose}>Fermer</button>
         </div>
 
@@ -8051,8 +8072,9 @@ function ContratForm({ client, settings, onClose, onGenerated }) {
             </label>
           </div>
           <label className="block">Périodicité (texte du contrat)
-            <input value={periodicite} onChange={(e) => setPeriodicite(e.target.value)} placeholder={mois ? "Annuelle, au mois de " + MOIS_LISIBLES[Number(mois)] : "Annuelle"} />
+            <input value={periodicite} onChange={(e) => setPeriodicite(e.target.value)} placeholder="Ex : Annuelle" />
           </label>
+          <span className="hint">Sur le contrat : « {textePeriodicite(periodicite, mois)} » — le mois d'intervention est ajouté automatiquement.</span>
 
           <div className="form-grid mt">
             <label>Prix annuel HT (€)
@@ -8115,7 +8137,11 @@ function ContratForm({ client, settings, onClose, onGenerated }) {
             <SignaturePad label="Pour le Prestataire" value={signatureTech} onChange={setSignatureTech} />
             <SignaturePad label="Pour le Client" value={signatureClient} onChange={setSignatureClient} />
           </div>
-          <span className="hint">Le client signe directement à l'écran, au doigt ou au stylet. La signature est intégrée au PDF.</span>
+          <span className="hint">
+            {d
+              ? "Les signatures du contrat précédent sont reprises. Si tu modifies les conditions (prix, durée, matériel), efface-les et fais signer à nouveau."
+              : "Le client signe directement à l'écran, au doigt ou au stylet. La signature est intégrée au PDF."}
+          </span>
 
           {erreur && <p className="hint alerte"><Icon name="alert" size={13} /> {erreur}</p>}
         </div>
@@ -8123,7 +8149,7 @@ function ContratForm({ client, settings, onClose, onGenerated }) {
         <div className="form-actions contrat-form-actions">
           <button className="btn-ghost" onClick={onClose} disabled={enCours}>Annuler</button>
           <button className="btn-primary" onClick={generer} disabled={enCours}>
-            {enCours ? "Génération du PDF…" : "Générer le contrat"}
+            {enCours ? "Génération du PDF…" : d ? "Enregistrer le contrat modifié" : "Générer le contrat"}
           </button>
         </div>
       </div>
@@ -8161,6 +8187,7 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
   const [blankContractType, setBlankContractType] = useState(null); // "air_air" | "air_eau" | "air_air_b2b" | "air_eau_b2b" | null
   const [showOwnContract, setShowOwnContract] = useState(false);
   const [showContratForm, setShowContratForm] = useState(false);
+  const [contratAModifier, setContratAModifier] = useState(null);
   const contractFileRef = useRef();
 
   const addMachine = () => setMachines((list) => [...list, blankMachine()]);
@@ -8295,8 +8322,8 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
       <label className="block mt">Contrat de maintenance</label>
       <div className="contract-box">
         <div className="contrat-creer">
-          <button type="button" className="btn-primary small" onClick={() => setShowContratForm(true)}>
-            <Icon name="report" size={14} /> Créer le contrat depuis cette fiche
+          <button type="button" className="btn-primary small" onClick={() => { setContratAModifier(null); setShowContratForm(true); }}>
+            <Icon name="report" size={14} /> {contrat ? "Refaire le contrat depuis cette fiche" : "Créer le contrat depuis cette fiche"}
           </button>
           <span className="hint">
             Le matériel, l'adresse et les coordonnées de la fiche sont repris automatiquement. Montant libre,
@@ -8337,6 +8364,9 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
             <span className="contract-status">
               <Icon name="check" size={14} /> {contrat.nom || "Contrat"}
               <button type="button" className="contract-view-link" onClick={() => setShowOwnContract(true)}>Voir</button>
+              {contrat.details && (
+                <button type="button" className="contract-view-link" onClick={() => { setContratAModifier(contrat.details); setShowContratForm(true); }}>Modifier</button>
+              )}
               <button type="button" className="icon-btn" onClick={() => setContrat(null)} title="Retirer le contrat">
                 <Icon name="trash" size={13} />
               </button>
@@ -8388,8 +8418,10 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
 
       {showContratForm && (
         <ContratForm
+          key={contratAModifier ? "contrat-edition" : "contrat-nouveau"}
           client={{ nom, raisonSociale, adresse, email, tel, siren, tva, professionnel: estProfessionnel, moisEcheance, machines }}
           settings={settings}
+          initial={contratAModifier}
           onClose={() => setShowContratForm(false)}
           onGenerated={(doc, moisChoisi) => {
             setContrat(doc);
@@ -9813,7 +9845,7 @@ function PdfFileModal({ base64, filename, title, onClose }) {
         <div className="pdf-modal-fallback">
           <Icon name="report" size={32} />
           <p>{filename || "document.pdf"}</p>
-          <p className="pdf-modal-hint">L'aperçu dans la fenêtre n'est pas fiable selon les navigateurs. Téléchargez ou ouvrez le fichier pour le remplir avec votre lecteur PDF habituel.</p>
+          <p className="pdf-modal-hint">L'aperçu dans la fenêtre n'est pas fiable selon les navigateurs. Téléchargez ou ouvrez le fichier pour le consulter avec votre lecteur PDF habituel.</p>
           <div className="pdf-modal-fallback-actions">
             <button className="btn-primary" onClick={handleDownload} disabled={!blobUrl}>
               <Icon name="download" size={14} /> Télécharger le PDF
@@ -10157,7 +10189,7 @@ function buildContratHtml(contrat, client, settings) {
     "Nature et périodicité des prestations",
     `<table class="pdf-table pdf-bloc-insecable"><tbody>
       ${champ("Nombre de visites d'entretien programmées", String(contrat.visites || "1"))}
-      ${champ("Périodicité", contrat.periodicite || (contrat.mois ? "Annuelle, au mois de " + MOIS_LISIBLES[Number(contrat.mois)] : "Annuelle"))}
+      ${champ("Périodicité", textePeriodicite(contrat.periodicite, contrat.mois))}
     </tbody></table>` +
       para("Lors de chaque visite, le Prestataire s'engage à réaliser notamment :") +
       puces(CONTRAT_PRESTATIONS[conf.id]) +
@@ -11004,6 +11036,10 @@ textarea { resize: vertical; }
   position: fixed; inset: 0; background: rgba(27, 39, 51, 0.6);
   display: flex; align-items: center; justify-content: center;
   z-index: 1000; padding: 24px;
+  /* Les fenêtres sont rendues à la racine de la page (hors de .app) pour
+     échapper au verre dépoli des cartes : il faut donc leur redonner ici la
+     police et la couleur de texte de l'application. */
+  font-family: var(--police); color: var(--encre);
 }
 .pdf-modal-box {
   background: var(--carte); border-radius: 12px; width: 100%; max-width: 900px; height: 90vh;
