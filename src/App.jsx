@@ -28,7 +28,7 @@ const DEFAULT_ENTRETIEN_CHECKLIST = [
 
 const defaultSettings = {
   technicien: { nom: "" },
-  entreprise: { nom: "", formeJuridique: "", adresse: "", codePostalVille: "", telephone: "", email: "", siret: "", attestationCapacite: "", mediateurNom: "", mediateurCoordonnees: "", logo: "", clausePied: "" },
+  entreprise: { nom: "", formeJuridique: "", adresse: "", codePostalVille: "", telephone: "", email: "", siret: "", attestationCapacite: "", mediateurNom: MEDIATEUR_DEFAUT.nom, mediateurCoordonnees: MEDIATEUR_DEFAUT.coordonnees, logo: "", clausePied: "" },
   pennylane: { active: false, tvaParDefaut: "FR_200" },
   tableaux: [
     {
@@ -114,6 +114,12 @@ const TYPES_CONTRAT = [
 ];
 
 // Taux de TVA applicables aux travaux d'entretien chez le particulier.
+// Médiateur de la consommation par défaut (modifiable dans les Paramètres).
+const MEDIATEUR_DEFAUT = {
+  nom: "BATIRMEDIATION",
+  coordonnees: "22 Corniche du Soleil 83430 Saint-Mandrier-sur-Mer",
+};
+
 const TAUX_TVA = [
   { valeur: "20", libelle: "20 %" },
   { valeur: "10", libelle: "10 %" },
@@ -5013,12 +5019,12 @@ function Parametres({ settings, setSettings, theme, setTheme, accent, setAccent,
             <input value={draft.entreprise.formeJuridique || ""} onChange={(e) => updateEntreprise({ formeJuridique: e.target.value })} placeholder="Ex : SARLU" />
           </label>
           <label>Médiateur de la consommation
-            <input value={draft.entreprise.mediateurNom || ""} onChange={(e) => updateEntreprise({ mediateurNom: e.target.value })} placeholder="Ex : BATIRMEDIATION" />
+            <input value={draft.entreprise.mediateurNom ?? MEDIATEUR_DEFAUT.nom} onChange={(e) => updateEntreprise({ mediateurNom: e.target.value })} placeholder={MEDIATEUR_DEFAUT.nom} />
           </label>
           <label>Coordonnées du médiateur
-            <input value={draft.entreprise.mediateurCoordonnees || ""} onChange={(e) => updateEntreprise({ mediateurCoordonnees: e.target.value })} placeholder="Adresse ou site internet" />
+            <input value={draft.entreprise.mediateurCoordonnees ?? MEDIATEUR_DEFAUT.coordonnees} onChange={(e) => updateEntreprise({ mediateurCoordonnees: e.target.value })} placeholder={MEDIATEUR_DEFAUT.coordonnees} />
           </label>
-          <span className="hint">Ces informations alimentent les contrats de maintenance générés depuis les fiches clients.</span>
+          <span className="hint">Ces informations alimentent les contrats de maintenance générés depuis les fiches clients. Le médiateur n'apparaît que sur les contrats des particuliers.</span>
 
           <div className="block mt">
             <SinglePhotoField label="Logo de l'entreprise" value={draft.entreprise.logo} onChange={(logo) => updateEntreprise({ logo })} />
@@ -10286,8 +10292,8 @@ function buildContratHtml(contrat, client, settings) {
       "Médiation et réclamations",
       para(CONTRAT_MEDIATION) +
         `<table class="pdf-table pdf-bloc-insecable"><tbody>
-          ${champ("Médiateur de la consommation compétent", entreprise.mediateurNom)}
-          ${champ("Coordonnées / site internet du médiateur", entreprise.mediateurCoordonnees)}
+          ${champ("Médiateur de la consommation compétent", entreprise.mediateurNom || MEDIATEUR_DEFAUT.nom)}
+          ${champ("Coordonnées / site internet du médiateur", entreprise.mediateurCoordonnees || MEDIATEUR_DEFAUT.coordonnees)}
         </tbody></table>`
     );
   }
