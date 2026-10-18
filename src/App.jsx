@@ -8017,8 +8017,7 @@ function ContratForm({ client, settings, initial, onClose, onGenerated }) {
         dateDebut, duree, montantHT, tauxTva, modalitesPaiement, adresseSite, ballonEcs, emetteurs, lieu,
         conditionsParticulieres, signatureTech, signatureClient, dateSignature: isoLocalAujourdhui(),
       };
-      const html = buildContratHtml(donnees, client, settings);
-      const data = await genererPdfBase64(html);
+      const data = await genererContratPdfBase64(donnees, client, settings);
       // On garde les paramètres du contrat, signatures comprises, pour pouvoir
       // le reprendre et le refaire plus tard sans tout ressaisir.
       const details = {
@@ -10096,306 +10095,408 @@ function buildReportHtml(report, settings, clients) {
 }
 
 /* ---------- PDF du contrat de maintenance ----------
+   Le contrat est écrit en vrai texte dans le PDF (pdfmake), et non
+   photographié comme les rapports : net à tous les zooms, texte
+   sélectionnable et recherchable, fichier très léger.
    Reprend les modèles validés : même suite d'articles, version particulier
-   ou version B2B selon le client, pour la PAC air/air et la PAC air/eau. */
+   ou version B2B, pour la PAC air/air et la PAC air/eau. */
 
-function ligneMateriel(label, valeur) {
-  if (!valeur) return "";
-  return `<div class="pdf-mat-ligne"><span class="pdf-mat-label">${escapeHtml(label)} :</span><span class="pdf-mat-valeur">${escapeHtml(valeur)}</span></div>`;
+async function chargerPdfMake() {
+  const mod = await import("pdfmake/build/pdfmake");
+  const polices = await import("pdfmake/build/vfs_fonts");
+  const pdfMake = mod.default || mod;
+  const vfs =
+    polices.vfs ||
+    polices.default?.vfs ||
+    polices.default?.pdfMake?.vfs ||
+    polices.pdfMake?.vfs;
+  if (vfs) pdfMake.vfs = vfs;
+  if (!pdfMake.vfs) throw new Error("Polices pdfmake introuvables (vfs_fonts). Vérifier que « pdfmake » est bien installé.");
+  return pdfMake;
 }
 
-function materielContratHtml(machines, type, extra) {
+// Longueur approximative du texte d'un bloc, pour décider s'il peut rester
+// d'un seul tenant sur une page.
+function longueurTexte(noeud) {
+  if (noeud == null) return 0;
+  if (typeof noeud === "string") return noeud.length;
+  if (Array.isArray(noeud)) return noeud.reduce((n, x) => n + longueurTexte(x), 0);
+  if (typeof noeud === "object") {
+    return ["text", "stack", "ul", "columns", "table", "body"].reduce(
+      (n, cle) => n + (cle in noeud ? longueurTexte(noeud[cle]) : 0),
+      0
+    );
+  }
+  return 0;
+}
+
+const CADRE_TABLEAU = {
+  hLineWidth: () => 0.6,
+  vLineWidth: () => 0.6,
+  hLineColor: () => "#C7D0CE",
+  vLineColor: () => "#C7D0CE",
+  paddingLeft: () => 7,
+  paddingRight: () => 7,
+  paddingTop: () => 5,
+  paddingBottom: () => 5,
+};
+
+const CADRE_MATERIEL = {
+  hLineWidth: () => 0.6,
+  vLineWidth: () => 0.6,
+  hLineColor: () => "#C7D0CE",
+  vLineColor: () => "#C7D0CE",
+  paddingLeft: () => 10,
+  paddingRight: () => 10,
+  paddingTop: () => 8,
+  paddingBottom: () => 8,
+};
+
+function ligneMaterielPdf(label, valeur) {
+  if (!valeur) return null;
+  return {
+    columns: [
+      { text: label + " :", width: 180, style: "matLabel" },
+      { text: String(valeur), style: "matValeur" },
+    ],
+    columnGap: 6,
+    margin: [0, 1, 0, 1],
+  };
+}
+
+function blocsMaterielPdf(machines, type, extra) {
   const conf = TYPES_CONTRAT.find((t) => t.id === type) || TYPES_CONTRAT[0];
-  let html = "";
+  const blocs = [];
   let numExt = 0;
   let numInt = 0;
+  const cadre = (lignes) => ({
+    unbreakable: true,
+    margin: [0, 0, 0, 8],
+    table: { widths: ["*"], body: [[{ stack: lignes.filter(Boolean) }]] },
+    layout: CADRE_MATERIEL,
+  });
+
   (machines || []).forEach((m) => {
-    const ext = normalizeUnits(m.exterieur);
-    const int = normalizeUnits(m.interieur);
-    ext.forEach((u) => {
+    normalizeUnits(m.exterieur).forEach((u) => {
       if (!u.marque && !u.modele && !u.serie && !u.puissance) return;
       numExt += 1;
-      const fluide = [(u.fluide || "").trim(), u.quantiteFluide ? String(u.quantiteFluide).replace(".", ",") + " kg" : ""].filter(Boolean).join(" — ");
-      html += `<div class="pdf-mat-bloc pdf-bloc-insecable">
-        <p class="pdf-mat-titre">Groupe extérieur ${numExt}</p>
-        ${ligneMateriel("Marque", u.marque)}
-        ${ligneMateriel("Modèle", u.modele)}
-        ${ligneMateriel("Numéro de série", u.serie)}
-        ${ligneMateriel(conf.puissance, u.puissance)}
-        ${ligneMateriel("Type et charge de fluide frigorigène", fluide)}
-      </div>`;
+      const fluide = [
+        String(u.fluide || "").trim(),
+        u.quantiteFluide ? String(u.quantiteFluide).replace(".", ",") + " kg" : "",
+      ]
+        .filter(Boolean)
+        .join(" — ");
+      blocs.push(
+        cadre([
+          { text: "Groupe extérieur " + numExt, style: "matTitre" },
+          ligneMaterielPdf("Marque", u.marque),
+          ligneMaterielPdf("Modèle", u.modele),
+          ligneMaterielPdf("Numéro de série", u.serie),
+          ligneMaterielPdf(conf.puissance, u.puissance),
+          ligneMaterielPdf("Type et charge de fluide frigorigène", fluide),
+        ])
+      );
     });
-    int.forEach((u) => {
+    normalizeUnits(m.interieur).forEach((u) => {
       if (!u.marque && !u.modele && !u.serie) return;
       numInt += 1;
-      html += `<div class="pdf-mat-bloc pdf-bloc-insecable">
-        <p class="pdf-mat-titre">${escapeHtml(conf.interieurLabel)} ${numInt}</p>
-        ${ligneMateriel("Marque", u.marque)}
-        ${ligneMateriel("Modèle", u.modele)}
-        ${ligneMateriel("Numéro de série", u.serie)}
-      </div>`;
+      blocs.push(
+        cadre([
+          { text: conf.interieurLabel + " " + numInt, style: "matTitre" },
+          ligneMaterielPdf("Marque", u.marque),
+          ligneMaterielPdf("Modèle", u.modele),
+          ligneMaterielPdf("Numéro de série", u.serie),
+        ])
+      );
     });
   });
+
   if (numInt > 0 && conf.compteLabel) {
-    html = `<p class="pdf-mat-compte"><strong>${escapeHtml(conf.compteLabel)} :</strong> ${numInt}</p>` + html;
+    blocs.unshift({
+      text: [{ text: conf.compteLabel + " : ", bold: true }, { text: String(numInt) }],
+      style: "texte",
+      margin: [0, 0, 0, 8],
+    });
   }
-  // Air/eau : deux informations qui ne figurent pas sur la fiche client.
   if (extra && (extra.ballonEcs || extra.emetteurs)) {
-    html += `<div class="pdf-mat-bloc pdf-bloc-insecable">
-      ${ligneMateriel("Ballon ECS associé (marque / volume)", extra.ballonEcs)}
-      ${ligneMateriel("Type d'émetteurs de chauffage", extra.emetteurs)}
-    </div>`;
+    blocs.push(
+      cadre([
+        ligneMaterielPdf("Ballon ECS associé (marque / volume)", extra.ballonEcs),
+        ligneMaterielPdf("Type d'émetteurs de chauffage", extra.emetteurs),
+      ])
+    );
   }
-  return html || `<p class="pdf-clause-texte">Aucun matériel renseigné.</p>`;
+  return blocs.length > 0 ? blocs : [{ text: "Aucun matériel renseigné.", style: "texte" }];
 }
 
-function buildContratHtml(contrat, client, settings) {
+function definitionContrat(contrat, client, settings) {
   const entreprise = settings?.entreprise || {};
   const conf = TYPES_CONTRAT.find((t) => t.id === contrat.typeContrat) || TYPES_CONTRAT[0];
   const pro = !!contrat.b2b;
   const cle = pro ? "b2b" : "b2c";
   const clientNom = client.raisonSociale || client.nom || "";
 
-  let n = 0;
-  // Un article est gardé d'un seul tenant (jamais coupé entre deux pages),
-  // sauf s'il est trop long pour tenir sur une page : dans ce cas on laisse
-  // la coupure se faire, en gardant le titre collé à son premier paragraphe
-  // et les puces et lignes de tableau insécables.
   const LONGUEUR_MAX_INSECABLE = 1800;
-  const art = (t, contenu) => {
-    n += 1;
-    const texte = String(contenu).replace(/<[^>]+>/g, " ");
-    const court = texte.length <= LONGUEUR_MAX_INSECABLE;
-    return `<div class="pdf-article-bloc${court ? " pdf-bloc-insecable" : ""}">` +
-      `<h3 class="pdf-article">Article ${n} — ${escapeHtml(t)}</h3>${contenu}</div>`;
-  };
-  const para = (t) => `<p class="pdf-clause-texte">${nl2br(escapeHtml(t))}</p>`;
-  const puces = (l) => `<ul class="pdf-puces">${l.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`;
-  const champ = (label, valeur) => `<tr><td class="pdf-champ-label">${escapeHtml(label)}</td><td>${escapeHtml(valeur || "")}</td></tr>`;
+  let n = 0;
+  const contenu = [];
 
-  let body = "";
+  const para = (t) => ({ text: String(t || ""), style: "texte" });
+  const puces = (liste) => ({ ul: liste.map((x) => String(x)), style: "texte", margin: [0, 2, 0, 8] });
+  const tableauChamps = (lignes) => ({
+    table: {
+      widths: [190, "*"],
+      body: lignes
+        .filter(Boolean)
+        .map(([label, valeur]) => [
+          { text: String(label), style: "champLabel" },
+          { text: String(valeur || ""), style: "champValeur" },
+        ]),
+    },
+    layout: CADRE_TABLEAU,
+    margin: [0, 6, 0, 10],
+  });
+  const article = (titre, blocs) => {
+    n += 1;
+    const corps = Array.isArray(blocs) ? blocs : [blocs];
+    const entete = { text: "Article " + n + " — " + titre, style: "article" };
+    // Un article court, fait uniquement de texte et de listes, reste d'un seul
+    // tenant. Dès qu'il contient des tableaux ou des blocs matériel, sa hauteur
+    // n'a plus de rapport avec sa longueur : on laisse alors la page se
+    // remplir, en gardant seulement le titre collé à son premier bloc (chaque
+    // bloc matériel et chaque ligne de tableau restant insécable de son côté).
+    const simple = corps.every((b) => b && (typeof b.text !== "undefined" || b.ul));
+    if (simple && longueurTexte(corps) <= LONGUEUR_MAX_INSECABLE) {
+      contenu.push({ stack: [entete, ...corps], unbreakable: true });
+      return;
+    }
+    contenu.push({ stack: [entete, corps[0]], unbreakable: true });
+    corps.slice(1).forEach((bloc) => contenu.push(bloc));
+  };
 
   /* En-tête */
-  if (entreprise.logo) body += `<div class="pdf-contrat-logo"><img src="${entreprise.logo}" alt="" /></div>`;
-  body += `<h1>Contrat de maintenance${pro ? " B2B" : ""}</h1>`;
-  body += `<p class="pdf-contrat-soustitre">${escapeHtml(conf.label)}${contrat.reference ? ` — n° ${escapeHtml(contrat.reference)}` : ""}</p>`;
+  if (entreprise.logo) {
+    contenu.push({ image: entreprise.logo, fit: [200, 110], alignment: "center", margin: [0, 0, 0, 10] });
+  }
+  contenu.push({ text: ("Contrat de maintenance" + (pro ? " B2B" : "")).toUpperCase(), style: "titre" });
+  contenu.push({
+    text: conf.label + (contrat.reference ? " — n° " + contrat.reference : ""),
+    style: "sousTitre",
+  });
 
   /* Les parties */
-  body += `<h3 class="pdf-article">Le Prestataire</h3>`;
-  body += `<table class="pdf-table pdf-bloc-insecable"><tbody>
-    ${champ("Raison sociale", entreprise.nom)}
-    ${entreprise.formeJuridique ? champ("Forme juridique et capital", entreprise.formeJuridique) : ""}
-    ${champ("Adresse du siège", [entreprise.adresse, entreprise.codePostalVille].filter(Boolean).join(" "))}
-    ${champ("Téléphone", entreprise.telephone)}
-    ${champ("Email", entreprise.email)}
-    ${champ("SIRET", entreprise.siret)}
-    ${champ("Attestation de capacité fluides frigorigènes n°", entreprise.attestationCapacite)}
-    ${champ("Représenté par", settings?.technicien?.nom)}
-  </tbody></table>`;
-  body += `<p class="pdf-contrat-denomination">Ci-après dénommé « le Prestataire »,</p>`;
-  body += `<p class="pdf-contrat-et">ET</p>`;
-  body += `<h3 class="pdf-article">Le Client</h3>`;
-  body += `<table class="pdf-table pdf-bloc-insecable"><tbody>
-    ${champ("Nom / raison sociale", clientNom)}
-    ${client.raisonSociale && client.nom ? champ("Représenté par", client.nom) : ""}
-    ${champ("Adresse", client.adresse)}
-    ${champ("Téléphone", client.tel)}
-    ${champ("Email", client.email)}
-    ${client.siren ? champ("SIREN", client.siren) : ""}
-    ${client.tva ? champ("N° TVA intracommunautaire", client.tva) : ""}
-  </tbody></table>`;
-  body += `<p class="pdf-contrat-denomination">Ci-après dénommé « le Client »,</p>`;
-  body += `<p class="pdf-contrat-convenu">Il a été convenu ce qui suit :</p>`;
+  contenu.push({
+    unbreakable: true,
+    stack: [
+      { text: "Le Prestataire", style: "article", margin: [0, 6, 0, 2] },
+      tableauChamps([
+        ["Raison sociale", entreprise.nom],
+        entreprise.formeJuridique ? ["Forme juridique et capital", entreprise.formeJuridique] : null,
+        ["Adresse du siège", [entreprise.adresse, entreprise.codePostalVille].filter(Boolean).join(" ")],
+        ["Téléphone", entreprise.telephone],
+        ["Email", entreprise.email],
+        ["SIRET", entreprise.siret],
+        ["Attestation de capacité fluides frigorigènes n°", entreprise.attestationCapacite],
+        ["Représenté par", settings?.technicien?.nom],
+      ]),
+      { text: "Ci-après dénommé « le Prestataire »,", style: "denomination" },
+      { text: "ET", style: "et" },
+    ],
+  });
+  contenu.push({
+    unbreakable: true,
+    stack: [
+      { text: "Le Client", style: "article", margin: [0, 6, 0, 2] },
+      tableauChamps([
+        ["Nom / raison sociale", clientNom],
+        client.raisonSociale && client.nom ? ["Représenté par", client.nom] : null,
+        ["Adresse", client.adresse],
+        ["Téléphone", client.tel],
+        ["Email", client.email],
+        client.siren ? ["SIREN", client.siren] : null,
+        client.tva ? ["N° TVA intracommunautaire", client.tva] : null,
+      ]),
+      { text: "Ci-après dénommé « le Client »,", style: "denomination" },
+      { text: "Il a été convenu ce qui suit :", style: "texte", bold: true, margin: [0, 8, 0, 0] },
+    ],
+  });
 
-  /* Article 1 — Objet */
-  body += art("Objet du contrat", para(CONTRAT_OBJET[conf.id]));
+  /* Articles */
+  article("Objet du contrat", para(CONTRAT_OBJET[conf.id]));
 
-  /* Article 2 — Désignation de l'installation */
-  body += art(
-    "Désignation de l'installation (matériel concerné)",
-    `<p class="pdf-clause-texte"><strong>Adresse d'installation :</strong> ${escapeHtml(contrat.adresseSite || client.adresse || "")}</p>` +
-      materielContratHtml(contrat.machines, conf.id, { ballonEcs: contrat.ballonEcs, emetteurs: contrat.emetteurs })
-  );
+  article("Désignation de l'installation (matériel concerné)", [
+    {
+      text: [{ text: "Adresse d'installation : ", bold: true }, { text: contrat.adresseSite || client.adresse || "" }],
+      style: "texte",
+      margin: [0, 0, 0, 8],
+    },
+    ...blocsMaterielPdf(contrat.machines, conf.id, { ballonEcs: contrat.ballonEcs, emetteurs: contrat.emetteurs }),
+  ]);
 
-  /* Article 3 — Nature et périodicité */
-  body += art(
-    "Nature et périodicité des prestations",
-    `<table class="pdf-table pdf-bloc-insecable"><tbody>
-      ${champ("Nombre de visites d'entretien programmées", String(contrat.visites || "1"))}
-      ${champ("Périodicité", textePeriodicite(contrat.periodicite, contrat.mois))}
-    </tbody></table>` +
-      para("Lors de chaque visite, le Prestataire s'engage à réaliser notamment :") +
-      puces(CONTRAT_PRESTATIONS[conf.id]) +
-      para(CONTRAT_MENTION_REGLEMENTAIRE[conf.id])
-  );
+  article("Nature et périodicité des prestations", [
+    tableauChamps([
+      ["Nombre de visites d'entretien programmées", String(contrat.visites || "1")],
+      ["Périodicité", textePeriodicite(contrat.periodicite, contrat.mois)],
+    ]),
+    para("Lors de chaque visite, le Prestataire s'engage à réaliser notamment :"),
+    puces(CONTRAT_PRESTATIONS[conf.id]),
+    para(CONTRAT_MENTION_REGLEMENTAIRE[conf.id]),
+  ]);
 
-  /* Article 4 — Obligations du Prestataire */
-  body += art("Obligations du Prestataire", puces(CONTRAT_OBLIGATIONS_PRESTATAIRE));
+  article("Obligations du Prestataire", puces(CONTRAT_OBLIGATIONS_PRESTATAIRE));
+  article("Obligations du Client", puces(CONTRAT_OBLIGATIONS_CLIENT[cle]));
+  article(pro ? "Reconduction tacite" : "Reconduction tacite : information légale", para(CONTRAT_RECONDUCTION[cle]));
+  article("Exclusions", para(CONTRAT_EXCLUSIONS));
 
-  /* Article 5 — Obligations du Client */
-  body += art("Obligations du Client", puces(CONTRAT_OBLIGATIONS_CLIENT[cle]));
-
-  /* Article 6 — Reconduction tacite */
-  body += art(pro ? "Reconduction tacite" : "Reconduction tacite : information légale", para(CONTRAT_RECONDUCTION[cle]));
-
-  /* Article 7 — Exclusions */
-  body += art("Exclusions", para(CONTRAT_EXCLUSIONS));
-
-  /* Article 8 — Prix */
   const ht = nombreDepuisSaisie(contrat.montantHT);
   const taux = nombreDepuisSaisie(contrat.tauxTva);
   const ttc = ht !== null && taux !== null ? ht * (1 + taux / 100) : null;
-  body += art(
-    "Prix et modalités de paiement",
-    `<table class="pdf-table pdf-bloc-insecable"><tbody>
-      ${champ("Prix annuel de l'entretien (HT)", ht !== null ? montantLisible(ht) + " €" : "")}
-      ${champ("TVA applicable", (TAUX_TVA.find((t) => t.valeur === String(contrat.tauxTva)) || {}).libelle || (taux !== null ? montantLisible(taux) + " %" : ""))}
-      ${champ("Prix annuel TTC", ttc !== null ? montantLisible(ttc) + " €" : "")}
-      ${champ("Modalités et échéance de paiement", contrat.modalitesPaiement)}
-    </tbody></table>` +
-      para("Le prix est révisable chaque année à la date anniversaire du contrat, selon les modalités convenues entre les parties.")
-  );
+  const libelleTva =
+    (TAUX_TVA.find((t) => t.valeur === String(contrat.tauxTva)) || {}).libelle ||
+    (taux !== null ? montantLisible(taux) + " %" : "");
+  article("Prix et modalités de paiement", [
+    tableauChamps([
+      ["Prix annuel de l'entretien (HT)", ht !== null ? montantLisible(ht) + " €" : ""],
+      ["TVA applicable", libelleTva],
+      ["Prix annuel TTC", ttc !== null ? montantLisible(ttc) + " €" : ""],
+      ["Modalités et échéance de paiement", contrat.modalitesPaiement],
+    ]),
+    para("Le prix est révisable chaque année à la date anniversaire du contrat, selon les modalités convenues entre les parties."),
+  ]);
 
-  /* Article 9 — Durée et reconduction */
-  body += art(
-    "Durée et reconduction",
-    `<table class="pdf-table pdf-bloc-insecable"><tbody>
-      ${champ("Date de début du contrat", dateFrDepuisIso(contrat.dateDebut))}
-      ${champ("Durée initiale", String(contrat.duree || "1") + " an" + (Number(contrat.duree) > 1 ? "s" : ""))}
-    </tbody></table>` +
-      para(
-        pro
-          ? "Les modalités de reconduction tacite du présent contrat sont précisées à l'article 6 ci-avant."
-          : "Les dispositions légales applicables en cas de reconduction tacite du présent contrat sont reproduites à l'article 6 ci-avant."
-      )
-  );
+  article("Durée et reconduction", [
+    tableauChamps([
+      ["Date de début du contrat", dateFrDepuisIso(contrat.dateDebut)],
+      ["Durée initiale", String(contrat.duree || "1") + " an" + (Number(contrat.duree) > 1 ? "s" : "")],
+    ]),
+    para(
+      pro
+        ? "Les modalités de reconduction tacite du présent contrat sont précisées à l'article 6 ci-avant."
+        : "Les dispositions légales applicables en cas de reconduction tacite du présent contrat sont reproduites à l'article 6 ci-avant."
+    ),
+  ]);
 
-  /* Article 10 — Résiliation */
-  body += art("Résiliation", para(CONTRAT_RESILIATION));
+  article("Résiliation", para(CONTRAT_RESILIATION));
+  if (!pro) article("Droit de rétractation", para(CONTRAT_RETRACTATION));
+  article("Fluides frigorigènes et environnement", para(CONTRAT_FLUIDES));
+  article("Protection des données personnelles", para(CONTRAT_RGPD));
+  article("Révision du prix du contrat", [
+    para(CONTRAT_REVISION_INTRO),
+    { text: "P = P0 × (S / S0)", style: "formule" },
+    puces(CONTRAT_REVISION_PUCES),
+    para(CONTRAT_REVISION_FIN),
+  ]);
 
-  /* Article 11 — Droit de rétractation (particuliers uniquement) */
-  if (!pro) body += art("Droit de rétractation", para(CONTRAT_RETRACTATION));
-
-  /* Fluides, RGPD, révision du prix */
-  body += art("Fluides frigorigènes et environnement", para(CONTRAT_FLUIDES));
-  body += art("Protection des données personnelles", para(CONTRAT_RGPD));
-  body += art(
-    "Révision du prix du contrat",
-    para(CONTRAT_REVISION_INTRO) +
-      `<p class="pdf-formule">P = P0 × (S / S0)</p>` +
-      puces(CONTRAT_REVISION_PUCES) +
-      para(CONTRAT_REVISION_FIN)
-  );
-
-  /* Médiation (particuliers uniquement) */
   if (!pro) {
-    body += art(
-      "Médiation et réclamations",
-      para(CONTRAT_MEDIATION) +
-        `<table class="pdf-table pdf-bloc-insecable"><tbody>
-          ${champ("Médiateur de la consommation compétent", entreprise.mediateurNom || MEDIATEUR_DEFAUT.nom)}
-          ${champ("Coordonnées / site internet du médiateur", entreprise.mediateurCoordonnees || MEDIATEUR_DEFAUT.coordonnees)}
-        </tbody></table>`
-    );
+    article("Médiation et réclamations", [
+      para(CONTRAT_MEDIATION),
+      tableauChamps([
+        ["Médiateur de la consommation compétent", entreprise.mediateurNom || MEDIATEUR_DEFAUT.nom],
+        ["Coordonnées / site internet du médiateur", entreprise.mediateurCoordonnees || MEDIATEUR_DEFAUT.coordonnees],
+      ]),
+    ]);
   }
 
-  body += art("Droit applicable et juridiction compétente", para(CONTRAT_DROIT_APPLICABLE));
+  article("Droit applicable et juridiction compétente", para(CONTRAT_DROIT_APPLICABLE));
 
-  /* Conditions particulières ajoutées à la volée */
   if (contrat.conditionsParticulieres && contrat.conditionsParticulieres.trim()) {
-    body += art("Conditions particulières", para(contrat.conditionsParticulieres.trim()));
+    article("Conditions particulières", para(contrat.conditionsParticulieres.trim()));
   }
 
   /* Signatures */
   const lieu = contrat.lieu || entreprise.codePostalVille || "";
-  body += `<div class="pdf-bloc-insecable pdf-signature-zone">
-    <h3 class="pdf-article">Signatures</h3>
-    <table class="pdf-table pdf-table-fait"><tbody>
-      <tr>
-        <td>Fait à</td><td>${escapeHtml(lieu)}</td>
-        <td>le</td><td>${escapeHtml(dateFrDepuisIso(contrat.dateSignature) || dateFrDepuisIso(contrat.dateDebut))}</td>
-      </tr>
-    </tbody></table>
-    <p class="pdf-clause-texte">En deux exemplaires originaux, dont un remis à chaque partie. Le Client reconnaît avoir reçu un exemplaire du présent contrat avant sa signature.</p>
-    <div class="pdf-signatures">
-      <div>
-        <strong>Pour le Prestataire</strong>
-        <span class="pdf-sig-nom">${escapeHtml(settings?.technicien?.nom || entreprise.nom || "")} — « Lu et approuvé »</span>
-        ${contrat.signatureTech ? `<img class="pdf-sig" src="${contrat.signatureTech}" />` : `<div class="pdf-sig-vide"></div>`}
-      </div>
-      <div>
-        <strong>Pour le Client</strong>
-        <span class="pdf-sig-nom">${escapeHtml(clientNom)} — « Lu et approuvé »</span>
-        ${contrat.signatureClient ? `<img class="pdf-sig" src="${contrat.signatureClient}" />` : `<div class="pdf-sig-vide"></div>`}
-      </div>
-    </div>
-    ${contrat.signatureClient ? `<p class="pdf-contrat-mention">Signé électroniquement le ${escapeHtml(dateFrDepuisIso(contrat.dateSignature))} par ${escapeHtml(clientNom)}.</p>` : ""}
-  </div>`;
+  const dateSig = dateFrDepuisIso(contrat.dateSignature) || dateFrDepuisIso(contrat.dateDebut);
+  const caseSignature = (role, nom, image) => ({
+    stack: [
+      { text: role, style: "sigRole" },
+      { text: nom + " — « Lu et approuvé »", style: "sigNom" },
+      image
+        ? { image, fit: [190, 80], margin: [0, 4, 0, 0] }
+        : { text: " ", margin: [0, 34, 0, 0] },
+      { canvas: [{ type: "line", x1: 0, y1: 0, x2: 190, y2: 0, lineWidth: 0.6, lineColor: "#C7D0CE" }], margin: [0, 4, 0, 0] },
+    ],
+    width: "*",
+  });
+  contenu.push({
+    unbreakable: true,
+    stack: [
+      { text: "Signatures", style: "article" },
+      {
+        table: {
+          widths: [60, "*", 30, "*"],
+          body: [[
+            { text: "Fait à", style: "champLabel" },
+            { text: lieu, style: "champValeur" },
+            { text: "le", style: "champLabel" },
+            { text: dateSig, style: "champValeur" },
+          ]],
+        },
+        layout: CADRE_TABLEAU,
+        margin: [0, 6, 0, 8],
+      },
+      para("En deux exemplaires originaux, dont un remis à chaque partie. Le Client reconnaît avoir reçu un exemplaire du présent contrat avant sa signature."),
+      {
+        columns: [
+          caseSignature("Pour le Prestataire", settings?.technicien?.nom || entreprise.nom || "", contrat.signatureTech),
+          caseSignature("Pour le Client", clientNom, contrat.signatureClient),
+        ],
+        columnGap: 30,
+        margin: [0, 8, 0, 0],
+      },
+      contrat.signatureClient
+        ? { text: "Signé électroniquement le " + dateSig + " par " + clientNom + ".", style: "mention" }
+        : { text: "" },
+    ],
+  });
 
   if (entreprise.clausePied && entreprise.clausePied.trim()) {
-    body += `<div class="pdf-footer-clause">${nl2br(entreprise.clausePied.trim())}</div>`;
+    contenu.push({ text: entreprise.clausePied.trim(), style: "piedClause", margin: [0, 18, 0, 0] });
   }
 
-  return `<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8" />
-<title>Contrat de maintenance — ${escapeHtml(clientNom)}</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600&display=swap');
-  * { box-sizing: border-box; }
-  body { font-family: 'Inter', -apple-system, sans-serif; color: #1B2733; margin: 0; background: #EEF2F1; }
-  .pdf-toolbar { position: sticky; top: 0; background: #fff; padding: 14px 24px; border-bottom: 1px solid #D7DEDD; display: flex; justify-content: flex-end; z-index: 10; }
-  .pdf-toolbar button { display: inline-flex; align-items: center; gap: 6px; background: #2F6FA3; color: #fff; border: none; padding: 10px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
-  .pdf-page { max-width: 760px; margin: 30px auto; background: #fff; padding: 48px; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
-  h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 30px; font-weight: 700; margin: 0 0 4px; text-align: center; text-transform: uppercase; letter-spacing: 0.5px; }
-  p { font-size: 13.5px; line-height: 1.55; margin: 0 0 10px; }
-  .pdf-contrat-logo { text-align: center; margin-bottom: 14px; }
-  .pdf-contrat-logo img { max-width: 220px; max-height: 120px; object-fit: contain; }
-  .pdf-contrat-soustitre { font-family: 'Barlow Condensed', sans-serif; font-size: 19px; color: #2F6FA3; margin: 0 0 24px; text-align: center; }
-  .pdf-article-bloc { margin-bottom: 2px; }
-  .pdf-article { font-family: 'Inter', sans-serif; font-size: 15px; font-weight: 700; color: #1B2733; margin: 22px 0 6px; text-decoration: underline; text-underline-offset: 3px; break-after: avoid; page-break-after: avoid; }
-  .pdf-clause-texte { font-size: 13.5px; line-height: 1.55; color: #26323B; margin: 0 0 10px; }
-  .pdf-puces { margin: 4px 0 12px; padding-left: 20px; }
-  .pdf-puces li { font-size: 13.5px; line-height: 1.5; margin-bottom: 6px; break-inside: avoid; page-break-inside: avoid; }
-  .pdf-table { width: 100%; border-collapse: collapse; margin: 10px 0 14px; font-size: 13px; border: 1px solid #C7D0CE; }
-  .pdf-table td { border: 1px solid #C7D0CE; padding: 7px 9px; vertical-align: top; }
-  .pdf-table tr { break-inside: avoid; page-break-inside: avoid; }
-  .pdf-champ-label { width: 42%; color: #4A5860; }
-  .pdf-table-fait td:nth-child(1), .pdf-table-fait td:nth-child(3) { width: 12%; color: #4A5860; }
-  .pdf-table-fait td:nth-child(2) { width: 48%; font-weight: 600; }
-  .pdf-table-fait td:nth-child(4) { font-weight: 600; }
-  .pdf-bloc-insecable { break-inside: avoid; page-break-inside: avoid; }
-  .pdf-mat-bloc { margin: 0 0 14px; padding: 10px 12px; border: 1px solid #C7D0CE; border-radius: 6px; }
-  .pdf-mat-titre { font-weight: 700; font-size: 14px; margin: 0 0 6px; text-decoration: underline; text-underline-offset: 3px; }
-  .pdf-mat-ligne { display: flex; gap: 8px; font-size: 13px; line-height: 1.5; }
-  .pdf-mat-label { color: #4A5860; min-width: 230px; }
-  .pdf-mat-valeur { font-weight: 600; }
-  .pdf-mat-compte { font-size: 13.5px; margin: 0 0 12px; }
-  .pdf-contrat-denomination { font-size: 12.5px; font-style: italic; color: #4A5860; margin: -6px 0 14px; }
-  .pdf-contrat-et { text-align: center; font-weight: 700; margin: 10px 0 14px; }
-  .pdf-contrat-convenu { font-weight: 600; margin: 16px 0 4px; }
-  .pdf-formule { text-align: center; font-size: 16px; font-weight: 700; margin: 10px 0 14px; }
-  .pdf-signature-zone { margin-top: 26px; }
-  .pdf-signatures { display: flex; gap: 40px; margin-top: 12px; }
-  .pdf-signatures > div { flex: 1; font-size: 13px; }
-  .pdf-sig-nom { display: block; font-size: 12px; color: #6D7A80; margin: 2px 0 4px; }
-  .pdf-sig { max-width: 210px; max-height: 85px; display: block; margin-top: 6px; }
-  .pdf-sig-vide { height: 85px; border-bottom: 1px solid #C7D0CE; }
-  .pdf-contrat-mention { font-size: 11.5px; color: #6D7A80; margin-top: 10px; }
-  .pdf-footer-clause { margin-top: 28px; padding-top: 14px; border-top: 1px solid #EAEDEC; font-size: 11px; line-height: 1.5; color: #8A959A; white-space: pre-wrap; }
-  @media print {
-    .pdf-toolbar { display: none; }
-    body { background: #fff; }
-    .pdf-page { box-shadow: none; margin: 0; max-width: 100%; padding: 0; }
-  }
-</style>
-</head>
-<body>
-  <div class="pdf-toolbar"><button onclick="window.print()">Imprimer / Enregistrer en PDF</button></div>
-  <div class="pdf-page">${body}</div>
-</body>
-</html>`;
+  return {
+    info: { title: "Contrat de maintenance — " + clientNom, author: entreprise.nom || "" },
+    pageSize: "A4",
+    pageMargins: [40, 38, 40, 48],
+    content: contenu,
+    footer: (page, total) => ({
+      columns: [
+        { text: "Contrat de maintenance — " + conf.label, style: "pied" },
+        { text: "Page " + page + " / " + total, style: "pied", alignment: "right" },
+      ],
+      margin: [40, 12, 40, 0],
+    }),
+    defaultStyle: { font: "Roboto", fontSize: 10, color: "#1B2733", lineHeight: 1.3 },
+    styles: {
+      titre: { fontSize: 20, bold: true, alignment: "center", margin: [0, 0, 0, 2] },
+      sousTitre: { fontSize: 12.5, color: "#2F6FA3", alignment: "center", margin: [0, 0, 0, 14] },
+      article: { fontSize: 11.5, bold: true, decoration: "underline", margin: [0, 14, 0, 4] },
+      texte: { fontSize: 10, color: "#26323B", margin: [0, 0, 0, 6] },
+      champLabel: { fontSize: 9.5, color: "#4A5860" },
+      champValeur: { fontSize: 9.5, bold: true },
+      matTitre: { fontSize: 10.5, bold: true, decoration: "underline", margin: [0, 0, 0, 4] },
+      matLabel: { fontSize: 9.5, color: "#4A5860" },
+      matValeur: { fontSize: 9.5, bold: true },
+      denomination: { fontSize: 9, italics: true, color: "#4A5860", margin: [0, 0, 0, 4] },
+      et: { fontSize: 10, bold: true, alignment: "center", margin: [0, 6, 0, 2] },
+      formule: { fontSize: 12, bold: true, alignment: "center", margin: [0, 6, 0, 8] },
+      sigRole: { fontSize: 10, bold: true },
+      sigNom: { fontSize: 9, color: "#6D7A80", margin: [0, 1, 0, 0] },
+      mention: { fontSize: 8.5, color: "#6D7A80", margin: [0, 10, 0, 0] },
+      piedClause: { fontSize: 8, color: "#8A959A" },
+      pied: { fontSize: 8, color: "#8A959A" },
+    },
+  };
+}
+
+async function genererContratPdfBase64(contrat, client, settings) {
+  const pdfMake = await chargerPdfMake();
+  const document = pdfMake.createPdf(definitionContrat(contrat, client, settings));
+  return await new Promise((ok, ko) => {
+    try {
+      document.getBase64((base64) => ok(base64));
+    } catch (e) {
+      ko(e);
+    }
+  });
 }
 
 /* ---------- CSS ---------- */
