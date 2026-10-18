@@ -1466,15 +1466,21 @@ function AppContenu() {
     // classement : exécutés côté serveur, là où se trouvent les accès.
     // E-mail avec un rapport d'intervention joint : le PDF est fabriqué ici,
     // au moment de l'envoi (inutile qu'il soit déjà dans OneDrive).
-    if (action.type === "email" && action.item?.rapport?.id) {
+    // Contrat de maintenance joint : pris tel quel sur la fiche du client.
+    if (action.type === "email" && (action.item?.rapport?.id || action.item?.contrat?.client_id)) {
       return (async () => {
-        const r = reportsRaw.find((x) => String(x.id) === String(action.item.rapport.id));
-        if (!r) throw new Error("rapport introuvable (supprimé ?)");
-        const contenu = await genererPdfBase64(await htmlRapportAvecPhotos(r, settings, clients));
-        await appelerAssistantExecution({
-          ...action,
-          item: { ...action.item, pieces_jointes_contenu: [{ nom: action.item.rapport.nom || "Rapport.pdf", contenu }] },
-        });
+        const pieces = [];
+        if (action.item.rapport?.id) {
+          const r = reportsRaw.find((x) => String(x.id) === String(action.item.rapport.id));
+          if (!r) throw new Error("rapport introuvable (supprimé ?)");
+          pieces.push({ nom: action.item.rapport.nom || "Rapport.pdf", contenu: await genererPdfBase64(await htmlRapportAvecPhotos(r, settings, clients)) });
+        }
+        if (action.item.contrat?.client_id) {
+          const c = clients.find((x) => String(x.id) === String(action.item.contrat.client_id));
+          if (!c?.contrat?.data) throw new Error("plus de contrat sur la fiche de ce client");
+          pieces.push({ nom: action.item.contrat.nom || c.contrat.nom || "Contrat.pdf", contenu: c.contrat.data });
+        }
+        await appelerAssistantExecution({ ...action, item: { ...action.item, pieces_jointes_contenu: pieces } });
         return true;
       })();
     }
