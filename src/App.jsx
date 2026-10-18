@@ -33,6 +33,10 @@ const MEDIATEUR_DEFAUT = {
 };
 
 
+// Code TVA Pennylane : 5,5 % s'écrit « FR_55 ». Les anciennes versions
+// enregistraient « FR_055 », que Pennylane refuse.
+const codeTvaPennylane = (c) => (c === "FR_055" ? "FR_55" : c);
+
 const defaultSettings = {
   technicien: { nom: "" },
   entreprise: { nom: "", formeJuridique: "", adresse: "", codePostalVille: "", telephone: "", email: "", siret: "", attestationCapacite: "", mediateurNom: MEDIATEUR_DEFAUT.nom, mediateurCoordonnees: MEDIATEUR_DEFAUT.coordonnees, logo: "", clausePied: "" },
@@ -1571,7 +1575,7 @@ function AppContenu() {
         // Libellé de la ligne de facture dans Pennylane : formulation commune à
         // tous les types d'intervention, plutôt que "Entretien — 08/09/2026".
         label: `Suivant rapport d'intervention du ${r.date}`,
-        vatRate: r.tva || settings.pennylane?.tvaParDefaut || "FR_200",
+        vatRate: codeTvaPennylane(r.tva || settings.pennylane?.tvaParDefaut) || "FR_200",
         // Titre de la section de la facture : l'objet de l'intervention.
         section: r.intro || "",
       });
@@ -1689,7 +1693,7 @@ function AppContenu() {
         invoiceId: ligne.pennylaneInvoiceId,
         montantHT: parseFloat(report.montant),
         label: `Suivant rapport d'intervention du ${report.date}`,
-        vatRate: report.tva || settings.pennylane?.tvaParDefaut || "FR_200",
+        vatRate: codeTvaPennylane(report.tva || settings.pennylane?.tvaParDefaut) || "FR_200",
       });
       upsertFacturation({ ...ligne, pennylaneStatus: "envoyée", pennylaneError: null });
     } catch (e) {
@@ -5122,10 +5126,10 @@ function Parametres({ settings, setSettings, theme, setTheme, accent, setAccent,
         </label>
         {draft.pennylane?.active && (
           <label className="block mt">Taux de TVA par défaut appliqué aux factures
-            <select value={draft.pennylane?.tvaParDefaut || "FR_200"} onChange={(e) => updatePennylane({ tvaParDefaut: e.target.value })}>
+            <select value={codeTvaPennylane(draft.pennylane?.tvaParDefaut) || "FR_200"} onChange={(e) => updatePennylane({ tvaParDefaut: e.target.value })}>
               <option value="FR_200">20 % (taux normal)</option>
               <option value="FR_100">10 % (taux intermédiaire)</option>
-              <option value="FR_055">5,5 % (taux réduit)</option>
+              <option value="FR_55">5,5 % (taux réduit)</option>
               <option value="FR_021">2,1 % (taux particulier)</option>
             </select>
             <span className="hint">Valeur pré-sélectionnée dans chaque rapport — vous pouvez toujours choisir un autre taux directement sur un rapport si besoin.</span>
@@ -6810,7 +6814,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   const [pieces, setPieces] = useState(editingReport?.pieces || "");
   const [facturable, setFacturable] = useState(editingReport?.facturable ?? true);
   const [montant, setMontant] = useState(editingReport?.montant || "");
-  const [tva, setTva] = useState(editingReport?.tva || settings.pennylane?.tvaParDefaut || "FR_200");
+  const [tva, setTva] = useState(codeTvaPennylane(editingReport?.tva || settings.pennylane?.tvaParDefaut) || "FR_200");
   // Décoché par défaut : l'intervention n'est validée que lorsque le
   // technicien le décide (case cochée, ou bouton « Valider » sur le rapport).
   const [marquerEffectue, setMarquerEffectue] = useState(editingReport?.valide ?? false);
@@ -7079,7 +7083,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
               <select value={tva} onChange={(e) => setTva(e.target.value)}>
                 <option value="FR_200">20 % (taux normal)</option>
                 <option value="FR_100">10 % (taux intermédiaire)</option>
-                <option value="FR_055">5,5 % (taux réduit)</option>
+                <option value="FR_55">5,5 % (taux réduit)</option>
                 <option value="FR_021">2,1 % (taux particulier)</option>
               </select>
             </label>
@@ -7152,7 +7156,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
               <select value={tva} onChange={(e) => setTva(e.target.value)}>
                 <option value="FR_200">20 % (taux normal)</option>
                 <option value="FR_100">10 % (taux intermédiaire)</option>
-                <option value="FR_055">5,5 % (taux réduit)</option>
+                <option value="FR_55">5,5 % (taux réduit)</option>
                 <option value="FR_021">2,1 % (taux particulier)</option>
               </select>
             </label>
@@ -7232,7 +7236,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
                   <select value={tva} onChange={(e) => setTva(e.target.value)}>
                     <option value="FR_200">20 % (taux normal)</option>
                     <option value="FR_100">10 % (taux intermédiaire)</option>
-                    <option value="FR_055">5,5 % (taux réduit)</option>
+                    <option value="FR_55">5,5 % (taux réduit)</option>
                     <option value="FR_021">2,1 % (taux particulier)</option>
                   </select>
                 </label>
