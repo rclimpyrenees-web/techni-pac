@@ -7993,7 +7993,10 @@ function ContratForm({ client, settings, onClose, onGenerated }) {
     }
   };
 
-  return (
+  // La fenêtre est sortie du formulaire client : une carte en verre dépoli
+  // (backdrop-filter) devient le repère des éléments en position fixe, ce qui
+  // collait la fenêtre dans le formulaire au lieu de la centrer sur l'écran.
+  return createPortal(
     <div className="pdf-modal-overlay" onClick={onClose}>
       <div className="pdf-modal-box contrat-modal-box" onClick={(e) => e.stopPropagation()}>
         <div className="pdf-modal-toolbar">
@@ -8124,7 +8127,8 @@ function ContratForm({ client, settings, onClose, onGenerated }) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -9799,7 +9803,7 @@ function PdfFileModal({ base64, filename, title, onClose }) {
     window.open(blobUrl, "_blank");
   };
 
-  return (
+  return createPortal(
     <div className="pdf-modal-overlay" onClick={onClose}>
       <div className="pdf-modal-box pdf-modal-box-compact" onClick={(e) => e.stopPropagation()}>
         <div className="pdf-modal-toolbar">
@@ -9820,7 +9824,8 @@ function PdfFileModal({ base64, filename, title, onClose }) {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -10830,8 +10835,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .contrat-creer .hint { margin: 0; }
 .contrat-modeles-vierges { opacity: 0.9; }
 .contrat-modal-box { height: auto; max-width: 720px; max-height: 92vh; display: flex; flex-direction: column; }
-.contrat-form-corps { padding: 18px 20px 4px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.contrat-form-actions { padding: 0 20px 18px; margin-top: 10px; }
+.contrat-form-corps { padding: 18px 20px 4px; flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.contrat-form-actions { padding: 0 20px 18px; margin-top: 10px; flex-shrink: 0; }
 .contrat-machines { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
 .contrat-machine-ligne { margin-bottom: 6px; }
 .contrat-ttc { font-weight: 600; color: var(--bleu); margin: -6px 0 10px; }
