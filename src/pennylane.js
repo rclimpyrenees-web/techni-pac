@@ -26,8 +26,10 @@ async function callPennylane(action, payload) {
 // Crée une facture Pennylane pour ce client (créé/retrouvé automatiquement côté
 // Pennylane) et cette intervention. Retourne { invoice, pennylaneCustomerId }.
 // section : objet de l'intervention, utilisé comme titre de section.
-export function pennylaneCreateInvoice({ client, montantHT, label, vatRate, section }) {
-  return callPennylane("create_invoice", { client, montantHT, label, vatRate, section });
+// remplace : id d'un brouillon déjà envoyé, supprimé dans Pennylane avant de
+// recréer la facture (renvoi après correction de la fiche client).
+export function pennylaneCreateInvoice({ client, montantHT, label, vatRate, section, remplace }) {
+  return callPennylane("create_invoice", { client, montantHT, label, vatRate, section, remplace });
 }
 // Corrige le montant d'une facture Pennylane encore à l'état de brouillon.
 // Lève une erreur explicite si elle a déjà été finalisée : dans ce cas, seule
