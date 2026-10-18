@@ -1559,10 +1559,11 @@ function AppContenu() {
     return possibles.length === 1 ? possibles[0] : undefined;
   };
 
-  const syncFactureToPennylane = async (facturationEntry, r) => {
+  const syncFactureToPennylane = async (facturationEntry, r, { remplace } = {}) => {
     const client = ficheDuRapport(r.client);
     try {
       const { invoice, pennylaneCustomerId } = await pennylaneCreateInvoice({
+        remplace,
         client: {
           // Facture établie au nom de l'entreprise pour un client
           // professionnel, et au nom du particulier sinon.
@@ -1791,9 +1792,21 @@ function AppContenu() {
   // Relance manuelle : utile si l'envoi automatique n'a jamais abouti (coupure
   // réseau sur le terrain, etc.) — retrouve le rapport d'origine pour
   // reconstituer les informations nécessaires (montant, TVA...) et retente.
-  const handleRetryPennylane = (facturationId) => {
+  const handleRetryPennylane = (facturationId, { renvoi = false } = {}) => {
     const item = facturation.find((f) => f.id === facturationId);
     if (!item) return;
+    // Renvoi d'une facture déjà dans Pennylane : son brouillon est remplacé.
+    if (renvoi && item.pennylaneInvoiceId) {
+      const report = reports.find((r) => r.id === item.reportId);
+      if (!report || !report.montant) {
+        upsertFacturation({ ...item, pennylaneStatus: "erreur", pennylaneError: "Impossible de retrouver le montant du rapport d'origine — vérifiez-le sur le rapport concerné." });
+        return;
+      }
+      const enCours = { ...item, montant: `${report.montant} €`, pennylaneStatus: "envoi", pennylaneError: null };
+      upsertFacturation(enCours);
+      syncFactureToPennylane(enCours, report, { remplace: item.pennylaneInvoiceId });
+      return;
+    }
     const report = reports.find((r) => r.id === item.reportId);
     if (!report || !report.montant) {
       upsertFacturation({ ...item, pennylaneStatus: "erreur", pennylaneError: "Impossible de retrouver le montant du rapport d'origine — vérifiez-le sur le rapport concerné." });
@@ -6732,6 +6745,36 @@ function EntrepriseInput({ value, onChange, onSelectEntreprise, placeholder }) {
    navigateur et d'un appareil à l'autre : on gère donc nous-mêmes l'ouverture,
    le filtrage (insensible à la casse et aux accents) et la sélection. La saisie
    libre reste possible, pour les prospects qui ne sont pas encore en fiche. */
+// Fiches les plus proches d'un nom saisi : celles qui contiennent tous ses
+// mots (« POUYFOURCAT » → « POUYFOURCAT David »), sinon les noms qui se
+// ressemblent (faute de frappe). Trois au plus.
+function fichesProches(clients, saisi) {
+  const norm = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  const mots = norm(saisi).split(" ").filter((m) => m.length >= 2);
+  if (!mots.length) return [];
+  const motsDe = (c) => [...norm(c.nom).split(" "), ...norm(c.raisonSociale).split(" ")].filter(Boolean);
+  const contient = clients.filter((c) => { const m = new Set(motsDe(c)); return mots.every((x) => m.has(x)); });
+  if (contient.length) return contient.slice(0, 3);
+  const distance = (a, b) => {
+    const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+    for (let j = 1; j <= b.length; j++) d[0][j] = j;
+    for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    return d[a.length][b.length];
+  };
+  // Chaque mot saisi doit ressembler à un mot de la fiche.
+  const note = (c) => {
+    const mf = motsDe(c);
+    let total = 0;
+    for (const m of mots) {
+      const meilleur = Math.max(0, ...mf.map((x) => 1 - distance(m, x) / Math.max(m.length, x.length)));
+      if (meilleur < 0.7) return 0;
+      total += meilleur;
+    }
+    return total / mots.length;
+  };
+  return clients.map((c) => ({ c, n: note(c) })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n).slice(0, 3).map((x) => x.c);
+}
+
 function ClientSearchSelect({ clients, value, onChange, placeholder }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState(value || "");
@@ -6971,7 +7014,17 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
     }
   };
 
-  const submit = () => onSubmit(buildReport());
+  // Nom de client qui ne correspond à aucune fiche : on le signale avant
+  // d'enregistrer (sinon pas d'historique, et une facture sans adresse).
+  const [verifClient, setVerifClient] = useState(null); // { saisi, suggestions }
+  const submit = () => {
+    if (!clients.some((c) => c.nom === client)) {
+      setVerifClient({ saisi: client.trim(), suggestions: fichesProches(clients, client) });
+      return;
+    }
+    onSubmit(buildReport());
+  };
+  const enregistrerAvec = (nom) => { setVerifClient(null); setClient(nom); onSubmit({ ...buildReport(), client: nom }); };
   const preview = () => onPreview(buildReport());
 
   return (
@@ -7306,6 +7359,30 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
             : ""}
         </span>
       </label>
+
+      {verifClient && (
+        <div className="verif-client" role="alert">
+          <div className="verif-client-titre"><Icon name="alert" size={16} /> Aucune fiche client « {verifClient.saisi} »</div>
+          {verifClient.suggestions.length > 0 ? (
+            <>
+              <p>Tu voulais dire :</p>
+              <div className="verif-client-choix">
+                {verifClient.suggestions.map((c) => (
+                  <button key={c.id || c.nom} type="button" className="btn-primary small" onClick={() => enregistrerAvec(c.nom)}>
+                    {libelleClient(c)}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p>Sans fiche, le rapport n'apparaîtra dans aucun historique et la facture partira sans adresse.</p>
+          )}
+          <div className="verif-client-choix">
+            <button type="button" className="btn-ghost small" onClick={() => setVerifClient(null)}>Corriger le client</button>
+            <button type="button" className="btn-ghost small" onClick={() => { setVerifClient(null); onSubmit(buildReport()); }}>Enregistrer quand même</button>
+          </div>
+        </div>
+      )}
 
       <div className="form-actions">
         <button className="btn-ghost" onClick={onCancel}>Annuler</button>
@@ -9444,6 +9521,19 @@ function Facturation({ clients, facturation, onFacturer, onPayer, onSyncPennylan
                     <Icon name="sync" size={13} /> Réessayer Pennylane
                   </button>
                 )}
+                {f.pennylaneInvoiceId && (
+                  <button
+                    className="btn-ghost small"
+                    disabled={f.pennylaneStatus === "envoi"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (window.confirm("Renvoyer cette facture vers Pennylane ?\n\nLe brouillon actuel y sera supprimé et remplacé par une nouvelle facture, avec la fiche client à jour. Impossible si la facture a déjà été finalisée dans Pennylane.")) onRetryPennylane(f.id, { renvoi: true });
+                    }}
+                    title="Supprime le brouillon dans Pennylane et le recrée avec la fiche client à jour"
+                  >
+                    <Icon name="sync" size={13} /> {f.pennylaneStatus === "envoi" ? "Envoi…" : "Renvoyer vers Pennylane"}
+                  </button>
+                )}
                 <button className="btn-small" onClick={(e) => { e.stopPropagation(); onFacturer(f.id); }}>Marquer facturé</button>
                 <span className="row-delete-hover" onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDeleteFacturation(f.id)} label="" /></span>
               </div>
@@ -10991,6 +11081,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .recherche-client .icon-btn { position: absolute; right: 4px; color: var(--encre-3); }
 .recherche-rapports { margin: 4px 0 8px; }
 .recherche-planning { margin: 4px 0 12px; }
+.verif-client { margin: 12px 0 4px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--orange, #E8873A); background: rgba(232,135,58,0.12); }
+.verif-client p { margin: 6px 0; }
+.verif-client-titre { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+.verif-client-choix { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .recherche-planning input::-webkit-search-cancel-button { display: none; }
 .resultats-planning h3 { margin-bottom: 6px; }
 .resultats-planning .list > li.row { gap: 14px; align-items: center; }
@@ -11804,3 +11898,4 @@ input, select, textarea { border-radius: 10px; }
 .planning-day .row.done .row-title { color: var(--encre-3); }
 
 `;
+    
