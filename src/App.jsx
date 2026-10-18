@@ -113,6 +113,13 @@ const TYPES_CONTRAT = [
   },
 ];
 
+// Taux de TVA applicables aux travaux d'entretien chez le particulier.
+const TAUX_TVA = [
+  { valeur: "20", libelle: "20 %" },
+  { valeur: "10", libelle: "10 %" },
+  { valeur: "5.5", libelle: "5,5 %" },
+];
+
 const MOIS_LISIBLES = ["", "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
 
 // Déduit le type de contrat le plus probable à partir du matériel de la fiche.
@@ -8080,8 +8087,10 @@ function ContratForm({ client, settings, initial, onClose, onGenerated }) {
             <label>Prix annuel HT (€)
               <input inputMode="decimal" value={montantHT} onChange={(e) => setMontantHT(e.target.value)} placeholder="Ex : 150" />
             </label>
-            <label>TVA (%)
-              <input inputMode="decimal" value={tauxTva} onChange={(e) => setTauxTva(e.target.value)} placeholder="Ex : 20" />
+            <label>TVA
+              <select value={tauxTva} onChange={(e) => setTauxTva(e.target.value)}>
+                {TAUX_TVA.map((t) => <option key={t.valeur} value={t.valeur}>{t.libelle}</option>)}
+              </select>
             </label>
           </div>
           <p className="hint contrat-ttc">{ttc !== null ? "Prix annuel TTC : " + montantLisible(ttc) + " €" : "Prix annuel TTC : —"}</p>
@@ -8322,12 +8331,13 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
       <label className="block mt">Contrat de maintenance</label>
       <div className="contract-box">
         <div className="contrat-creer">
-          <button type="button" className="btn-primary small" onClick={() => { setContratAModifier(null); setShowContratForm(true); }}>
-            <Icon name="report" size={14} /> {contrat ? "Refaire le contrat depuis cette fiche" : "Créer le contrat depuis cette fiche"}
+          <button type="button" className="btn-primary small" onClick={() => { setContratAModifier(contrat?.details || null); setShowContratForm(true); }}>
+            <Icon name="report" size={14} /> {contrat?.details ? "Modifier le contrat depuis cette fiche" : "Créer le contrat depuis cette fiche"}
           </button>
           <span className="hint">
             Le matériel, l'adresse et les coordonnées de la fiche sont repris automatiquement. Montant libre,
             signature à l'écran, PDF enregistré sur la fiche et rangé dans le dossier du client.
+            {contrat?.details ? " Le contrat enregistré est rouvert tel quel : tu modifies ce que tu veux et le PDF est refait." : ""}
           </span>
         </div>
 
@@ -8364,9 +8374,6 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
             <span className="contract-status">
               <Icon name="check" size={14} /> {contrat.nom || "Contrat"}
               <button type="button" className="contract-view-link" onClick={() => setShowOwnContract(true)}>Voir</button>
-              {contrat.details && (
-                <button type="button" className="contract-view-link" onClick={() => { setContratAModifier(contrat.details); setShowContratForm(true); }}>Modifier</button>
-              )}
               <button type="button" className="icon-btn" onClick={() => setContrat(null)} title="Retirer le contrat">
                 <Icon name="trash" size={13} />
               </button>
@@ -10216,7 +10223,7 @@ function buildContratHtml(contrat, client, settings) {
     "Prix et modalités de paiement",
     `<table class="pdf-table pdf-bloc-insecable"><tbody>
       ${champ("Prix annuel de l'entretien (HT)", ht !== null ? montantLisible(ht) + " €" : "")}
-      ${champ("TVA applicable", taux !== null ? montantLisible(taux) + " %" : "")}
+      ${champ("TVA applicable", (TAUX_TVA.find((t) => t.valeur === String(contrat.tauxTva)) || {}).libelle || (taux !== null ? montantLisible(taux) + " %" : ""))}
       ${champ("Prix annuel TTC", ttc !== null ? montantLisible(ttc) + " €" : "")}
       ${champ("Modalités et échéance de paiement", contrat.modalitesPaiement)}
     </tbody></table>` +
