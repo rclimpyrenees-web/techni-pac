@@ -246,6 +246,21 @@ const CONTRAT_MEDIATION =
 const CONTRAT_DROIT_APPLICABLE =
   "Le présent contrat est soumis au droit français. À défaut de résolution amiable ou de recours à la médiation, tout litige relatif à sa formation, son exécution ou son interprétation relève de la compétence des juridictions du ressort du domicile du défendeur ou, si le Client est un professionnel, du tribunal compétent du siège du Prestataire, sous réserve des règles d'ordre public applicables aux consommateurs.";
 
+// Numéro de contrat : date de prise d'effet + nom du client.
+// Ex. CTR-20261018-AGULLO, ou CTR-20261018-SARLDUPONT pour un professionnel.
+function numeroContrat(dateIso, client) {
+  const m = String(dateIso || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const jour = m ? m[1] + m[2] + m[3] : isoLocalAujourdhui().replace(/-/g, "");
+  const brut = client?.raisonSociale ? client.raisonSociale : String(client?.nom || "").split(/\s+/)[0];
+  const nom = String(brut || "")
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 16);
+  return "CTR-" + jour + "-" + (nom || "CLIENT");
+}
+
 // La périodicité écrite sur le contrat : le texte saisi, complété tout seul
 // par le mois d'intervention choisi (sans le répéter s'il est déjà écrit).
 function textePeriodicite(saisie, mois) {
@@ -7944,7 +7959,6 @@ function ContratForm({ client, settings, initial, onClose, onGenerated }) {
   // et le refaire sans tout ressaisir.
   const d = initial || null;
   const serieDesUnites = (m) => [...normalizeUnits(m.exterieur), ...normalizeUnits(m.interieur)].map((u) => String(u.serie || "").trim()).filter(Boolean);
-  const [reference] = useState(() => d?.reference || "CTR-" + new Date().getFullYear() + "-" + String(Date.now()).slice(-5));
   const [typeContrat, setTypeContrat] = useState(() => d?.typeContrat || typeContratSuggere(machinesDispo));
   const [b2b, setB2b] = useState(d ? !!d.b2b : !!client.professionnel);
   const [selection, setSelection] = useState(() => {
@@ -7971,6 +7985,9 @@ function ContratForm({ client, settings, initial, onClose, onGenerated }) {
   const [signatureClient, setSignatureClient] = useState(d?.signatureClient || "");
   const [enCours, setEnCours] = useState(false);
   const [erreur, setErreur] = useState("");
+
+  // Numéro figé pour un contrat repris, recalculé tant qu'il n'est pas enregistré.
+  const reference = d?.reference || numeroContrat(dateDebut, client);
 
   const basculer = (id) => setSelection((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
   const machinesRetenues = machinesDispo.filter((m) => selection.includes(m.id)).map(({ id, ...m }) => m);
@@ -8078,6 +8095,8 @@ function ContratForm({ client, settings, initial, onClose, onGenerated }) {
               </select>
             </label>
           </div>
+          <p className="hint contrat-reference">N° de contrat : <strong>{reference}</strong></p>
+
           <label className="block">Périodicité (texte du contrat)
             <input value={periodicite} onChange={(e) => setPeriodicite(e.target.value)} placeholder="Ex : Annuelle" />
           </label>
@@ -10879,6 +10898,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .contrat-machines { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
 .contrat-machine-ligne { margin-bottom: 6px; }
 .contrat-ttc { font-weight: 600; color: var(--bleu); margin: -6px 0 10px; }
+.contrat-reference { margin: 2px 0 12px; }
 .contrat-clauses { width: 100%; font-family: inherit; font-size: 13px; line-height: 1.5; padding: 12px; border: 1px solid var(--trait); border-radius: 8px; background: var(--fond); color: var(--encre); margin: 8px 0 4px; }
 .btn-b2b { border-color: var(--orange); color: var(--orange-fonce); }
 .btn-b2b:hover { background: var(--orange-clair); }
