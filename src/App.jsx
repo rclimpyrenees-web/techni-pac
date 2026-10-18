@@ -26,6 +26,13 @@ const DEFAULT_ENTRETIEN_CHECKLIST = [
 
 /* ---------- Paramètres généraux (technicien + entreprise) ---------- */
 
+// Médiateur de la consommation par défaut (modifiable dans les Paramètres).
+const MEDIATEUR_DEFAUT = {
+  nom: "BATIRMEDIATION",
+  coordonnees: "22 Corniche du Soleil 83430 Saint-Mandrier-sur-Mer",
+};
+
+
 const defaultSettings = {
   technicien: { nom: "" },
   entreprise: { nom: "", formeJuridique: "", adresse: "", codePostalVille: "", telephone: "", email: "", siret: "", attestationCapacite: "", mediateurNom: MEDIATEUR_DEFAUT.nom, mediateurCoordonnees: MEDIATEUR_DEFAUT.coordonnees, logo: "", clausePied: "" },
@@ -114,12 +121,6 @@ const TYPES_CONTRAT = [
 ];
 
 // Taux de TVA applicables aux travaux d'entretien chez le particulier.
-// Médiateur de la consommation par défaut (modifiable dans les Paramètres).
-const MEDIATEUR_DEFAUT = {
-  nom: "BATIRMEDIATION",
-  coordonnees: "22 Corniche du Soleil 83430 Saint-Mandrier-sur-Mer",
-};
-
 const TAUX_TVA = [
   { valeur: "20", libelle: "20 %" },
   { valeur: "10", libelle: "10 %" },
