@@ -10101,16 +10101,30 @@ function buildReportHtml(report, settings, clients) {
    Reprend les modèles validés : même suite d'articles, version particulier
    ou version B2B, pour la PAC air/air et la PAC air/eau. */
 
+// Le module des polices n'a pas la même forme selon la façon dont pdfmake est
+// chargé (bundle navigateur ou paquet npm) : on retient le premier candidat
+// qui contient réellement des polices.
+function extraireVfsPdfMake(polices) {
+  const candidats = [
+    polices?.pdfMake?.vfs,
+    polices?.default?.pdfMake?.vfs,
+    polices?.vfs,
+    polices?.default?.vfs,
+    polices?.default,
+    polices,
+  ];
+  return candidats.find((c) => c && typeof c === "object" && Object.keys(c).some((k) => /\.ttf$/i.test(k))) || null;
+}
+
 async function chargerPdfMake() {
   const mod = await import("pdfmake/build/pdfmake");
   const polices = await import("pdfmake/build/vfs_fonts");
   const pdfMake = mod.default || mod;
-  const vfs =
-    polices.vfs ||
-    polices.default?.vfs ||
-    polices.default?.pdfMake?.vfs ||
-    polices.pdfMake?.vfs;
-  if (vfs) pdfMake.vfs = vfs;
+  const vfs = extraireVfsPdfMake(polices);
+  if (vfs) {
+    if (typeof pdfMake.addVirtualFileSystem === "function") pdfMake.addVirtualFileSystem(vfs);
+    pdfMake.vfs = vfs;
+  }
   if (!pdfMake.vfs) throw new Error("Polices pdfmake introuvables (vfs_fonts). Vérifier que « pdfmake » est bien installé.");
   return pdfMake;
 }
