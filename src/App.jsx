@@ -325,6 +325,7 @@ const Icon = ({ name, size = 18 }) => {
     report: "M6 2h9l5 5v15H6V2zm8 1.5V8h4.5",
     users: "M17 21v-2a4 4 0 00-3-3.87M9 21v-2a4 4 0 013-3.87m0-8a4 4 0 110 8 4 4 0 010-8zm8 3a4 4 0 010 8",
     calendar: "M8 2v4M16 2v4M3 9h18M4 5h16v16H4V5z",
+    bouteille: "M10 2h4v3h-4zM8 5h8a3 3 0 013 3v11a3 3 0 01-3 3H8a3 3 0 01-3-3V8a3 3 0 013-3zM5 12h14",
     quote: "M6 3h12v18l-3-2-3 2-3-2-3 2V3z",
     invoice: "M4 3h16v18l-4-2-4 2-4-2-4 2V3z",
     plus: "M12 5v14M5 12h14",
@@ -1383,6 +1384,8 @@ function AppContenu() {
   // Hors du chargement initial : tant que la table n'existe pas (script SQL
   // pas encore lancé), le reste de l'application fonctionne normalement.
   const { items: fournisseurs, upsert: upsertFournisseur, remove: removeFournisseur, error: erreurFournisseurs } = useSyncedCollection("fournisseurs", initialFournisseurs);
+  const { items: bouteilles, upsert: upsertBouteille, remove: removeBouteille, error: erreurBouteilles } = useSyncedCollection("bouteilles", []);
+  const { items: mouvementsFluide, upsert: upsertMouvementFluide, remove: removeMouvementFluide, error: erreurMouvementsFluide } = useSyncedCollection("mouvements_fluide", []);
   // Rangement automatique des rapports validés et des contrats dans OneDrive.
   const oneDrive = useRangementOneDrive({ reports: reportsRaw, clients, settings, upsertReport, upsertClient });
   useRangementPhotos({ reports: reportsRaw, clients, upsertReport, upsertClient });
@@ -1437,6 +1440,11 @@ function AppContenu() {
   const appliquerActionAssistant = (action) => {
     if (action.type === "planning" && action.item) {
       upsertPlanning(action.item);
+      return true;
+    }
+    // Charge / récupération de fluide dictée à l'assistant.
+    if (action.type === "fluide" && action.item?.id) {
+      upsertMouvementFluide(action.item);
       return true;
     }
     if (action.type === "planning_fait" && action.planningId) {
@@ -1518,6 +1526,7 @@ function AppContenu() {
     { id: "planning", label: "Planning", icon: "calendar" },
     { id: "rappels", label: "Rappels", icon: "bell" },
     { id: "devis", label: "Devis", icon: "quote" },
+    { id: "fluides", label: "Fluides", icon: "bouteille" },
     { id: "fournisseurs", label: "Fournisseurs", icon: "truck" },
     { id: "facturation", label: "Facturation", icon: "invoice" },
     { id: "parametres", label: "Paramètres", icon: "settings" },
@@ -1618,9 +1627,27 @@ function AppContenu() {
     if (task && task.fait !== !!r.valide) upsertPlanning({ ...task, fait: !!r.valide });
   };
 
+  // Les charges / récupérations notées dans un rapport deviennent des
+  // opérations de l'onglet Fluides (id stable : modifier le rapport les met à
+  // jour, retirer une ligne la supprime).
+  const synchroniserFluidesRapport = (r, { supprime = false } = {}) => {
+    const prefixe = "fm-" + r.id + "-";
+    const voulues = supprime ? [] : fluidesValides(r).map((o) => ({
+      id: prefixe + o.id, date: dateRapportVersIso(r.date), client: r.client, operation: o.operation, fluide: o.fluide,
+      bouteille: o.bouteille, kg: nombreFr(o.kg), rapport: r.id, notes: "",
+      ...(o.poidsAvant ? { poidsAvant: o.poidsAvant, poidsApres: o.poidsApres } : {}),
+    }));
+    mouvementsFluide.filter((m) => String(m.id).startsWith(prefixe) && !voulues.some((v) => v.id === m.id)).forEach((m) => removeMouvementFluide(m.id));
+    voulues.forEach((v) => {
+      const actuel = mouvementsFluide.find((m) => m.id === v.id);
+      if (!actuel || JSON.stringify({ ...actuel, updated_at: undefined }) !== JSON.stringify({ ...actuel, ...v, updated_at: undefined })) upsertMouvementFluide(v);
+    });
+  };
+
   const handleAddReport = (r) => {
     upsertReport(r);
     syncPlanningTaskFromReport(r);
+    synchroniserFluidesRapport(r);
 
     const aUnDevisAFaire = !!(r.devisAEffectuer && r.devisAEffectuer.trim());
     const montantRenseigne = r.montant !== undefined && r.montant !== null && String(r.montant).trim() !== "";
@@ -1660,6 +1687,7 @@ function AppContenu() {
     const ancien = reports.find((x) => x.id === r.id);
     upsertReport(r);
     syncPlanningTaskFromReport(r);
+    synchroniserFluidesRapport(r);
 
     // Devis à effectuer ajouté, modifié ou retiré après coup : la ligne de
     // l'onglet Devis suit. On n'agit que si le texte a réellement changé, pour
@@ -1715,6 +1743,7 @@ function AppContenu() {
 
   const handleDeleteReport = (r) => {
     removeReport(r.id);
+    synchroniserFluidesRapport(r, { supprime: true });
   };
 
   const handlePrint = async (r) => {
@@ -2078,6 +2107,8 @@ function AppContenu() {
             focusReport={focusReport}
             reportPrefill={reportPrefill}
             onPrefillConsomme={() => setReportPrefill(null)}
+            bouteilles={bouteilles}
+            mouvementsFluide={mouvementsFluide}
           />
         )}
 
@@ -2144,6 +2175,20 @@ function AppContenu() {
             }}
             onValide={(id) => removeDevisEnCours(id)}
             onOpenClient={goToClient}
+          />
+        )}
+
+        {tab === "fluides" && (
+          <FluidesFrigorigenes
+            clients={clients}
+            reports={reports}
+            bouteilles={bouteilles}
+            mouvements={mouvementsFluide}
+            erreur={erreurBouteilles || erreurMouvementsFluide}
+            onSaveBouteille={(b) => upsertBouteille(b)}
+            onDeleteBouteille={(id) => removeBouteille(id)}
+            onSaveMouvement={(m) => upsertMouvementFluide(m)}
+            onDeleteMouvement={(id) => removeMouvementFluide(id)}
           />
         )}
 
@@ -3048,7 +3093,7 @@ function lireAVoixHauteIphone(texte, onFin) {
 
 // Onglet d'ouverture demandé dans l'adresse, par exemple par un raccourci
 // Siri : techni-pac.vercel.app/?onglet=assistant
-const ONGLETS_VALIDES = ["dashboard", "assistant", "rapports", "clients", "planning", "rappels", "devis", "fournisseurs", "facturation", "parametres"];
+const ONGLETS_VALIDES = ["dashboard", "assistant", "rapports", "clients", "planning", "rappels", "devis", "fluides", "fournisseurs", "facturation", "parametres"];
 function ongletDepuisAdresse() {
   try {
     const demande = new URLSearchParams(window.location.search).get("onglet");
@@ -3794,8 +3839,9 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     email: "E-mail", planning: "Planning", planning_fait: "Intervention faite", devis_a_faire: "Devis à faire",
     devis_a_faire_maj: "Prix fournisseur", classer_pj: "Rangement OneDrive", regle: "Règle de classement",
     dossier: "Dossier OneDrive", pennylane_fournisseur: "Pennylane", debrief_valider: "Débrief", suppression: "Suppression",
+    fluide: "Fluide frigorigène",
   };
-  const ICONES_ACTION = { email: "mail", suppression: "trash", planning: "calendar", planning_fait: "check", devis_a_faire: "quote", devis_a_faire_maj: "quote", classer_pj: "folder", dossier: "folder", pennylane_fournisseur: "invoice" };
+  const ICONES_ACTION = { email: "mail", suppression: "trash", planning: "calendar", planning_fait: "check", devis_a_faire: "quote", devis_a_faire_maj: "quote", classer_pj: "folder", dossier: "folder", pennylane_fournisseur: "invoice", fluide: "bouteille" };
   const detailsEmail = (a) => {
     const it = a.item || {};
     const pj = [
@@ -5408,7 +5454,7 @@ function texteRechercheRapport(r, clients) {
   ].filter(Boolean).join(" "));
 }
 
-function Rapports({ reports, clients, settings, showForm, setShowForm, reportType, setReportType, onAdd, onUpdate, onValidate, onDelete, onPrint, focusReport, reportPrefill, onPrefillConsomme }) {
+function Rapports({ reports, clients, settings, showForm, setShowForm, reportType, setReportType, onAdd, onUpdate, onValidate, onDelete, onPrint, focusReport, reportPrefill, onPrefillConsomme, bouteilles, mouvementsFluide }) {
   const [filter, setFilter] = useState("tous");
   const [editingReport, setEditingReport] = useState(null);
   const [activePrefillClient, setActivePrefillClient] = useState(null);
@@ -5569,6 +5615,8 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
               requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
             }}
             onPreview={onPrint}
+            bouteilles={bouteilles}
+            mouvementsFluide={mouvementsFluide}
           />
         </div>
       )}
@@ -6951,7 +6999,7 @@ function ClientSearchSelect({ clients, value, onChange, placeholder }) {
   );
 }
 
-function ReportForm({ clients, settings, reportType, setReportType, editingReport, prefillClient, prefillPlanningTaskId, prefillAdresseSite, onCancel, onSubmit, onPreview }) {
+function ReportForm({ clients, settings, reportType, setReportType, editingReport, prefillClient, prefillPlanningTaskId, prefillAdresseSite, onCancel, onSubmit, onPreview, bouteilles = [], mouvementsFluide = [] }) {
   const isEditing = !!editingReport;
   // Liste des clients triée alphabétiquement (accents et casse ignorés).
   const clientsTries = [...clients].sort((a, b) =>
@@ -6983,6 +7031,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   // technicien le décide (case cochée, ou bouton « Valider » sur le rapport).
   const [marquerEffectue, setMarquerEffectue] = useState(editingReport?.valide ?? false);
   const [devisAEffectuer, setDevisAEffectuer] = useState(editingReport?.devisAEffectuer || "");
+  const [fluides, setFluides] = useState(() => (Array.isArray(editingReport?.fluides) ? editingReport.fluides : []));
   const [photos, setPhotos] = useState(editingReport?.photos || []);
   // Aucune checklist n'est pré-remplie : sur un nouveau rapport, on choisit
   // soi-même le ou les modèles à insérer.
@@ -7114,6 +7163,8 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
       type: reportType, client, date, installation, photos, signatureTech, signatureClient,
       planningTaskId: isEditing ? editingReport.planningTaskId : (prefillPlanningTaskId || undefined),
       valide: marquerEffectue,
+      // Charges / récupérations complètes seulement (bouteille et quantité).
+      fluides: fluides.filter((o) => o.bouteille && nombreFr(o.kg) > 0).map((o) => ({ ...o, kg: Math.round(nombreFr(o.kg) * 1000) / 1000 })),
     };
     if (reportType === "mise_en_service") {
       return { ...base, adresseSite, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
@@ -7450,6 +7501,15 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
           </div>
         )}
       </div>
+
+      <FluidesDuRapport
+        value={fluides}
+        onChange={setFluides}
+        bouteilles={bouteilles}
+        mouvements={mouvementsFluide}
+        rapportId={isEditing ? editingReport.id : null}
+        fluideDefaut={fluidesDuClient(ficheClient)[0]?.fluide?.trim()}
+      />
 
       <div className="block mt">
         <label>Signatures</label>
@@ -9761,6 +9821,589 @@ function Facturation({ clients, facturation, onFacturer, onPayer, onImpayer, onS
   );
 }
 
+/* ---------- Fluides frigorigènes ----------
+   Bouteilles (neuves, de transfert, de récupération) et registre des charges
+   et récupérations par client. Le contenu d'une bouteille se calcule :
+   contenu de départ (pesée − tare, ou capacité pour une neuve) + fluide
+   récupéré dedans − fluide chargé depuis. */
+
+// PRG (pouvoir de réchauffement global) : tonnes équivalent CO2 = kg × PRG / 1000.
+const FLUIDES = {
+  R32: { prg: 675, couleur: "#5B8DEF" },
+  R410A: { prg: 2088, couleur: "#E0679A" },
+  R407C: { prg: 1774, couleur: "#9B7BE0" },
+  R134a: { prg: 1430, couleur: "#4FB3A5" },
+  R454B: { prg: 466, couleur: "#E8A33A" },
+  R513A: { prg: 631, couleur: "#C9A227" },
+  R449A: { prg: 1397, couleur: "#D46A4C" },
+  R404A: { prg: 3922, couleur: "#B05BB5" },
+  R1234yf: { prg: 4, couleur: "#6FB7D6" },
+  R290: { prg: 3, couleur: "#7CB86A" },
+  R744: { prg: 1, couleur: "#9AA5B1" },
+  R22: { prg: 1810, couleur: "#8C8C8C" },
+};
+const couleurFluide = (fl) => FLUIDES[fl]?.couleur || "#8C8C8C";
+
+const TYPES_BOUTEILLE = {
+  neuve: { titre: "Neuves", seul: "Neuve", aide: "Fluide vierge, pour les charges.", pill: "pill-muted", vide: "Aucune bouteille neuve" },
+  transfert: { titre: "Transfert", seul: "Transfert", aide: "Fluide récupéré en attente d'être réinjecté (même installation).", pill: "pill-pennylane", vide: "Aucune bouteille de transfert" },
+  recuperation: { titre: "Récupération", seul: "Récupération", aide: "Fluide usagé à rendre au fournisseur pour retraitement.", pill: "pill-warm", vide: "Aucune bouteille de récupération" },
+};
+
+const nombreFr = (v) => {
+  const n = parseFloat(String(v ?? "").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+};
+const kgFr = (n) => `${Number(n || 0).toLocaleString("fr-FR", { maximumFractionDigits: 2 })} kg`;
+const dateFluide = (iso) => (iso ? new Date(iso + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) : "");
+
+function contenuBouteille(b, mouvements) {
+  const lies = mouvements.filter((m) => m.bouteille === b.id);
+  const tare = nombreFr(b.tare), brut = nombreFr(b.brut);
+  const depart = tare && brut ? brut - tare : b.type === "neuve" ? nombreFr(b.capacite) : 0;
+  const entre = lies.filter((m) => m.operation === "recuperation").reduce((s, m) => s + nombreFr(m.kg), 0);
+  const sorti = lies.filter((m) => m.operation === "charge").reduce((s, m) => s + nombreFr(m.kg), 0);
+  return Math.max(0, Math.round((depart + entre - sorti) * 1000) / 1000);
+}
+
+function PastilleFluide({ fluide }) {
+  return <span className="fl-pastille" style={{ "--fl": couleurFluide(fluide) }}>{fluide || "?"}</span>;
+}
+
+// Fluide indiqué sur les machines d'une fiche client (unités extérieures).
+function fluidesDuClient(fiche) {
+  return (fiche?.machines || []).flatMap((m) => [...normalizeUnits(m.exterieur)].map((u) => ({ ...u, typeMachine: m.type }))).filter((u) => (u.fluide || "").trim());
+}
+
+function BouteilleForm({ initial, onCancel, onSubmit }) {
+  const [b, setB] = useState(() => ({
+    type: "neuve", numero: "", fluide: "R32", capacite: "", tare: "", brut: "",
+    recue: toLocalISODate(new Date()), fournisseur: "", facture: "", photo: "", ...(initial || {}),
+  }));
+  const maj = (champ) => (e) => setB((x) => ({ ...x, [champ]: e.target.value }));
+  const tare = nombreFr(b.tare), brut = nombreFr(b.brut);
+  const valide = b.numero.trim() && b.fluide && nombreFr(b.capacite) > 0;
+  return (
+    <div className="fl-form-bouteille">
+      <h4>{initial ? `Bouteille ${initial.numero}` : "Nouvelle bouteille"}</h4>
+      <p className="hint">{TYPES_BOUTEILLE[b.type].aide}</p>
+      <div className="fl-toggle">
+        {Object.entries(TYPES_BOUTEILLE).map(([id, t]) => (
+          <button key={id} type="button" className={"toggle-btn" + (b.type === id ? " active" : "")} onClick={() => setB({ ...b, type: id })}>{t.seul}</button>
+        ))}
+      </div>
+      <div className="form-grid">
+        <label>N° de bouteille<input value={b.numero} onChange={maj("numero")} placeholder="Gravé ou sur l'étiquette" /></label>
+        <label>Fluide
+          <select value={b.fluide} onChange={maj("fluide")}>{Object.keys(FLUIDES).map((x) => <option key={x}>{x}</option>)}</select>
+        </label>
+        <label>Capacité / charge nominale (kg)<input inputMode="decimal" value={b.capacite} onChange={maj("capacite")} placeholder="Ex : 9" /></label>
+        <label>Tare — poids à vide (kg)<input inputMode="decimal" value={b.tare} onChange={maj("tare")} placeholder="Frappé « TW » sur le col" /></label>
+        <label>Poids pesé à la réception (kg)<input inputMode="decimal" value={b.brut} onChange={maj("brut")} placeholder="Facultatif" /></label>
+        <label>Date de réception<input type="date" value={b.recue} onChange={maj("recue")} /></label>
+        <label>Fournisseur<input value={b.fournisseur} onChange={maj("fournisseur")} /></label>
+        <label>N° de facture / bon de livraison<input value={b.facture} onChange={maj("facture")} placeholder="Facultatif" /></label>
+        <div className="field-col grid-full">
+          <SinglePhotoField label="Photo de l'étiquette (facultatif)" value={b.photo} onChange={(photo) => setB((x) => ({ ...x, photo }))} />
+        </div>
+      </div>
+      {tare > 0 && brut > 0 && (
+        <p className="hint">{b.type === "neuve"
+          ? `Contenu de départ : ${kgFr(brut - tare)} de ${b.fluide} (pesée ${kgFr(brut)} − tare ${kgFr(tare)}).`
+          : `Déjà ${kgFr(brut - tare)} dans la bouteille.`}</p>
+      )}
+      <div className="form-actions">
+        <button type="button" className="btn-ghost" onClick={onCancel}>Annuler</button>
+        <button type="button" className="btn-primary" disabled={!valide} onClick={() => onSubmit({ statut: "en_service", ...b, numero: b.numero.trim(), id: initial?.id || "bt" + Date.now() })}>
+          {initial ? "Enregistrer" : "Ajouter la bouteille"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MouvementFluideForm({ clients, reports, bouteilles, mouvements, onCancel, onSubmit }) {
+  const [f, setF] = useState({ date: toLocalISODate(new Date()), client: "", operation: "charge", fluide: "", bouteille: "", kg: "", rapport: "", notes: "" });
+  const [pesee, setPesee] = useState(false);
+  const [poids, setPoids] = useState({ avant: "", apres: "" });
+  const fiche = clients.find((c) => c.nom === f.client);
+  const unites = fluidesDuClient(fiche);
+  // Fluide proposé : celui de la machine du client, sinon le premier en stock.
+  const fluide = f.fluide || unites[0]?.fluide?.trim() || bouteilles.find((b) => b.statut === "en_service")?.fluide || "R32";
+  const quantite = pesee ? Math.abs(nombreFr(poids.avant) - nombreFr(poids.apres)) : nombreFr(f.kg);
+  const possibles = bouteilles.filter((b) => b.statut === "en_service" && b.fluide === fluide &&
+    (f.operation === "charge" ? ["neuve", "transfert"].includes(b.type) : ["transfert", "recuperation"].includes(b.type)));
+  const bChoisie = possibles.find((b) => b.id === f.bouteille);
+  const avant = bChoisie ? contenuBouteille(bChoisie, mouvements) : 0;
+  const apres = bChoisie ? (f.operation === "charge" ? avant - quantite : avant + quantite) : null;
+  const rapportsClient = reports.filter((r) => r.client === f.client).slice(0, 12); // les plus récents d'abord
+  const valide = f.client && quantite > 0 && bChoisie && (f.operation !== "charge" || apres >= -0.001);
+  return (
+    <section className="card form-card fl-form">
+      <h3>Nouvelle opération</h3>
+      <div className="fl-toggle">
+        {[["charge", "Charge"], ["recuperation", "Récupération"]].map(([id, lib]) => (
+          <button key={id} type="button" className={"toggle-btn" + (f.operation === id ? " active" : "")} onClick={() => setF({ ...f, operation: id, bouteille: "" })}>{lib}</button>
+        ))}
+      </div>
+      <div className="form-grid">
+        <div className="field-col">Client
+          <ClientSearchSelect clients={clients} value={f.client} onChange={(v) => setF({ ...f, client: v, rapport: "" })} placeholder="Nom du client" />
+          {unites.length > 0 && <span className="hint">Machine du client : {unites.map((u) => `${u.fluide}${u.quantiteFluide ? ` (${u.quantiteFluide} kg)` : ""}`).join(", ")}</span>}
+        </div>
+        <label>Date<input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>
+        <label>Fluide
+          <select value={fluide} onChange={(e) => setF({ ...f, fluide: e.target.value, bouteille: "" })}>
+            {Object.keys(FLUIDES).map((x) => <option key={x}>{x}</option>)}
+          </select>
+        </label>
+        <div className="field-col">Quantité
+          <div className="fl-mode">
+            <button type="button" className={"filter-btn" + (!pesee ? " active" : "")} onClick={() => setPesee(false)}>Saisie</button>
+            <button type="button" className={"filter-btn" + (pesee ? " active" : "")} onClick={() => setPesee(true)}>Par pesée</button>
+          </div>
+          {!pesee ? (
+            <input inputMode="decimal" value={f.kg} onChange={(e) => setF({ ...f, kg: e.target.value })} placeholder="En kg, ex : 0,8" />
+          ) : (
+            <div className="fl-pesee">
+              <label>Bouteille avant (kg)<input inputMode="decimal" value={poids.avant} onChange={(e) => setPoids({ ...poids, avant: e.target.value })} /></label>
+              <label>Bouteille après (kg)<input inputMode="decimal" value={poids.apres} onChange={(e) => setPoids({ ...poids, apres: e.target.value })} /></label>
+              {quantite > 0 && <span className="hint">= {kgFr(quantite)} {f.operation === "charge" ? "chargés" : "récupérés"}</span>}
+            </div>
+          )}
+        </div>
+        <label className="grid-full">{f.operation === "charge" ? "Bouteille utilisée" : "Bouteille de récupération"}
+          <select value={f.bouteille} onChange={(e) => setF({ ...f, bouteille: e.target.value })}>
+            <option value="">{possibles.length ? "Choisir…" : `Aucune bouteille de ${fluide} disponible`}</option>
+            {possibles.map((b) => <option key={b.id} value={b.id}>{b.numero} ({TYPES_BOUTEILLE[b.type].seul.toLowerCase()}) — {kgFr(contenuBouteille(b, mouvements))}</option>)}
+          </select>
+          {bChoisie && quantite > 0 && (
+            <span className={"hint" + (apres < 0 || (bChoisie.type !== "neuve" && apres > nombreFr(bChoisie.capacite) * 0.8) ? " alerte" : "")}>
+              {f.operation === "charge"
+                ? apres < 0 ? `Pas assez dans cette bouteille (il reste ${kgFr(avant)}).` : `Il restera ${kgFr(apres)} dans la bouteille ${bChoisie.numero}.`
+                : `La bouteille contiendra ${kgFr(apres)} sur ${kgFr(bChoisie.capacite)}${apres > nombreFr(bChoisie.capacite) * 0.8 ? " — au-delà de 80 %, prévois-en une autre." : "."}`}
+            </span>
+          )}
+        </label>
+        <label className="grid-full">Rapport d'intervention lié (facultatif)
+          <select value={f.rapport} onChange={(e) => setF({ ...f, rapport: e.target.value })} disabled={!f.client}>
+            <option value="">Aucun</option>
+            {rapportsClient.map((r) => <option key={r.id} value={r.id}>{labelType(r.type)} du {r.date}</option>)}
+          </select>
+        </label>
+        <label className="grid-full">Remarque<input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Ex : fuite sur raccord, contrôle d'étanchéité…" /></label>
+      </div>
+      <div className="form-actions">
+        <button type="button" className="btn-ghost" onClick={onCancel}>Annuler</button>
+        <button
+          type="button"
+          className="btn-primary"
+          disabled={!valide}
+          onClick={() => onSubmit({
+            id: "fm" + Date.now(), date: f.date, client: f.client, operation: f.operation, fluide, bouteille: f.bouteille,
+            kg: Math.round(quantite * 1000) / 1000, rapport: f.rapport || "", notes: f.notes.trim(),
+            ...(pesee ? { poidsAvant: nombreFr(poids.avant), poidsApres: nombreFr(poids.apres) } : {}),
+          })}
+        >
+          Enregistrer
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function LigneMouvement({ m, bouteilles, reports, avecClient, clients, onDelete }) {
+  const rapport = m.rapport ? reports.find((r) => r.id === m.rapport) : null;
+  return (
+    <li className="row fl-mouvement">
+      <span className={"fl-op " + m.operation}>{m.operation === "charge" ? "+" : "−"}</span>
+      <div className="grow">
+        <div className="row-title">{avecClient ? `${nomAffiche(m.client, clients)} · ` : `${m.operation === "charge" ? "Charge" : "Récupération"} · `}{kgFr(m.kg)} <PastilleFluide fluide={m.fluide} /></div>
+        <div className="row-sub">
+          {avecClient ? `${m.operation === "charge" ? "Charge" : "Récupération"} · ` : ""}{dateFluide(m.date)} · bouteille {bouteilles.find((b) => b.id === m.bouteille)?.numero || "?"}
+        </div>
+        {(rapport || m.notes) && <div className="row-sub">{[rapport ? `${labelType(rapport.type)} du ${rapport.date}` : "", m.notes].filter(Boolean).join(" — ")}</div>}
+      </div>
+      <span className="row-delete-hover" onClick={(e) => e.stopPropagation()}><DeleteButton onConfirm={() => onDelete(m.id)} label="" /></span>
+    </li>
+  );
+}
+
+function FluidesFrigorigenes({ clients, reports, bouteilles, mouvements, erreur, onSaveBouteille, onDeleteBouteille, onSaveMouvement, onDeleteMouvement }) {
+  const [vue, setVue] = useState("stock");
+  const [formOp, setFormOp] = useState(false);
+  const [formBouteille, setFormBouteille] = useState(null); // null | "nouvelle" | bouteille
+  const [fluideVu, setFluideVu] = useState("");
+  const [clientVu, setClientVu] = useState("");
+  const [annee, setAnnee] = useState(String(new Date().getFullYear()));
+  const [voirHorsService, setVoirHorsService] = useState(false);
+
+  const actives = bouteilles.filter((b) => b.statut !== "vide" && b.statut !== "rendue");
+  const horsService = bouteilles.filter((b) => b.statut === "vide" || b.statut === "rendue");
+  const fluidesPresents = Object.keys(FLUIDES).filter((fl) => actives.some((b) => b.fluide === fl));
+  const fluideActif = fluidesPresents.includes(fluideVu) ? fluideVu : fluidesPresents[0] || "";
+  const tries = [...mouvements].sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)));
+
+  const enregistrerBouteille = (b) => { onSaveBouteille(b); setFormBouteille(null); setFluideVu(b.fluide); };
+
+  const parMois = (liste) => {
+    const groupes = [];
+    liste.forEach((m) => {
+      const cle = String(m.date).slice(0, 7);
+      let g = groupes.find((x) => x.cle === cle);
+      if (!g) {
+        const brut = new Date(cle + "-15T12:00:00").toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+        g = { cle, label: brut.charAt(0).toUpperCase() + brut.slice(1), items: [] };
+        groupes.push(g);
+      }
+      g.items.push(m);
+    });
+    return groupes;
+  };
+
+  const annees = [...new Set([String(new Date().getFullYear()), ...mouvements.map((m) => String(m.date).slice(0, 4)), ...bouteilles.map((b) => String(b.recue || "").slice(0, 4))].filter((a) => /^\d{4}$/.test(a)))].sort().reverse();
+  const bilan = Object.keys(FLUIDES).map((fl) => {
+    const ms = mouvements.filter((m) => m.fluide === fl && String(m.date).startsWith(annee));
+    const achete = bouteilles.filter((b) => b.fluide === fl && b.type === "neuve" && String(b.recue || "").startsWith(annee))
+      .reduce((s, b) => s + (nombreFr(b.brut) && nombreFr(b.tare) ? nombreFr(b.brut) - nombreFr(b.tare) : nombreFr(b.capacite)), 0);
+    const charge = ms.filter((m) => m.operation === "charge").reduce((s, m) => s + nombreFr(m.kg), 0);
+    const recup = ms.filter((m) => m.operation === "recuperation").reduce((s, m) => s + nombreFr(m.kg), 0);
+    const stock = actives.filter((b) => b.fluide === fl && b.type === "neuve").reduce((s, b) => s + contenuBouteille(b, mouvements), 0);
+    const aRendre = actives.filter((b) => b.fluide === fl && b.type === "recuperation").reduce((s, b) => s + contenuBouteille(b, mouvements), 0);
+    return { fl, achete, charge, recup, stock, aRendre, teq: (charge * FLUIDES[fl].prg) / 1000 };
+  }).filter((x) => x.achete || x.charge || x.recup || x.stock || x.aRendre);
+
+  // Registre de l'année en CSV (s'ouvre dans Excel / Numbers).
+  const exporterCsv = () => {
+    const cellule = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lignes = [["Date", "Client", "Opération", "Fluide", "Quantité (kg)", "t éq. CO2", "Bouteille", "Type de bouteille", "Rapport", "Remarque"]];
+    tries.filter((m) => String(m.date).startsWith(annee)).reverse().forEach((m) => {
+      const b = bouteilles.find((x) => x.id === m.bouteille);
+      const r = m.rapport ? reports.find((x) => x.id === m.rapport) : null;
+      lignes.push([m.date.split("-").reverse().join("/"), nomAffiche(m.client, clients), m.operation === "charge" ? "Charge" : "Récupération", m.fluide,
+        String(m.kg).replace(".", ","), ((nombreFr(m.kg) * (FLUIDES[m.fluide]?.prg || 0)) / 1000).toFixed(3).replace(".", ","),
+        b?.numero || "", b ? TYPES_BOUTEILLE[b.type]?.seul : "", r ? `${labelType(r.type)} du ${r.date}` : "", m.notes || ""]);
+    });
+    lignes.push([]);
+    lignes.push(["Bilan " + annee, "Acheté (kg)", "Chargé (kg)", "Récupéré (kg)", "Stock neuf (kg)", "À rendre (kg)", "t éq. CO2 chargées"]);
+    bilan.forEach((x) => lignes.push([x.fl, x.achete, x.charge, x.recup, x.stock, x.aRendre, x.teq.toFixed(3)].map((v) => String(v).replace(".", ","))));
+    const texte = "﻿" + lignes.map((l) => l.map(cellule).join(";")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([texte], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `Registre fluides ${annee}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+
+  return (
+    <div className="fluides">
+      <header className="page-head row-between">
+        <div>
+          <h1>Fluides frigorigènes</h1>
+          <p>Bouteilles, charges et récupérations par client — registre F-Gas</p>
+        </div>
+        <button className="btn-primary" onClick={() => setFormOp(!formOp)}><Icon name="plus" size={16} /> Charge / récupération</button>
+      </header>
+
+      {erreur && (
+        <div className="card">
+          <p className="hint alerte"><Icon name="alert" size={13} /> L'onglet n'est pas encore prêt : le script SQL « fluides.sql » doit être lancé dans Supabase.</p>
+        </div>
+      )}
+
+      {formOp && (
+        <MouvementFluideForm
+          clients={clients}
+          reports={reports}
+          bouteilles={bouteilles}
+          mouvements={mouvements}
+          onCancel={() => setFormOp(false)}
+          onSubmit={(m) => { onSaveMouvement(m); setFormOp(false); setFluideVu(m.fluide); }}
+        />
+      )}
+
+      <div className="filters fl-onglets">
+        {[["stock", "Bouteilles"], ["mouvements", "Charges / récup."], ["client", "Par client"], ["bilan", "Bilan annuel"]].map(([id, lib]) => (
+          <button key={id} className={"filter-btn" + (vue === id ? " active" : "")} onClick={() => setVue(id)}>{lib}</button>
+        ))}
+      </div>
+
+      {vue === "stock" && (
+        <>
+          <div className="fl-barre-fluide">
+            {fluidesPresents.length > 0 ? (
+              <label className="fl-select" style={{ "--fl": couleurFluide(fluideActif) }}>
+                <span>Fluide</span>
+                <select value={fluideActif} onChange={(e) => setFluideVu(e.target.value)}>
+                  {fluidesPresents.map((fl) => {
+                    const n = actives.filter((b) => b.fluide === fl).length;
+                    return <option key={fl} value={fl}>{fl} — {n} bouteille{n > 1 ? "s" : ""}</option>;
+                  })}
+                </select>
+              </label>
+            ) : <p className="empty grow">Aucune bouteille pour l'instant : ajoute ta première bouteille.</p>}
+            <button type="button" className="btn-ghost fl-ajout" onClick={() => setFormBouteille(formBouteille ? null : "nouvelle")}><Icon name="plus" size={16} /> Bouteille</button>
+          </div>
+
+          {formBouteille && (
+            <section className="card">
+              <BouteilleForm
+                key={formBouteille === "nouvelle" ? "nouvelle" : formBouteille.id}
+                initial={formBouteille === "nouvelle" ? null : formBouteille}
+                onCancel={() => setFormBouteille(null)}
+                onSubmit={enregistrerBouteille}
+              />
+            </section>
+          )}
+
+          {fluideActif && (() => {
+            const duFluide = actives.filter((b) => b.fluide === fluideActif);
+            const total = (type) => duFluide.filter((b) => b.type === type).reduce((s, b) => s + contenuBouteille(b, mouvements), 0);
+            return (
+              <>
+                <div className="fl-trio" style={{ "--fl": couleurFluide(fluideActif) }}>
+                  <div><span>Neuf disponible</span><strong>{kgFr(total("neuve"))}</strong></div>
+                  <div><span>En transfert</span><strong>{kgFr(total("transfert"))}</strong></div>
+                  <div><span>Récupéré à rendre</span><strong>{kgFr(total("recuperation"))}</strong></div>
+                </div>
+                {Object.entries(TYPES_BOUTEILLE).map(([type, T]) => {
+                  const liste = duFluide.filter((b) => b.type === type);
+                  return (
+                    <section key={type} className="card fl-groupe">
+                      <div className="fl-groupe-tete">
+                        <h3>{T.titre} <span className={"pill " + T.pill}>{liste.length}</span></h3>
+                        <span className="hint">{T.aide}</span>
+                      </div>
+                      {liste.length === 0 ? <p className="empty">{T.vide} en {fluideActif}.</p> : (
+                        <ul className="list">
+                          {liste.map((b) => {
+                            const reste = contenuBouteille(b, mouvements);
+                            const cap = nombreFr(b.capacite) || 1;
+                            const pct = Math.min(100, (reste / cap) * 100);
+                            const plein = type !== "neuve" && reste > cap * 0.8;
+                            const tare = nombreFr(b.tare);
+                            return (
+                              <li key={b.id} className="row fl-bouteille">
+                                <div className="grow">
+                                  <div className="row-title">{b.numero}{plein && <span className="pill pill-alert">Pleine à 80 %</span>}{type === "neuve" && reste <= 0.05 && <span className="pill pill-alert">Vide</span>}</div>
+                                  <div className="fl-jauge"><span style={{ width: pct + "%", background: couleurFluide(b.fluide) }} /></div>
+                                  <div className="row-sub">{kgFr(reste)} sur {kgFr(b.capacite)}{tare ? ` · tare ${kgFr(tare)} → doit peser ${kgFr(tare + reste)}` : ""}</div>
+                                  <div className="row-sub">{[b.fournisseur, b.recue ? `${type === "transfert" ? "en service depuis le" : "reçue le"} ${dateFluide(b.recue)}` : ""].filter(Boolean).join(" · ")}</div>
+                                  <div className="fl-actions-bouteille">
+                                    <button type="button" className="btn-ghost small" onClick={() => setFormBouteille(b)}><Icon name="edit" size={13} /> Modifier</button>
+                                    <button type="button" className="btn-ghost small" onClick={() => onSaveBouteille({ ...b, statut: type === "neuve" ? "vide" : "rendue", horsServiceLe: toLocalISODate(new Date()) })}>
+                                      {type === "neuve" ? "Vide" : type === "recuperation" ? "Rendue" : "Vidée"}
+                                    </button>
+                                  </div>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </section>
+                  );
+                })}
+              </>
+            );
+          })()}
+
+          {horsService.length > 0 && (
+            <section className="card">
+              <button type="button" className="fl-replier" onClick={() => setVoirHorsService(!voirHorsService)}>
+                <Icon name={voirHorsService ? "chevronDown" : "chevronRight"} size={16} /> Bouteilles vides ou rendues ({horsService.length})
+              </button>
+              {voirHorsService && (
+                <ul className="list">
+                  {horsService.map((b) => (
+                    <li key={b.id} className="row">
+                      <PastilleFluide fluide={b.fluide} />
+                      <div className="grow">
+                        <div className="row-title">{b.numero} <span className="pill pill-muted">{b.statut === "rendue" ? "Rendue" : "Vide"}</span></div>
+                        <div className="row-sub">{TYPES_BOUTEILLE[b.type]?.seul} · {b.fournisseur}{b.horsServiceLe ? ` · depuis le ${dateFluide(b.horsServiceLe)}` : ""}</div>
+                      </div>
+                      <button type="button" className="btn-ghost small" onClick={() => onSaveBouteille({ ...b, statut: "en_service", horsServiceLe: "" })}>Remettre en service</button>
+                      <span className="row-delete-hover"><DeleteButton onConfirm={() => onDeleteBouteille(b.id)} label="" /></span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+        </>
+      )}
+
+      {vue === "mouvements" && (
+        <section className="card">
+          {tries.length === 0 && <p className="empty">Aucune charge ni récupération enregistrée.</p>}
+          {parMois(tries).map((g) => (
+            <div key={g.cle} className="month-group">
+              <h4 className="month-heading">{g.label}</h4>
+              <ul className="list">
+                {g.items.map((m) => <LigneMouvement key={m.id} m={m} bouteilles={bouteilles} reports={reports} clients={clients} avecClient onDelete={onDeleteMouvement} />)}
+              </ul>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {vue === "client" && (() => {
+        const fiche = clients.find((c) => c.nom === clientVu);
+        const ms = tries.filter((m) => m.client === clientVu);
+        const unites = fluidesDuClient(fiche);
+        return (
+          <>
+            <section className="card">
+              <ClientSearchSelect clients={clients} value={clientVu} onChange={setClientVu} placeholder="Choisir un client" />
+            </section>
+            {clientVu && (
+              <section className="card">
+                <h3>{nomAffiche(clientVu, clients)}</h3>
+                {unites.length === 0 && <p className="hint">Aucun fluide renseigné sur le matériel de la fiche.</p>}
+                {unites.map((u, i) => (
+                  <div key={i} className="fl-machine">
+                    <PastilleFluide fluide={u.fluide.trim()} />
+                    <span>
+                      <strong>{u.typeMachine || "Machine"}</strong>{u.marque ? ` · ${u.marque}` : ""}
+                      {u.quantiteFluide ? ` · charge d'origine ${kgFr(nombreFr(u.quantiteFluide))} · ${((nombreFr(u.quantiteFluide) * (FLUIDES[u.fluide.trim()]?.prg || 0)) / 1000).toLocaleString("fr-FR", { maximumFractionDigits: 2 })} t éq. CO2` : ""}
+                    </span>
+                  </div>
+                ))}
+                <div className="fl-totaux">
+                  <div><span>Chargé</span><strong>{kgFr(ms.filter((m) => m.operation === "charge").reduce((s, m) => s + nombreFr(m.kg), 0))}</strong></div>
+                  <div><span>Récupéré</span><strong>{kgFr(ms.filter((m) => m.operation === "recuperation").reduce((s, m) => s + nombreFr(m.kg), 0))}</strong></div>
+                </div>
+                {ms.length === 0 ? <p className="empty">Aucune opération pour ce client.</p> : (
+                  <ul className="list">
+                    {ms.map((m) => <LigneMouvement key={m.id} m={m} bouteilles={bouteilles} reports={reports} clients={clients} onDelete={onDeleteMouvement} />)}
+                  </ul>
+                )}
+              </section>
+            )}
+          </>
+        );
+      })()}
+
+      {vue === "bilan" && (
+        <section className="card">
+          <div className="row-between fl-bilan-tete">
+            <label className="fl-annee">Année
+              <select value={annee} onChange={(e) => setAnnee(e.target.value)}>{annees.map((a) => <option key={a}>{a}</option>)}</select>
+            </label>
+            <button className="btn-ghost small" onClick={exporterCsv} disabled={bilan.length === 0}><Icon name="download" size={14} /> Exporter (Excel)</button>
+          </div>
+          <p className="hint">Les chiffres utiles pour la déclaration annuelle des fluides (registre F-Gas).</p>
+          {bilan.length === 0 && <p className="empty">Rien d'enregistré pour {annee}.</p>}
+          <div className="fl-bilan">
+            {bilan.map((x) => (
+              <div key={x.fl} className="fl-bilan-ligne">
+                <PastilleFluide fluide={x.fl} />
+                <div className="fl-bilan-grille">
+                  <div><span>Acheté</span><strong>{kgFr(x.achete)}</strong></div>
+                  <div><span>Chargé</span><strong>{kgFr(x.charge)}</strong></div>
+                  <div><span>Récupéré</span><strong>{kgFr(x.recup)}</strong></div>
+                  <div><span>En stock</span><strong>{kgFr(x.stock)}</strong></div>
+                </div>
+                <div className="fl-bilan-teq">{x.teq.toLocaleString("fr-FR", { maximumFractionDigits: 2 })} t éq. CO2 chargées{x.aRendre ? ` · ${kgFr(x.aRendre)} récupérés à rendre` : ""}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+// Fluide frigorigène chargé ou récupéré pendant l'intervention (rapport).
+// Chaque ligne devient une opération de l'onglet Fluides à l'enregistrement.
+function FluidesDuRapport({ value, onChange, bouteilles, mouvements, rapportId, fluideDefaut }) {
+  const [pesees, setPesees] = useState({});
+  // Contenu des bouteilles sans compter ce rapport (il est recalculé ici).
+  const autres = mouvements.filter((m) => !rapportId || m.rapport !== rapportId);
+  const ajouter = (operation) => onChange([...value, { id: "f" + Date.now().toString(36), operation, fluide: fluideDefaut || "R32", bouteille: "", bouteilleNumero: "", kg: "" }]);
+  const maj = (id, champs) => onChange(value.map((o) => (o.id === id ? { ...o, ...champs } : o)));
+  const actives = bouteilles.filter((b) => b.statut !== "vide" && b.statut !== "rendue");
+  return (
+    <div className="block mt fl-rapport">
+      <label>Fluide frigorigène</label>
+      {value.length === 0 && <p className="hint">Aucune charge ni récupération sur cette intervention.</p>}
+      {value.map((o) => {
+        const possibles = actives.filter((b) => b.fluide === o.fluide &&
+          (o.operation === "charge" ? ["neuve", "transfert"].includes(b.type) : ["transfert", "recuperation"].includes(b.type)));
+        const p = pesees[o.id];
+        const quantite = p ? Math.abs(nombreFr(p.avant) - nombreFr(p.apres)) : nombreFr(o.kg);
+        const b = bouteilles.find((x) => x.id === o.bouteille);
+        // Les autres lignes de ce rapport sur la même bouteille comptent aussi.
+        const memeBouteille = value.filter((x) => x.id !== o.id && x.bouteille === o.bouteille);
+        const avant = b ? contenuBouteille(b, [...autres, ...memeBouteille.map((x) => ({ ...x, kg: nombreFr(x.kg) }))]) : 0;
+        const apres = b ? (o.operation === "charge" ? avant - quantite : avant + quantite) : null;
+        return (
+          <div key={o.id} className="fl-rapport-ligne">
+            <div className="fl-rapport-tete">
+              <div className="fl-toggle">
+                {[["charge", "Charge"], ["recuperation", "Récupération"]].map(([id, lib]) => (
+                  <button key={id} type="button" className={"toggle-btn" + (o.operation === id ? " active" : "")} onClick={() => maj(o.id, { operation: id, bouteille: "", bouteilleNumero: "" })}>{lib}</button>
+                ))}
+              </div>
+              <button type="button" className="icon-btn" onClick={() => onChange(value.filter((x) => x.id !== o.id))} title="Retirer"><Icon name="trash" size={15} /></button>
+            </div>
+            <div className="form-grid">
+              <label>Fluide
+                <select value={o.fluide} onChange={(e) => maj(o.id, { fluide: e.target.value, bouteille: "", bouteilleNumero: "" })}>
+                  {Object.keys(FLUIDES).map((x) => <option key={x}>{x}</option>)}
+                </select>
+              </label>
+              <div className="field-col">Quantité
+                <div className="fl-mode">
+                  <button type="button" className={"filter-btn" + (!p ? " active" : "")} onClick={() => setPesees((x) => { const n = { ...x }; delete n[o.id]; return n; })}>Saisie</button>
+                  <button type="button" className={"filter-btn" + (p ? " active" : "")} onClick={() => setPesees((x) => ({ ...x, [o.id]: { avant: "", apres: "" } }))}>Par pesée</button>
+                </div>
+                {!p ? (
+                  <input inputMode="decimal" value={o.kg} onChange={(e) => maj(o.id, { kg: e.target.value })} placeholder="En kg, ex : 0,8" />
+                ) : (
+                  <div className="fl-pesee">
+                    <label>Bouteille avant (kg)<input inputMode="decimal" value={p.avant} onChange={(e) => { const n = { ...p, avant: e.target.value }; setPesees((x) => ({ ...x, [o.id]: n })); maj(o.id, { kg: String(Math.abs(nombreFr(n.avant) - nombreFr(n.apres))), poidsAvant: nombreFr(n.avant), poidsApres: nombreFr(n.apres) }); }} /></label>
+                    <label>Bouteille après (kg)<input inputMode="decimal" value={p.apres} onChange={(e) => { const n = { ...p, apres: e.target.value }; setPesees((x) => ({ ...x, [o.id]: n })); maj(o.id, { kg: String(Math.abs(nombreFr(n.avant) - nombreFr(n.apres))), poidsAvant: nombreFr(n.avant), poidsApres: nombreFr(n.apres) }); }} /></label>
+                    {quantite > 0 && <span className="hint">= {kgFr(quantite)} {o.operation === "charge" ? "chargés" : "récupérés"}</span>}
+                  </div>
+                )}
+              </div>
+              <label className="grid-full">{o.operation === "charge" ? "Bouteille utilisée" : "Bouteille de récupération"}
+                <select value={o.bouteille} onChange={(e) => { const x = bouteilles.find((y) => y.id === e.target.value); maj(o.id, { bouteille: e.target.value, bouteilleNumero: x?.numero || "" }); }}>
+                  <option value="">{possibles.length ? "Choisir…" : `Aucune bouteille de ${o.fluide} (ajoute-la dans l'onglet Fluides)`}</option>
+                  {possibles.map((x) => <option key={x.id} value={x.id}>{x.numero} ({TYPES_BOUTEILLE[x.type].seul.toLowerCase()}) — {kgFr(contenuBouteille(x, autres))}</option>)}
+                </select>
+                {b && quantite > 0 && (
+                  <span className={"hint" + (apres < 0 ? " alerte" : "")}>
+                    {o.operation === "charge"
+                      ? apres < 0 ? `Pas assez dans cette bouteille (il reste ${kgFr(avant)}).` : `Il restera ${kgFr(apres)} dans la bouteille ${b.numero}.`
+                      : `La bouteille contiendra ${kgFr(apres)} sur ${kgFr(b.capacite)}.`}
+                  </span>
+                )}
+              </label>
+            </div>
+          </div>
+        );
+      })}
+      <div className="fl-rapport-ajout">
+        <button type="button" className="btn-ghost small" onClick={() => ajouter("charge")}><Icon name="plus" size={14} /> Charge</button>
+        <button type="button" className="btn-ghost small" onClick={() => ajouter("recuperation")}><Icon name="plus" size={14} /> Récupération</button>
+      </div>
+    </div>
+  );
+}
+
+// Date « JJ/MM/AAAA » d'un rapport → « AAAA-MM-JJ ».
+function dateRapportVersIso(d) {
+  const m = String(d || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : toLocalISODate(new Date());
+}
+
+// Lignes de fluide valides d'un rapport (quantité et bouteille renseignées).
+function fluidesValides(r) {
+  return (Array.isArray(r?.fluides) ? r.fluides : []).filter((o) => o && o.bouteille && nombreFr(o.kg) > 0);
+}
+
 /* ---------- Génération du document HTML pour l'aperçu PDF (nouvel onglet) ---------- */
 // Calcule le statut de l'entretien contractuel annuel d'un client :
 // - doneThisYear : un entretien a déjà été fait depuis l'échéance de l'an dernier
@@ -10249,6 +10892,16 @@ function buildReportHtml(report, settings, clients) {
     if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
     if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
     if (report.pieces) body += `<p><strong>Pièces utilisées :</strong> ${escapeHtml(report.pieces)}</p>`;
+  }
+
+  // Fluide frigorigène chargé ou récupéré (traçabilité F-Gas).
+  const opsFluide = fluidesValides(report);
+  if (opsFluide.length) {
+    body += `<h3 class="pdf-section-title">Fluide frigorigène</h3><ul class="pdf-texte-libre">` + opsFluide.map((o) => {
+      const kgTxt = Number(nombreFr(o.kg)).toLocaleString("fr-FR", { maximumFractionDigits: 3 });
+      const teq = ((nombreFr(o.kg) * (FLUIDES[o.fluide]?.prg || 0)) / 1000).toLocaleString("fr-FR", { maximumFractionDigits: 3 });
+      return `<li>${o.operation === "charge" ? "Charge" : "Récupération"} : ${kgTxt} kg de ${escapeHtml(o.fluide)} (${teq} t éq. CO2)${o.bouteilleNumero ? ` — bouteille n° ${escapeHtml(o.bouteilleNumero)}` : ""}</li>`;
+    }).join("") + `</ul>`;
   }
 
   if (report.signatureTech || report.signatureClient) {
@@ -12045,4 +12698,51 @@ input, select, textarea { border-radius: 10px; }
 .planning-day .list > li.row > .pill { grid-column: 1 / -1; justify-self: start; font-size: 14px; padding: 7px 14px; }
 .planning-day .row.done .row-title { color: var(--encre-3); }
 
+
+/* ---------- Fluides frigorigènes ---------- */
+.fl-pastille { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--fl); background: color-mix(in srgb, var(--fl) 16%, transparent); border: 1px solid color-mix(in srgb, var(--fl) 45%, transparent); vertical-align: middle; white-space: nowrap; }
+.fl-onglets { flex-wrap: wrap; }
+.fl-barre-fluide { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 14px; }
+.fl-select { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--encre-3); }
+.fl-select select { width: 100%; font-size: 17px; font-weight: 700; padding: 12px 14px; border-radius: 14px; border: 2px solid var(--fl); color: var(--encre); background: color-mix(in srgb, var(--fl) 12%, var(--carte)); }
+.fl-ajout { display: inline-flex; align-items: center; gap: 6px; min-height: 50px; white-space: nowrap; }
+.fl-trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
+.fl-trio div { display: flex; flex-direction: column; padding: 12px; border-radius: 14px; background: var(--verre, var(--carte)); border: 1px solid var(--verre-bord, var(--trait)); border-top: 3px solid var(--fl); }
+.fl-trio span { font-size: 12px; color: var(--encre-3); line-height: 1.25; }
+.fl-trio strong { font-size: 20px; margin-top: 4px; }
+.fl-groupe-tete h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.fl-groupe .row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fl-bouteille { align-items: flex-start; gap: 12px; }
+.fl-jauge { height: 8px; border-radius: 6px; background: var(--fond-doux); margin: 8px 0 6px; overflow: hidden; }
+.fl-jauge span { display: block; height: 100%; border-radius: 6px; }
+.fl-actions-bouteille { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.fl-form-bouteille h4 { margin: 0 0 4px; font-size: 16px; }
+.fl-toggle { display: flex; gap: 8px; margin: 8px 0 14px; flex-wrap: wrap; }
+.fl-mode { display: flex; gap: 6px; margin: 6px 0 8px; }
+.fl-pesee { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.fl-pesee label { min-width: 0; }
+.fl-pesee input { width: 100%; min-width: 0; box-sizing: border-box; }
+.fl-pesee .hint { grid-column: 1 / -1; font-weight: 600; color: var(--acc-texte, var(--encre)); }
+.fl-op { width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px; flex-shrink: 0; }
+.fl-op.charge { background: rgba(91,180,120,0.18); color: var(--vert); }
+.fl-op.recuperation { background: rgba(232,135,58,0.18); color: var(--orange, #E8873A); }
+.fl-mouvement { gap: 12px; align-items: flex-start; }
+.fl-machine { display: flex; gap: 10px; align-items: center; margin: 8px 0; font-size: 14px; color: var(--encre-2); }
+.fl-totaux { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0; }
+.fl-totaux div, .fl-bilan-grille div { display: flex; flex-direction: column; padding: 10px 12px; border-radius: 12px; background: var(--fond-doux); }
+.fl-totaux span, .fl-bilan-grille span { font-size: 12px; color: var(--encre-3); }
+.fl-totaux strong, .fl-bilan-grille strong { font-size: 18px; }
+.fl-bilan { display: flex; flex-direction: column; gap: 16px; margin-top: 10px; }
+.fl-bilan-ligne { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-bottom: 14px; border-bottom: 1px solid var(--trait); }
+.fl-bilan-grille { align-self: stretch; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 520px) { .fl-bilan-grille { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.fl-bilan-teq { font-size: 13px; color: var(--encre-3); }
+.fl-bilan-tete { align-items: flex-end; gap: 10px; }
+.fl-annee { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--encre-3); }
+.fl-rapport-ligne { padding: 12px 14px; margin: 8px 0; border-radius: 14px; background: var(--fond-doux); border: 1px solid var(--verre-bord, var(--trait)); }
+.fl-rapport-tete { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.fl-rapport-tete .fl-toggle { margin: 0 0 8px; }
+.fl-rapport-ajout { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.fl-replier { display: flex; align-items: center; gap: 6px; background: none; border: none; padding: 0; color: var(--encre); font: inherit; font-weight: 700; cursor: pointer; }
+.hint.alerte { color: var(--orange, #E8873A); }
 `;
