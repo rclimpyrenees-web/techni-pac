@@ -2916,6 +2916,23 @@ function debloquerSyntheseVocale() {
 // déclencher la suite prévue (reprise de l'écoute, par exemple).
 let numeroLecture = 0;
 
+// Rend le haut-parleur au système. Sur iPhone, tant que le lecteur garde le
+// dernier son chargé, la session audio reste « lecture » : la dictée qui
+// démarre juste après n'entend alors que du silence.
+function libererAudio() {
+  // Pendant le tout premier appui, le son muet qui débloque la voix est en
+  // cours : on ne l'interrompt pas (sinon la voix resterait bloquée).
+  try {
+    if (lecteurAudio && lecteurAudioDebloque) {
+      lecteurAudio.onended = null; lecteurAudio.onerror = null; lecteurAudio.onloadedmetadata = null;
+      lecteurAudio.pause();
+      lecteurAudio.removeAttribute("src");
+      lecteurAudio.load();
+    }
+  } catch (_e) { /* ignoré */ }
+  try { if (syntheseVocaleDebloquee && syntheseVocaleDisponible()) window.speechSynthesis.cancel(); } catch (_e) { /* ignoré */ }
+}
+
 function arreterLecture() {
   numeroLecture += 1;
   try { if (lecteurAudio) { lecteurAudio.onended = null; lecteurAudio.onerror = null; lecteurAudio.pause(); } } catch (_e) { /* ignoré */ }
@@ -3120,7 +3137,9 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
     rec.onerror = (ev) => {
       if (ev.error === "no-speech" || ev.error === "aborted") return;
       onErreur?.(ev.error);
-      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") terminer(ev.error);
+      // Micro indisponible ou refusé, pas de réseau : relancer ne servirait à
+      // rien, on s'arrête en le disant.
+      if (["not-allowed", "service-not-allowed", "audio-capture", "network", "language-not-supported"].includes(ev.error)) terminer(ev.error);
     };
     rec.onend = () => {
       if (fini) return;
@@ -3179,6 +3198,7 @@ function BoutonMicroFlottant({ onTexte, onOuvrir }) {
     texteRef.current = "";
     try {
       reveillerAssistant();
+      libererAudio();
       recRef.current = ecoutePatiente(Reconnaissance, {
         onDebut: () => setEcoute(true),
         onPartiel: (texte) => { texteRef.current = texte; setTranscription(texte); },
@@ -3689,6 +3709,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     const reponseAttendue = (actionsRef.current || []).length > 0 || /\?\s*$/.test(String(derniere?.content || "").trim());
     try {
       reveillerAssistant();
+      libererAudio();
       reconnaissanceRef.current = ecoutePatiente(Reconnaissance, {
         patience: auto ? (reponseAttendue ? 25000 : 15000) : 10000,
         onDebut: () => { ecouteRef.current = true; setEcoute(true); },
@@ -3698,6 +3719,8 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
           if (modeTexteRef.current) setSaisie(texte);
         },
         onErreur: (erreur) => {
+          if (erreur === "audio-capture") setInfoMicro("Le micro ne reçoit aucun son : il est peut-être pris par une autre appli (GPS, appel, Bluetooth de la voiture). Réessaie dans un instant.");
+          if (erreur === "network") setInfoMicro("La dictée a besoin du réseau : pas de connexion pour le moment.");
           if (erreur === "not-allowed" || erreur === "service-not-allowed") {
             if (auto) {
               refusee = true;
