@@ -2829,6 +2829,75 @@ let lecteurAudio = null;
 let lecteurAudioDebloque = false;
 const sonsEnCache = new Map();
 
+/* --- Volume régulier ---
+   La voix Google (générée par IA) ne parle pas toujours aussi fort d'une
+   demande à l'autre : la première phrase, fabriquée à part pour répondre plus
+   vite, pouvait sortir plus fort ou plus faible que la suite. L'iPhone ne
+   laissant pas une page régler le volume d'un son, chaque morceau est remis
+   au même niveau ici (décodé, ajusté, réécrit en WAV) avant d'être joué. */
+const sonsNormalises = new Map(); // son MP3 (base64) → adresse du son égalisé
+const NIVEAU_VOIX = 0.12;         // niveau moyen visé pendant la parole (≈ −18 dB)
+let contexteAudioDecodage = null;
+
+function decoderMp3(octets) {
+  const Ctx = typeof window !== "undefined" && (window.AudioContext || window.webkitAudioContext);
+  if (!Ctx) return Promise.reject(new Error("Web Audio indisponible"));
+  if (!contexteAudioDecodage) contexteAudioDecodage = new Ctx();
+  return new Promise((ok, ko) => {
+    try {
+      const p = contexteAudioDecodage.decodeAudioData(octets, ok, ko);
+      if (p && p.then) p.then(ok, ko);
+    } catch (e) { ko(e); }
+  });
+}
+
+function wavDepuisEchantillons(ech, frequence) {
+  const n = ech.length;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const ecrire = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  ecrire(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); ecrire(8, "WAVE"); ecrire(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, frequence, true); v.setUint32(28, frequence * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  ecrire(36, "data"); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, ech[i])) * 0x7fff, true);
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+// Niveau moyen de la parole (les silences ne comptent pas), puis gain pour
+// atteindre NIVEAU_VOIX, sans jamais saturer.
+async function egaliserSon(b64) {
+  const binaire = atob(b64);
+  const octets = new Uint8Array(binaire.length);
+  for (let i = 0; i < binaire.length; i++) octets[i] = binaire.charCodeAt(i);
+  const audio = await decoderMp3(octets.buffer);
+  const ech = new Float32Array(audio.getChannelData(0));
+  const fenetre = Math.max(1, Math.round(audio.sampleRate * 0.05));
+  let somme = 0, nb = 0, crete = 0;
+  for (let debut = 0; debut < ech.length; debut += fenetre) {
+    let e = 0;
+    const fin = Math.min(ech.length, debut + fenetre);
+    for (let i = debut; i < fin; i++) { e += ech[i] * ech[i]; if (Math.abs(ech[i]) > crete) crete = Math.abs(ech[i]); }
+    const rms = Math.sqrt(e / (fin - debut));
+    if (rms > 0.01) { somme += e; nb += fin - debut; }
+  }
+  if (!nb || !crete) return null;
+  let gain = NIVEAU_VOIX / Math.sqrt(somme / nb);
+  gain = Math.max(0.3, Math.min(6, gain));
+  if (crete * gain > 0.98) gain = 0.98 / crete;
+  if (Math.abs(gain - 1) < 0.04) return null; // déjà au bon niveau
+  for (let i = 0; i < ech.length; i++) ech[i] *= gain;
+  return URL.createObjectURL(wavDepuisEchantillons(ech, audio.sampleRate));
+}
+
+// Prépare la version égalisée (au plus ~0,6 s d'attente ; sinon le son
+// d'origine est joué, rien n'est bloqué).
+function preparerSonEgalise(b64) {
+  if (sonsNormalises.has(b64)) return Promise.resolve();
+  const travail = egaliserSon(b64).then((url) => { sonsNormalises.set(b64, url || null); }).catch(() => { sonsNormalises.set(b64, null); });
+  return Promise.race([travail, new Promise((ok) => setTimeout(ok, 600))]);
+}
+
 function lecteur() {
   if (!lecteurAudio && typeof Audio !== "undefined") {
     lecteurAudio = new Audio();
@@ -2881,7 +2950,14 @@ async function syntheseGoogle(texte, voix) {
     throw new Error(code || "voix indisponible");
   }
   sonsEnCache.set(cleSon(texte, voix), data.audio);
-  if (sonsEnCache.size > 12) sonsEnCache.delete(sonsEnCache.keys().next().value);
+  if (sonsEnCache.size > 12) {
+    const ancien = sonsEnCache.keys().next().value;
+    const url = sonsNormalises.get(sonsEnCache.get(ancien));
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 60000);
+    sonsNormalises.delete(sonsEnCache.get(ancien));
+    sonsEnCache.delete(ancien);
+  }
+  await preparerSonEgalise(data.audio);
   return data.audio;
 }
 
@@ -2907,7 +2983,8 @@ function jouerAudio(b64, { onDemarre, onFin, onRefus } = {}) {
   const armerFilet = (secondes) => { clearTimeout(filet); filet = setTimeout(finir, Math.max(4, secondes + 3) * 1000); };
   el.onloadedmetadata = () => { if (Number.isFinite(el.duration)) armerFilet(el.duration); };
   armerFilet(b64.length / 4000); // ~ durée d'un MP3 Google, en attendant la vraie
-  el.src = "data:audio/mpeg;base64," + b64;
+  // Version au niveau régulier si elle est prête, sinon le son d'origine.
+  el.src = sonsNormalises.get(b64) || "data:audio/mpeg;base64," + b64;
   try {
     const p = el.play();
     if (p && p.then) {
@@ -3517,7 +3594,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
   const parler = (texte, { relancer = true } = {}) => {
     const reprendre = () => {
       setParle(false);
-      if (relancer && conversationRef.current && !modeTexteRef.current) {
+      if (relancer && conversationRef.current) {
         // Petit temps pour que l'iPhone libère le haut-parleur avant le micro.
         setTimeout(() => ecouterRef.current?.({ auto: true }), 600);
       }
@@ -3576,13 +3653,17 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     const ok = await executerAction(action);
     setActionsEnCours(false);
     setActions((liste) => liste.filter((a) => a.id !== action.id));
-    if (ok && action.type === "email") ajouterMessage("assistant", "E-mail envoyé.");
-    if (ok && action.type === "suppression") ajouterMessage("assistant", "Supprimé.");
-    if (ok && action.type === "classer_pj") ajouterMessage("assistant", "Fichier rangé dans OneDrive.");
-    if (ok && action.type === "regle") ajouterMessage("assistant", "Règle de classement ajoutée.");
-    if (ok && action.type === "pennylane_fournisseur") ajouterMessage("assistant", "Facture envoyée dans Pennylane.");
-    if (ok && action.type === "debrief_valider") ajouterMessage("assistant", "Propositions du débrief validées.");
-    if (ok && action.type === "dossier") ajouterMessage("assistant", (action.item?.chemins?.length || 0) > 1 ? "Dossiers créés dans OneDrive." : "Dossier créé dans OneDrive.");
+    // Note pour l'assistant (invisible) : c'est l'utilisateur qui a validé au
+    // bouton, l'assistant ne doit pas croire qu'il l'a fait de lui-même.
+    const note = { pourAssistant: "(Validé par l'utilisateur avec le bouton.)" };
+    if (ok && action.type === "email") ajouterMessage("assistant", "E-mail envoyé.", note);
+    if (ok && action.type === "suppression") ajouterMessage("assistant", "Supprimé.", note);
+    if (ok && action.type === "classer_pj") ajouterMessage("assistant", "Fichier rangé dans OneDrive.", note);
+    if (ok && action.type === "regle") ajouterMessage("assistant", "Règle de classement ajoutée.", note);
+    if (ok && action.type === "pennylane_fournisseur") ajouterMessage("assistant", "Facture envoyée dans Pennylane.", note);
+    if (ok && action.type === "debrief_valider") ajouterMessage("assistant", "Propositions du débrief validées.", note);
+    if (ok && action.type === "dossier") ajouterMessage("assistant", (action.item?.chemins?.length || 0) > 1 ? "Dossiers créés dans OneDrive." : "Dossier créé dans OneDrive.", note);
+    if (ok && !["email", "suppression", "classer_pj", "regle", "pennylane_fournisseur", "debrief_valider", "dossier"].includes(action.type)) ajouterMessage("assistant", "C'est enregistré.", note);
     return ok;
   };
 
@@ -3637,6 +3718,20 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     let prefixe = "";
     let historique = [...messages.filter((m) => !m.erreur), { role: "user", content: texte }];
     let avantReponse = () => ajouterMessage("user", texte);
+    // « Oui » alors que la proposition vient d'être validée au bouton : rien
+    // à refaire, inutile d'interroger l'assistant (il pourrait s'y perdre).
+    if (actions.length === 0) {
+      const derniere = [...messages].reverse().find((m) => m.role === "assistant");
+      const { sens, reste } = analyserConfirmation(texte);
+      if (sens === "oui" && !reste && derniere?.pourAssistant) {
+        ajouterMessage("user", texte);
+        const rep = "C'est déjà fait.";
+        ajouterMessage("assistant", rep);
+        parler(rep, { relancer: false });
+        changerConversation(false);
+        return;
+      }
+    }
     if (actions.length > 0) {
       const { sens, reste } = analyserConfirmation(texte);
       if (sens === "oui" && (!reste || SUITE_EN_PLUS.test(reste))) {
@@ -3662,7 +3757,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       return;
     }
 
-    historique = historique.map((m) => ({ role: m.role, content: m.content }));
+    historique = historique.map((m) => ({ role: m.role, content: m.pourAssistant ? `${m.content} ${m.pourAssistant}` : m.content }));
     // Propositions toujours affichées : l'assistant doit le savoir pour les
     // corriger plutôt que d'en ajouter une seconde.
     const encoreEnAttente = actions.length > 0 && !prefixe;
@@ -3719,7 +3814,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     if (!texteAEnvoyer || demandeTraitee.current === texteAEnvoyer.id) return;
     demandeTraitee.current = texteAEnvoyer.id;
     onTexteEnvoye?.();
-    if (!modeTexteRef.current) changerConversation(true);
+    changerConversation(true);
     envoyerRef.current?.(texteAEnvoyer.texte);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [texteAEnvoyer]);
@@ -3739,7 +3834,9 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
         reconnaissanceRef.current?.envoyer();
         return;
       }
-      if (!modeTexteRef.current) changerConversation(true);
+      // Demande dictée : la conversation continue à la voix (le micro se
+      // rouvre après la réponse), que la conversation soit affichée ou non.
+      changerConversation(true);
     } else if (!conversationRef.current || ecouteRef.current) {
       return;
     }
@@ -4011,6 +4108,14 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
                 rows={1}
                 value={saisie}
                 onChange={(e) => setSaisie(e.target.value)}
+                onFocus={() => {
+                  // On passe au clavier : plus de reprise automatique du micro.
+                  if (conversationRef.current || ecouteRef.current) {
+                    changerConversation(false);
+                    setAttenteAppui(false);
+                    if (ecouteRef.current) reconnaissanceRef.current?.annuler?.();
+                  }
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); envoyer(); }
                 }}
