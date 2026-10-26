@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { useSyncedCollection, useSyncedSettings } from "./useSyncedCollection.js";
+import { useSyncedCollection, useSyncedSettings, useEtatEnvois, relancerEnvois, effacerRefusEnvois } from "./useSyncedCollection.js";
 import { supabase } from "./supabaseClient.js";
 import { BLANK_CONTRACT_PDF_BASE64, BLANK_CONTRACT_AIR_EAU_PDF_BASE64, BLANK_CONTRACT_B2B_PDF_BASE64, BLANK_CONTRACT_AIR_EAU_B2B_PDF_BASE64 } from "./contractTemplate.js";
 import { pennylaneCreateInvoice, pennylaneUpdateInvoice, pennylaneCheckStatus } from "./pennylane.js";
@@ -1338,6 +1338,44 @@ function BandeauNouvelleVersion() {
   );
 }
 
+// Enregistrements pas encore arrivés sur le serveur (réseau absent, iPad
+// sorti de veille…). Ils sont gardés sur l'appareil et renvoyés tout seuls ;
+// le bandeau n'apparaît que si l'envoi traîne ou a échoué, pour ne pas
+// clignoter à chaque enregistrement normal.
+function BandeauEnvois() {
+  const { attente, erreur, refus } = useEtatEnvois();
+  const [visible, setVisible] = useState(false);
+  const [essai, setEssai] = useState(false);
+  useEffect(() => {
+    if (!attente) { setVisible(false); return undefined; }
+    if (erreur) { setVisible(true); return undefined; }
+    const t = setTimeout(() => setVisible(true), 4000);
+    return () => clearTimeout(t);
+  }, [attente, erreur]);
+  if (refus && refus.length) {
+    return (
+      <div className="bandeau-maj bandeau-envois refus" role="alert">
+        <Icon name="alert" size={16} />
+        <span>Un enregistrement a été refusé par le serveur et n'est pas sauvegardé : {refus[refus.length - 1]}</span>
+        <button type="button" className="btn-ghost small" onClick={effacerRefusEnvois}>OK</button>
+      </div>
+    );
+  }
+  if (!visible || !attente) return null;
+  return (
+    <div className="bandeau-maj bandeau-envois" role="status">
+      <Icon name="sync" size={16} />
+      <span>
+        <strong>{attente > 1 ? `${attente} enregistrements pas encore envoyés` : "1 enregistrement pas encore envoyé"}</strong>
+        <span className="bandeau-envois-detail">{erreur || "Envoi en cours…"} Il est gardé sur cet appareil, rien n'est perdu.</span>
+      </span>
+      <button type="button" className="btn-primary small" disabled={essai} onClick={() => { setEssai(true); relancerEnvois(); setTimeout(() => setEssai(false), 3000); }}>
+        {essai ? "Envoi…" : "Réessayer"}
+      </button>
+    </div>
+  );
+}
+
 /* ---------- App principale ---------- */
 
 export default function App() {
@@ -2225,6 +2263,7 @@ function AppContenu() {
       </main>
 
       <BandeauNouvelleVersion />
+      <BandeauEnvois />
 
       {tab !== "assistant" && (
         <BoutonMicroFlottant
@@ -12455,6 +12494,11 @@ textarea { resize: vertical; }
 .bandeau-copie svg { flex-shrink: 0; }
 .bandeau-maj { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top, 0px) + 10px); z-index: 2000; display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 24px); padding: 10px 12px 10px 16px; border-radius: 14px; background: var(--carte, #1B2733); color: var(--encre, #fff); border: 1px solid var(--verre-bord, rgba(255,255,255,0.15)); box-shadow: 0 8px 24px rgba(0,0,0,0.35); font-size: 14.5px; }
 .bandeau-maj button { flex-shrink: 0; white-space: nowrap; }
+.bandeau-envois { top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 90px); width: max-content; border-left: 4px solid var(--orange, #E8873A); font-size: 13.5px; }
+.bandeau-envois > svg { flex-shrink: 0; color: var(--orange, #E8873A); }
+.bandeau-envois.refus { border-left-color: var(--rouge, #E05A5A); }
+.bandeau-envois.refus > svg { color: var(--rouge, #E05A5A); }
+.bandeau-envois-detail { display: block; font-size: 12.5px; color: var(--encre-3); margin-top: 2px; }
 .bandeau-copie { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 9px 12px; border-radius: 10px; background: var(--acc-doux, var(--fond-doux)); color: var(--encre-2); font-size: 13.5px; line-height: 1.4; }
 .micro-flottant-astuce { margin-top: 4px; font-size: 11.5px; opacity: 0.7; }
 .incidents { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
