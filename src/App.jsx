@@ -5566,8 +5566,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
   const [prefillTaskId, setPrefillTaskId] = useState(null);
   const [prefillAdresse, setPrefillAdresse] = useState("");
   const [formKey, setFormKey] = useState("new-0");
-  const formRef = useRef(null);
-  // Un seul rapport déplié à la fois : en ouvrir un referme le précédent.
+  // Un seul rapport ouvert à la fois : en ouvrir un referme le précédent.
   const [openReportId, setOpenReportId] = useState(null);
   // Recherche : tous les mots tapés doivent se retrouver dans le rapport
   // (client, date, adresse, matériel, description, conclusion, pièces…),
@@ -5593,13 +5592,6 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
   const openEdit = (r) => { setEditingReport(r); setActivePrefillClient(null); setPrefillTaskId(null); setPrefillAdresse(""); setReportType(r.type); setShowForm(true); };
   const closeForm = () => { setShowForm(false); setEditingReport(null); setActivePrefillClient(null); setPrefillTaskId(null); setPrefillAdresse(""); };
 
-  // Le formulaire s'ouvre sous la liste des rapports : on descend
-  // automatiquement jusqu'à lui pour qu'il ne passe pas inaperçu.
-  useEffect(() => {
-    if (showForm && formRef.current) {
-      formRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, [showForm, editingReport, reportPrefill]);
 
   useEffect(() => {
     if (focusReport) {
@@ -5701,7 +5693,12 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
       </div>
 
       {showForm && (
-        <div ref={formRef}>
+        <Fenetre
+          formulaire
+          titre={editingReport ? `Modifier le rapport — ${nomAffiche(editingReport.client, clients)}` : "Nouveau rapport"}
+          sousTitre={editingReport ? [labelType(editingReport.type), editingReport.date].filter(Boolean).join(" · ") : ""}
+          onClose={closeForm}
+        >
           <ReportForm
             key={editingReport ? editingReport.id : formKey}
             clients={clients}
@@ -5723,7 +5720,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
             bouteilles={bouteilles}
             mouvementsFluide={mouvementsFluide}
           />
-        </div>
+        </Fenetre>
       )}
     </div>
   );
@@ -5732,15 +5729,6 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
 function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, onDelete, focusReport, settings }) {
   const [viewTab, setViewTab] = useState("details");
   const cardRef = useRef(null);
-
-  // Quand une carte s'ouvre, on la ramène en haut de l'écran : la fermeture de
-  // la carte précédente décale la page, et le rapport ouvert se retrouverait
-  // sinon hors de vue.
-  useEffect(() => {
-    if (open && cardRef.current) {
-      cardRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, [open]);
 
   useEffect(() => {
     if (focusReport && focusReport.id === r.id) {
@@ -5765,10 +5753,14 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
         {r.onedrive?.erreur && !(r.onedrive.chemin && r.onedrive.signature === empreinteRapport(r)) && (
           <span className="pill pill-alert" title={r.onedrive.erreur}><Icon name="alert" size={13} /> OneDrive</span>
         )}
-        <span className="chevron">{open ? "−" : "+"}</span>
+        <span className="chevron"><Icon name="chevronRight" size={18} /></span>
       </div>
       {open && (
-        <div className="report-card-body">
+        <Fenetre
+          titre={`${labelType(r.type)} — ${nomAffiche(r.client, clients)}`}
+          sousTitre={[r.installation, r.date].filter(Boolean).join(" · ")}
+          onClose={onToggle}
+          actions={
           <div className="report-card-actions">
             <button
               className={r.valide ? "btn-ghost small" : "btn-primary small"}
@@ -5777,7 +5769,7 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
             >
               <Icon name="check" size={14} /> {r.valide ? "Annuler la validation" : "Valider"}
             </button>
-            <button className="btn-ghost small" onClick={(e) => { e.stopPropagation(); onEdit(r); }}>
+            <button className="btn-ghost small" onClick={(e) => { e.stopPropagation(); onToggle(); onEdit(r); }}>
               <Icon name="edit" size={14} /> Modifier
             </button>
             <button className="btn-ghost small" onClick={(e) => { e.stopPropagation(); onPrint(r); }}>
@@ -5785,6 +5777,9 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
             </button>
             <DeleteButton onConfirm={() => onDelete(r)} />
           </div>
+          }
+        >
+        <div className="report-card-body">
 
           <div className="report-view-tabs" onClick={(e) => e.stopPropagation()}>
             <button className={"report-view-tab" + (viewTab === "details" ? " active" : "")} onClick={() => setViewTab("details")}>
@@ -5899,6 +5894,7 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
             </>
           )}
         </div>
+        </Fenetre>
       )}
     </div>
   );
@@ -7742,7 +7738,9 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
         )
       )
     : clientsTries;
-  const [selected, setSelected] = useState(clients[0]?.id);
+  // Aucun client ouvert à l'arrivée sur l'onglet : avant, le premier client
+  // enregistré (SOCH) s'affichait d'office, même pendant une recherche.
+  const [selected, setSelected] = useState(null);
   const [editingClient, setEditingClient] = useState(null);
   const [showContract, setShowContract] = useState(false);
   const [showMap, setShowMap] = useState(false);
@@ -7752,9 +7750,12 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
   const [ficheOuverte, setFicheOuverte] = useState(false);
   // Aucun client affiché tant qu'aucun n'est sélectionné (cas d'une création
   // en cours) : on ne retombe donc plus systématiquement sur le premier.
-  const client = selected ? clients.find((c) => c.id === selected) : null;
+  // Pendant une recherche, la fiche ouverte disparaît si ce client ne fait pas
+  // partie des résultats : on ne voit que ce qu'on cherche.
+  const client = selected && (!termeRecherche || clientsAffiches.some((c) => c.id === selected))
+    ? clients.find((c) => c.id === selected)
+    : null;
 
-  const formRef = useRef(null);
   const ficheRef = useRef(null);
   const premierAffichage = useRef(true);
 
@@ -7779,14 +7780,6 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
-  // Le formulaire s'ouvre sous la liste des clients : on fait descendre la page
-  // automatiquement jusqu'à lui, sinon il apparaît hors de l'écran et donne
-  // l'impression que le clic n'a rien fait.
-  useEffect(() => {
-    if (showForm && formRef.current) {
-      formRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, [showForm, editingClient]);
 
   useEffect(() => {
     if (focusClient) {
@@ -7882,7 +7875,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
             onToggle={() => setFicheOuverte((v) => !v)}
             showMachines={showMachines}
             setShowMachines={setShowMachines}
-            onEdit={() => openEdit(client)}
+            onEdit={() => { setFicheOuverte(false); openEdit(client); }}
             onDelete={() => onDelete(client)}
             onShowContract={() => setShowContract(true)}
           />
@@ -7894,7 +7887,12 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
       )}
 
       {showForm && (
-        <div ref={formRef}>
+        <Fenetre
+          formulaire
+          icone="users"
+          titre={editingClient ? `Modifier — ${libelleClient(editingClient)}` : "Nouveau client"}
+          onClose={closeForm}
+        >
           <ClientForm
             key={editingClient ? editingClient.id : "new"}
             editingClient={editingClient}
@@ -7902,7 +7900,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
             onCancel={closeForm}
             onSubmit={(c) => { editingClient ? onUpdate(c) : onAdd(c); closeForm(); setSelected(c.id); }}
           />
-        </div>
+        </Fenetre>
       )}
 
       {showContract && client?.contrat && (
@@ -7939,6 +7937,63 @@ function FicheLigne({ label, value }) {
   );
 }
 
+/* ---------- Fenêtre (fiche client, rapport) ----------
+   Même présentation que la fenêtre du contrat : posée au-dessus de la page,
+   fermée par « Fermer » ou en touchant le fond. Rendue à la racine de la page
+   pour échapper au verre dépoli des cartes. */
+function Fenetre({ titre, sousTitre, icone = "report", onClose, children, actions, formulaire = false }) {
+  // En mode formulaire, toucher le fond ou appuyer sur Échap ne ferme rien :
+  // une saisie en cours (photos, signatures…) ne doit pas se perdre par erreur.
+  // « Annuler » demande confirmation avant d'abandonner.
+  const [confirmerAbandon, setConfirmerAbandon] = useState(false);
+  const fondRef = useRef(null);
+  const fermerRef = useRef(onClose);
+  fermerRef.current = onClose;
+  useEffect(() => {
+    // La page derrière ne défile plus tant que la fenêtre est ouverte.
+    const avant = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    // Échap ferme seulement la fenêtre du dessus (ex. le contrat ouvert depuis la fiche).
+    const echap = (e) => {
+      if (e.key !== "Escape" || formulaire) return;
+      const fonds = document.querySelectorAll(".pdf-modal-overlay");
+      if (fonds[fonds.length - 1] === fondRef.current) fermerRef.current();
+    };
+    window.addEventListener("keydown", echap);
+    return () => { document.body.style.overflow = avant; window.removeEventListener("keydown", echap); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return createPortal(
+    <div className="pdf-modal-overlay" ref={fondRef} onClick={formulaire ? undefined : onClose}>
+      <div className={"pdf-modal-box fenetre-box" + (formulaire ? " fenetre-formulaire" : "")} onClick={(e) => e.stopPropagation()}>
+        <div className="pdf-modal-toolbar">
+          <span className="pdf-modal-title fenetre-titre">
+            <Icon name={icone} size={16} />
+            <span>
+              {titre}
+              {sousTitre && <span className="fenetre-sous-titre">{sousTitre}</span>}
+            </span>
+          </span>
+          {!formulaire ? (
+            <button type="button" className="btn-ghost small" onClick={onClose}>Fermer</button>
+          ) : confirmerAbandon ? (
+            <span className="fenetre-abandon">
+              <button type="button" className="btn-small btn-danger-solid" onClick={onClose}>Abandonner</button>
+              <button type="button" className="btn-ghost small" onClick={() => setConfirmerAbandon(false)}>Continuer</button>
+            </span>
+          ) : (
+            <button type="button" className="btn-ghost small" onClick={() => setConfirmerAbandon(true)}>Annuler</button>
+          )}
+        </div>
+        {confirmerAbandon && <div className="fenetre-avertissement">Abandonner la saisie ? Ce qui n'est pas enregistré sera perdu.</div>}
+        {actions && <div className="fenetre-actions">{actions}</div>}
+        <div className="fenetre-corps">{children}</div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function ClientFiche({ client, reports, ouverte, onToggle, showMachines, setShowMachines, onEdit, onDelete, onShowContract }) {
   const estProfessionnel =
     typeof client.professionnel === "boolean"
@@ -7952,27 +8007,31 @@ function ClientFiche({ client, reports, ouverte, onToggle, showMachines, setShow
           <span className="fiche-bandeau-nom">{libelleClient(client)}</span>
           {client.raisonSociale && <span className="fiche-bandeau-contact">{client.nom}</span>}
         </span>
-        <Icon name={ouverte ? "chevronDown" : "chevronRight"} size={18} />
+        <Icon name="chevronRight" size={18} />
       </button>
 
-      {!ouverte && <p className="hint">Touchez le nom pour afficher la fiche complète.</p>}
+      <p className="hint">Touchez le nom pour ouvrir la fiche complète.</p>
 
       {ouverte && (
-      <>
-      <div className="row-between fiche-actions-row">
-        <div />
-        <div className="client-detail-actions">
-          {client.contrat && (
-            <button className="btn-ghost small btn-contrat" onClick={onShowContract}>
-              <Icon name="report" size={14} /> Contrat
+      <Fenetre
+        titre={libelleClient(client)}
+        sousTitre={client.raisonSociale ? client.nom : ""}
+        icone="users"
+        onClose={onToggle}
+        actions={
+          <div className="client-detail-actions">
+            {client.contrat && (
+              <button className="btn-ghost small btn-contrat" onClick={onShowContract}>
+                <Icon name="report" size={14} /> Contrat
+              </button>
+            )}
+            <button className="btn-ghost small" onClick={onEdit}>
+              <Icon name="edit" size={14} /> Modifier
             </button>
-          )}
-          <button className="btn-ghost small" onClick={onEdit}>
-            <Icon name="edit" size={14} /> Modifier
-          </button>
-          <DeleteButton onConfirm={onDelete} />
-        </div>
-      </div>
+            <DeleteButton onConfirm={onDelete} />
+          </div>
+        }
+      >
 
       {(() => {
         const statut = getEntretienStatus(client, reports);
@@ -8041,7 +8100,7 @@ function ClientFiche({ client, reports, ouverte, onToggle, showMachines, setShow
       </button>
       {showMachines && client.machines.length === 0 && <p className="empty">Aucun matériel enregistré pour ce client.</p>}
       {showMachines && client.machines.map((m, i) => <MachineBlock key={i} machine={m} />)}
-      </>
+      </Fenetre>
       )}
     </section>
   );
@@ -10028,27 +10087,44 @@ function BouteilleForm({ initial, onCancel, onSubmit }) {
 }
 
 function MouvementFluideForm({ clients, reports, bouteilles, mouvements, onCancel, onSubmit }) {
-  const [f, setF] = useState({ date: toLocalISODate(new Date()), client: "", operation: "charge", fluide: "", bouteille: "", kg: "", rapport: "", notes: "" });
-  const [pesee, setPesee] = useState(false);
-  const [poids, setPoids] = useState({ avant: "", apres: "" });
+  const [f, setF] = useState({ date: toLocalISODate(new Date()), client: "", operation: "charge", fluide: "", rapport: "", notes: "" });
+  // Une intervention peut utiliser plusieurs bouteilles : une ligne par bouteille.
+  const nouvelleLigne = () => ({ id: "l" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), bouteille: "", kg: "", pesee: null });
+  const [lignes, setLignes] = useState(() => [nouvelleLigne()]);
+  const majLigne = (id, champs) => setLignes((l) => l.map((x) => (x.id === id ? { ...x, ...champs } : x)));
   const fiche = clients.find((c) => c.nom === f.client);
   const unites = fluidesDuClient(fiche);
   // Fluide proposé : celui de la machine du client, sinon le premier en stock.
   const fluide = f.fluide || unites[0]?.fluide?.trim() || bouteilles.find((b) => b.statut === "en_service")?.fluide || "R32";
-  const quantite = pesee ? Math.abs(nombreFr(poids.avant) - nombreFr(poids.apres)) : nombreFr(f.kg);
   const possibles = bouteilles.filter((b) => b.statut === "en_service" && b.fluide === fluide &&
     (f.operation === "charge" ? ["neuve", "transfert"].includes(b.type) : ["transfert", "recuperation"].includes(b.type)));
-  const bChoisie = possibles.find((b) => b.id === f.bouteille);
-  const avant = bChoisie ? contenuBouteille(bChoisie, mouvements) : 0;
-  const apres = bChoisie ? (f.operation === "charge" ? avant - quantite : avant + quantite) : null;
+  const quantiteDe = (l) => (l.pesee ? Math.abs(nombreFr(l.pesee.avant) - nombreFr(l.pesee.apres)) : nombreFr(l.kg));
+  // Contenu d'une bouteille avant une ligne : on retire aussi les lignes
+  // précédentes de ce formulaire sur la même bouteille.
+  const avantLigne = (l, index) => {
+    const b = possibles.find((x) => x.id === l.bouteille);
+    if (!b) return 0;
+    const precedentes = lignes.slice(0, index).filter((x) => x.bouteille === l.bouteille)
+      .map((x) => ({ bouteille: x.bouteille, operation: f.operation, kg: quantiteDe(x) }));
+    return contenuBouteille(b, [...mouvements, ...precedentes]);
+  };
+  const etats = lignes.map((l, i) => {
+    const b = possibles.find((x) => x.id === l.bouteille);
+    const q = quantiteDe(l);
+    const avant = avantLigne(l, i);
+    const apres = b ? (f.operation === "charge" ? avant - q : avant + q) : null;
+    return { b, q, avant, apres, ok: !!b && q > 0 && (f.operation !== "charge" || apres >= -0.001) };
+  });
+  const total = etats.reduce((s, e) => s + e.q, 0);
   const rapportsClient = reports.filter((r) => r.client === f.client).slice(0, 12); // les plus récents d'abord
-  const valide = f.client && quantite > 0 && bChoisie && (f.operation !== "charge" || apres >= -0.001);
+  const valide = f.client && etats.length > 0 && etats.every((e) => e.ok);
+  const changerOperation = (op) => { setF({ ...f, operation: op }); setLignes((l) => l.map((x) => ({ ...x, bouteille: "" }))); };
   return (
     <section className="card form-card fl-form">
       <h3>Nouvelle opération</h3>
       <div className="fl-toggle">
         {[["charge", "Charge"], ["recuperation", "Récupération"]].map(([id, lib]) => (
-          <button key={id} type="button" className={"toggle-btn" + (f.operation === id ? " active" : "")} onClick={() => setF({ ...f, operation: id, bouteille: "" })}>{lib}</button>
+          <button key={id} type="button" className={"toggle-btn" + (f.operation === id ? " active" : "")} onClick={() => changerOperation(id)}>{lib}</button>
         ))}
       </div>
       <div className="form-grid">
@@ -10058,38 +10134,55 @@ function MouvementFluideForm({ clients, reports, bouteilles, mouvements, onCance
         </div>
         <label>Date<input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>
         <label>Fluide
-          <select value={fluide} onChange={(e) => setF({ ...f, fluide: e.target.value, bouteille: "" })}>
+          <select value={fluide} onChange={(e) => { setF({ ...f, fluide: e.target.value }); setLignes((l) => l.map((x) => ({ ...x, bouteille: "" }))); }}>
             {Object.keys(FLUIDES).map((x) => <option key={x}>{x}</option>)}
           </select>
         </label>
-        <div className="field-col">Quantité
-          <div className="fl-mode">
-            <button type="button" className={"filter-btn" + (!pesee ? " active" : "")} onClick={() => setPesee(false)}>Saisie</button>
-            <button type="button" className={"filter-btn" + (pesee ? " active" : "")} onClick={() => setPesee(true)}>Par pesée</button>
-          </div>
-          {!pesee ? (
-            <input inputMode="decimal" value={f.kg} onChange={(e) => setF({ ...f, kg: e.target.value })} placeholder="En kg, ex : 0,8" />
-          ) : (
-            <div className="fl-pesee">
-              <label>Bouteille avant (kg)<input inputMode="decimal" value={poids.avant} onChange={(e) => setPoids({ ...poids, avant: e.target.value })} /></label>
-              <label>Bouteille après (kg)<input inputMode="decimal" value={poids.apres} onChange={(e) => setPoids({ ...poids, apres: e.target.value })} /></label>
-              {quantite > 0 && <span className="hint">= {kgFr(quantite)} {f.operation === "charge" ? "chargés" : "récupérés"}</span>}
+      </div>
+
+      <div className="fl-lignes">
+        {lignes.map((l, i) => {
+          const e = etats[i];
+          return (
+            <div key={l.id} className="fl-rapport-ligne">
+              <div className="fl-rapport-tete">
+                <strong>{lignes.length > 1 ? `Bouteille ${i + 1}` : f.operation === "charge" ? "Bouteille utilisée" : "Bouteille de récupération"}</strong>
+                {lignes.length > 1 && <button type="button" className="icon-btn" onClick={() => setLignes((x) => x.filter((y) => y.id !== l.id))} title="Retirer cette bouteille"><Icon name="trash" size={15} /></button>}
+              </div>
+              <select value={l.bouteille} onChange={(ev) => majLigne(l.id, { bouteille: ev.target.value })}>
+                <option value="">{possibles.length ? "Choisir…" : `Aucune bouteille de ${fluide} disponible`}</option>
+                {possibles.map((b) => <option key={b.id} value={b.id}>{b.numero} ({TYPES_BOUTEILLE[b.type].seul.toLowerCase()}) — {kgFr(avantLigne({ ...l, bouteille: b.id }, i))}</option>)}
+              </select>
+              <div className="fl-mode">
+                <button type="button" className={"filter-btn" + (!l.pesee ? " active" : "")} onClick={() => majLigne(l.id, { pesee: null })}>Saisie</button>
+                <button type="button" className={"filter-btn" + (l.pesee ? " active" : "")} onClick={() => majLigne(l.id, { pesee: { avant: "", apres: "" } })}>Par pesée</button>
+              </div>
+              {!l.pesee ? (
+                <input inputMode="decimal" value={l.kg} onChange={(ev) => majLigne(l.id, { kg: ev.target.value })} placeholder="Quantité en kg, ex : 0,8" />
+              ) : (
+                <div className="fl-pesee">
+                  <label>Bouteille avant (kg)<input inputMode="decimal" value={l.pesee.avant} onChange={(ev) => majLigne(l.id, { pesee: { ...l.pesee, avant: ev.target.value } })} /></label>
+                  <label>Bouteille après (kg)<input inputMode="decimal" value={l.pesee.apres} onChange={(ev) => majLigne(l.id, { pesee: { ...l.pesee, apres: ev.target.value } })} /></label>
+                  {e.q > 0 && <span className="hint">= {kgFr(e.q)} {f.operation === "charge" ? "chargés" : "récupérés"}</span>}
+                </div>
+              )}
+              {e.b && e.q > 0 && (
+                <span className={"hint" + (e.apres < 0 || (e.b.type !== "neuve" && e.apres > nombreFr(e.b.capacite) * 0.8) ? " alerte" : "")}>
+                  {f.operation === "charge"
+                    ? e.apres < 0 ? `Pas assez dans cette bouteille (il reste ${kgFr(e.avant)}) : ajoute une autre bouteille pour le reste.` : `Il restera ${kgFr(e.apres)} dans la bouteille ${e.b.numero}.`
+                    : `La bouteille contiendra ${kgFr(e.apres)} sur ${kgFr(e.b.capacite)}${e.apres > nombreFr(e.b.capacite) * 0.8 ? " — au-delà de 80 %, prévois-en une autre." : "."}`}
+                </span>
+              )}
             </div>
-          )}
+          );
+        })}
+        <div className="fl-rapport-ajout">
+          <button type="button" className="btn-ghost small" onClick={() => setLignes((l) => [...l, nouvelleLigne()])}><Icon name="plus" size={14} /> Une autre bouteille</button>
+          {lignes.length > 1 && total > 0 && <span className="hint">Total : {kgFr(total)} {f.operation === "charge" ? "chargés" : "récupérés"}</span>}
         </div>
-        <label className="grid-full">{f.operation === "charge" ? "Bouteille utilisée" : "Bouteille de récupération"}
-          <select value={f.bouteille} onChange={(e) => setF({ ...f, bouteille: e.target.value })}>
-            <option value="">{possibles.length ? "Choisir…" : `Aucune bouteille de ${fluide} disponible`}</option>
-            {possibles.map((b) => <option key={b.id} value={b.id}>{b.numero} ({TYPES_BOUTEILLE[b.type].seul.toLowerCase()}) — {kgFr(contenuBouteille(b, mouvements))}</option>)}
-          </select>
-          {bChoisie && quantite > 0 && (
-            <span className={"hint" + (apres < 0 || (bChoisie.type !== "neuve" && apres > nombreFr(bChoisie.capacite) * 0.8) ? " alerte" : "")}>
-              {f.operation === "charge"
-                ? apres < 0 ? `Pas assez dans cette bouteille (il reste ${kgFr(avant)}).` : `Il restera ${kgFr(apres)} dans la bouteille ${bChoisie.numero}.`
-                : `La bouteille contiendra ${kgFr(apres)} sur ${kgFr(bChoisie.capacite)}${apres > nombreFr(bChoisie.capacite) * 0.8 ? " — au-delà de 80 %, prévois-en une autre." : "."}`}
-            </span>
-          )}
-        </label>
+      </div>
+
+      <div className="form-grid">
         <label className="grid-full">Rapport d'intervention lié (facultatif)
           <select value={f.rapport} onChange={(e) => setF({ ...f, rapport: e.target.value })} disabled={!f.client}>
             <option value="">Aucun</option>
@@ -10104,16 +10197,104 @@ function MouvementFluideForm({ clients, reports, bouteilles, mouvements, onCance
           type="button"
           className="btn-primary"
           disabled={!valide}
-          onClick={() => onSubmit({
-            id: "fm" + Date.now(), date: f.date, client: f.client, operation: f.operation, fluide, bouteille: f.bouteille,
-            kg: Math.round(quantite * 1000) / 1000, rapport: f.rapport || "", notes: f.notes.trim(),
-            ...(pesee ? { poidsAvant: nombreFr(poids.avant), poidsApres: nombreFr(poids.apres) } : {}),
-          })}
+          onClick={() => {
+            const groupe = "g" + Date.now().toString(36);
+            onSubmit(lignes.map((l, i) => ({
+              id: "fm" + Date.now() + "-" + i, date: f.date, client: f.client, operation: f.operation, fluide, bouteille: l.bouteille,
+              kg: Math.round(etats[i].q * 1000) / 1000, rapport: f.rapport || "", notes: f.notes.trim(),
+              ...(lignes.length > 1 ? { groupe } : {}),
+              ...(l.pesee ? { poidsAvant: nombreFr(l.pesee.avant), poidsApres: nombreFr(l.pesee.apres) } : {}),
+            })));
+          }}
         >
           Enregistrer
         </button>
       </div>
     </section>
+  );
+}
+
+// Carte d'une bouteille : ce qu'il reste, en gros ; le poids à lire sur la
+// balance ; et l'historique des interventions faites avec elle.
+function CarteBouteille({ b, mouvements, reports, clients, onModifier, onHorsService }) {
+  const [ouvert, setOuvert] = useState(false);
+  const type = b.type;
+  const reste = contenuBouteille(b, mouvements);
+  const cap = nombreFr(b.capacite) || 0;
+  const pct = cap ? Math.min(100, Math.round((reste / cap) * 100)) : 0;
+  const tare = nombreFr(b.tare), brut = nombreFr(b.brut);
+  const depart = tare && brut ? brut - tare : type === "neuve" ? cap : 0;
+  // Ordre chronologique (à date égale, ordre de saisie).
+  const lies = mouvements.filter((m) => m.bouteille === b.id).sort((x, y) => String(x.date).localeCompare(String(y.date)) || String(x.id).localeCompare(String(y.id), undefined, { numeric: true }));
+  const totalOp = (op) => lies.filter((m) => m.operation === op).reduce((s, m) => s + nombreFr(m.kg), 0);
+  const plein = type !== "neuve" && cap && reste > cap * 0.8;
+  const vide = type === "neuve" && reste <= 0.05;
+  const couleur = couleurFluide(b.fluide);
+  return (
+    <li className="fl-carte-bouteille" style={{ "--fl": couleur }}>
+      <div className="fl-cb-tete">
+        <div>
+          <div className="fl-cb-numero">{b.numero}</div>
+          <div className="fl-cb-origine">{[b.fournisseur, b.recue ? `${type === "transfert" ? "depuis le" : "reçue le"} ${dateFluide(b.recue)}` : ""].filter(Boolean).join(" · ")}</div>
+        </div>
+        <div className="fl-cb-reste">
+          <strong>{kgFr(reste)}</strong>
+          <span>{type === "neuve" ? "restants" : "dedans"}</span>
+        </div>
+      </div>
+      <div className="fl-cb-jauge">
+        <div className="fl-jauge"><span style={{ width: pct + "%", background: couleur }} /></div>
+        <span>{pct} %{cap ? ` de ${kgFr(cap)}` : ""}</span>
+      </div>
+      {(plein || vide) && <div className="fl-cb-alerte">{vide ? "Bouteille vide" : "Remplie à plus de 80 % : prévois-en une autre"}</div>}
+      <div className="fl-cb-chiffres">
+        {type === "neuve" ? (
+          <div><span>Utilisé</span><strong>{kgFr(Math.max(0, depart - reste))}</strong></div>
+        ) : (
+          <div><span>Récupéré</span><strong>{kgFr(totalOp("recuperation"))}</strong></div>
+        )}
+        {tare > 0 ? (
+          <div><span>Sur la balance</span><strong>{kgFr(tare + reste)}</strong><em>tare {kgFr(tare)}</em></div>
+        ) : (
+          <div><span>Capacité</span><strong>{kgFr(cap)}</strong></div>
+        )}
+      </div>
+      <div className="fl-actions-bouteille">
+        <button type="button" className={"btn-ghost small" + (ouvert ? " active" : "")} onClick={() => setOuvert(!ouvert)}>
+          <Icon name={ouvert ? "chevronDown" : "chevronRight"} size={13} /> Historique ({lies.length})
+        </button>
+        <button type="button" className="btn-ghost small" onClick={onModifier}><Icon name="edit" size={13} /> Modifier</button>
+        <button type="button" className="btn-ghost small" onClick={onHorsService}>{type === "neuve" ? "Vide" : type === "recuperation" ? "Rendue" : "Vidée"}</button>
+      </div>
+      {ouvert && (
+        <div className="fl-cb-historique">
+          <div className="fl-cb-ligne depart">
+            <span>{dateFluide(b.recue) || "Départ"}</span>
+            <span>{type === "neuve" ? "Contenu de départ" : "Mise en service"}</span>
+            <strong>{kgFr(depart)}</strong>
+          </div>
+          {lies.map((m) => {
+            const r = m.rapport ? reports.find((x) => x.id === m.rapport) : null;
+            return (
+              <div key={m.id} className="fl-cb-ligne">
+                <span>{dateFluide(m.date)}</span>
+                <span>
+                  {m.operation === "charge" ? "Charge" : "Récupération"} · {nomAffiche(m.client, clients)}
+                  {(r || m.notes) && <em>{[r ? `${labelType(r.type)} du ${r.date}` : "", m.notes].filter(Boolean).join(" — ")}</em>}
+                </span>
+                <strong className={m.operation}>{m.operation === "charge" ? "−" : "+"} {kgFr(m.kg)}</strong>
+              </div>
+            );
+          })}
+          {lies.length === 0 && <p className="empty">Aucune intervention avec cette bouteille pour l'instant.</p>}
+          <div className="fl-cb-ligne total">
+            <span />
+            <span>Il reste</span>
+            <strong>{kgFr(reste)}</strong>
+          </div>
+        </div>
+      )}
+    </li>
   );
 }
 
@@ -10223,7 +10404,7 @@ function FluidesFrigorigenes({ clients, reports, bouteilles, mouvements, erreur,
           bouteilles={bouteilles}
           mouvements={mouvements}
           onCancel={() => setFormOp(false)}
-          onSubmit={(m) => { onSaveMouvement(m); setFormOp(false); setFluideVu(m.fluide); }}
+          onSubmit={(liste) => { const ms = Array.isArray(liste) ? liste : [liste]; ms.forEach((m) => onSaveMouvement(m)); setFormOp(false); if (ms[0]) setFluideVu(ms[0].fluide); }}
         />
       )}
 
@@ -10280,30 +10461,18 @@ function FluidesFrigorigenes({ clients, reports, bouteilles, mouvements, erreur,
                         <span className="hint">{T.aide}</span>
                       </div>
                       {liste.length === 0 ? <p className="empty">{T.vide} en {fluideActif}.</p> : (
-                        <ul className="list">
-                          {liste.map((b) => {
-                            const reste = contenuBouteille(b, mouvements);
-                            const cap = nombreFr(b.capacite) || 1;
-                            const pct = Math.min(100, (reste / cap) * 100);
-                            const plein = type !== "neuve" && reste > cap * 0.8;
-                            const tare = nombreFr(b.tare);
-                            return (
-                              <li key={b.id} className="row fl-bouteille">
-                                <div className="grow">
-                                  <div className="row-title">{b.numero}{plein && <span className="pill pill-alert">Pleine à 80 %</span>}{type === "neuve" && reste <= 0.05 && <span className="pill pill-alert">Vide</span>}</div>
-                                  <div className="fl-jauge"><span style={{ width: pct + "%", background: couleurFluide(b.fluide) }} /></div>
-                                  <div className="row-sub">{kgFr(reste)} sur {kgFr(b.capacite)}{tare ? ` · tare ${kgFr(tare)} → doit peser ${kgFr(tare + reste)}` : ""}</div>
-                                  <div className="row-sub">{[b.fournisseur, b.recue ? `${type === "transfert" ? "en service depuis le" : "reçue le"} ${dateFluide(b.recue)}` : ""].filter(Boolean).join(" · ")}</div>
-                                  <div className="fl-actions-bouteille">
-                                    <button type="button" className="btn-ghost small" onClick={() => setFormBouteille(b)}><Icon name="edit" size={13} /> Modifier</button>
-                                    <button type="button" className="btn-ghost small" onClick={() => onSaveBouteille({ ...b, statut: type === "neuve" ? "vide" : "rendue", horsServiceLe: toLocalISODate(new Date()) })}>
-                                      {type === "neuve" ? "Vide" : type === "recuperation" ? "Rendue" : "Vidée"}
-                                    </button>
-                                  </div>
-                                </div>
-                              </li>
-                            );
-                          })}
+                        <ul className="fl-cartes">
+                          {liste.map((b) => (
+                            <CarteBouteille
+                              key={b.id}
+                              b={b}
+                              mouvements={mouvements}
+                              reports={reports}
+                              clients={clients}
+                              onModifier={() => setFormBouteille(b)}
+                              onHorsService={() => onSaveBouteille({ ...b, statut: type === "neuve" ? "vide" : "rendue", horsServiceLe: toLocalISODate(new Date()) })}
+                            />
+                          ))}
                         </ul>
                       )}
                     </section>
@@ -10887,7 +11056,8 @@ function PdfFileModal({ base64, filename, title, onClose }) {
 
 
 function ConfirmationModal({ titre, children, onConfirmer, onAnnuler, libelleConfirmer }) {
-  return (
+  // Rendue à la racine de la page pour passer au-dessus des autres fenêtres.
+  return createPortal(
     <div className="pdf-modal-overlay" onClick={onAnnuler}>
       <div className="pdf-modal-box pdf-modal-box-compact" onClick={(e) => e.stopPropagation()}>
         <div className="pdf-modal-toolbar">
@@ -10900,7 +11070,7 @@ function ConfirmationModal({ titre, children, onConfirmer, onAnnuler, libelleCon
         </div>
       </div>
     </div>
-  );
+  , document.body);
 }
 
 // Aperçu PDF dans la fiche du rapport : les photos rangées à part sont
@@ -10927,7 +11097,8 @@ function PdfPreviewModal({ html, onClose }) {
     }
   };
 
-  return (
+  // Rendue à la racine de la page pour passer au-dessus des autres fenêtres.
+  return createPortal(
     <div className="pdf-modal-overlay" onClick={onClose}>
       <div className="pdf-modal-box" onClick={(e) => e.stopPropagation()}>
         <div className="pdf-modal-toolbar">
@@ -10942,7 +11113,7 @@ function PdfPreviewModal({ html, onClose }) {
         <iframe ref={iframeRef} title="Aperçu PDF du rapport" srcDoc={html} className="pdf-modal-iframe" />
       </div>
     </div>
-  );
+  , document.body);
 }
 
 function buildReportHtml(report, settings, clients) {
@@ -12020,6 +12191,20 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .contrat-creer { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding-bottom: 14px; margin-bottom: 12px; border-bottom: 1px solid var(--trait); }
 .contrat-creer .hint { margin: 0; }
 .contrat-modeles-vierges { opacity: 0.9; }
+.fenetre-box { height: auto; max-width: 760px; max-height: 92vh; display: flex; flex-direction: column; }
+.fenetre-titre { min-width: 0; align-items: flex-start; }
+.fenetre-titre > svg { margin-top: 3px; flex-shrink: 0; }
+.fenetre-sous-titre { display: block; font-family: var(--police); font-size: 12.5px; font-weight: 400; color: var(--encre-3); margin-top: 2px; }
+.fenetre-actions { padding: 10px 16px; border-bottom: 1px solid var(--trait); flex-shrink: 0; }
+.fenetre-actions .report-card-actions, .fenetre-actions .client-detail-actions { margin: 0; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-start; }
+.fenetre-corps { padding: 16px 18px 20px; flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.fenetre-corps > .form-card { background: none; border: 0; box-shadow: none; padding: 0; margin: 0; border-radius: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.fenetre-formulaire { max-width: 900px; }
+@media (max-width: 780px) { .fenetre-formulaire { height: calc(100dvh - 24px); } }
+.fenetre-abandon { display: inline-flex; gap: 6px; flex-shrink: 0; }
+.fenetre-avertissement { padding: 8px 16px; font-size: 13px; font-weight: 600; color: var(--rouge, #E05A5A); background: rgba(224,90,90,0.10); border-bottom: 1px solid var(--trait); flex-shrink: 0; }
+.fenetre-corps .report-card-body { margin-top: 0; padding-top: 0; border-top: 0; }
+@media (max-width: 780px) { .fenetre-box { max-height: calc(100dvh - 24px); } }
 .contrat-modal-box { height: auto; max-width: 720px; max-height: 92vh; display: flex; flex-direction: column; }
 .contrat-form-corps { padding: 18px 20px 4px; flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .contrat-form-actions { padding: 0 20px 18px; margin-top: 10px; flex-shrink: 0; }
@@ -12821,6 +13006,39 @@ input, select, textarea { border-radius: 10px; }
 .fl-jauge { height: 8px; border-radius: 6px; background: var(--fond-doux); margin: 8px 0 6px; overflow: hidden; }
 .fl-jauge span { display: block; height: 100%; border-radius: 6px; }
 .fl-actions-bouteille { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.fl-cartes { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.fl-carte-bouteille { padding: 14px; border-radius: 16px; background: var(--fond-doux); border-left: 4px solid var(--fl); }
+.fl-cb-tete { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.fl-cb-numero { font-size: 17px; font-weight: 800; color: var(--encre); }
+.fl-cb-origine { font-size: 12.5px; color: var(--encre-3); margin-top: 2px; }
+.fl-cb-reste { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; }
+.fl-cb-reste strong { font-size: 26px; line-height: 1.05; color: var(--encre); white-space: nowrap; }
+.fl-cb-reste span { font-size: 12px; color: var(--encre-3); text-transform: uppercase; letter-spacing: .04em; }
+.fl-cb-jauge { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; }
+.fl-cb-jauge .fl-jauge { flex: 1; height: 12px; margin: 0; background: var(--carte); }
+.fl-cb-jauge > span { font-size: 13px; font-weight: 700; color: var(--encre-2); white-space: nowrap; }
+.fl-cb-alerte { margin-top: 6px; padding: 6px 10px; border-radius: 10px; font-size: 13px; font-weight: 600; background: rgba(232,135,58,0.15); color: var(--orange, #E8873A); }
+.fl-cb-chiffres { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.fl-cb-chiffres div { display: flex; flex-direction: column; padding: 8px 10px; border-radius: 12px; background: var(--carte); }
+.fl-cb-chiffres span { font-size: 12px; color: var(--encre-3); }
+.fl-cb-chiffres strong { font-size: 17px; color: var(--encre); }
+.fl-cb-chiffres em { font-style: normal; font-size: 11.5px; color: var(--encre-3); }
+.fl-actions-bouteille .active { background: color-mix(in srgb, var(--fl) 18%, transparent); }
+.fl-cb-historique { margin-top: 10px; border-top: 1px solid var(--trait); padding-top: 6px; }
+.fl-cb-ligne { display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 7px 0; border-bottom: 1px dashed var(--trait); font-size: 13.5px; color: var(--encre-2); }
+.fl-cb-ligne > span:first-child { color: var(--encre-3); font-size: 12.5px; }
+.fl-cb-ligne em { display: block; font-style: normal; font-size: 12px; color: var(--encre-3); }
+.fl-cb-ligne strong { white-space: nowrap; color: var(--encre); }
+.fl-cb-ligne strong.charge { color: var(--vert); }
+.fl-cb-ligne strong.recuperation { color: var(--orange, #E8873A); }
+.fl-cb-ligne.depart, .fl-cb-ligne.total { font-weight: 600; }
+.fl-cb-ligne.total { border-bottom: 0; }
+.fl-form .form-grid > * { min-width: 0; }
+.fl-form .form-grid label select, .fl-form .form-grid label input { width: 100%; min-width: 0; box-sizing: border-box; }
+.fl-actions-bouteille .btn-ghost.small { padding-left: 10px; padding-right: 10px; }
+.fl-lignes .fl-rapport-ajout { align-items: center; justify-content: space-between; }
+.fl-lignes { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }
+.fl-lignes > .fl-rapport-ligne select, .fl-lignes > .fl-rapport-ligne > input { width: 100%; box-sizing: border-box; }
 .fl-form-bouteille h4 { margin: 0 0 4px; font-size: 16px; }
 .fl-toggle { display: flex; gap: 8px; margin: 8px 0 14px; flex-wrap: wrap; }
 .fl-mode { display: flex; gap: 6px; margin: 6px 0 8px; }
