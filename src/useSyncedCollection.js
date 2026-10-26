@@ -95,6 +95,87 @@ async function cleCache(nom) {
   return uid ? `${uid}:${nom}` : null;
 }
 
+/* ---------------------------------------------------------------------------
+   Envois en attente
+   ---------------------------------------------------------------------------
+   Un enregistrement (rapport, client…) qui n'a pas pu partir — réseau absent,
+   requête bloquée après une mise en veille, connexion à renouveler — n'est
+   plus perdu en silence : il est gardé sur l'appareil (IndexedDB) et renvoyé
+   automatiquement (retour du réseau, retour dans l'appli, toutes les 20 s),
+   même après fermeture de l'appli. Un bandeau indique ce qui reste à envoyer.
+--------------------------------------------------------------------------- */
+const etatEnvois = new Map(); // table → { attente, erreur }
+let refusEnvois = []; // enregistrements refusés définitivement par la base
+const auditeursEnvois = new Set();
+const relanceurs = new Set();
+
+function publierEnvois() {
+  let attente = 0;
+  let erreur = null;
+  etatEnvois.forEach((e) => { attente += e.attente; if (e.erreur && !erreur) erreur = e.erreur; });
+  auditeursEnvois.forEach((f) => f({ attente, erreur, refus: refusEnvois }));
+}
+
+/** Efface les messages de refus affichés dans le bandeau. */
+export function effacerRefusEnvois() {
+  refusEnvois = [];
+  publierEnvois();
+}
+
+/** État global des envois pour le bandeau : { attente, erreur, refus }. */
+export function useEtatEnvois() {
+  const [etat, setEtat] = useState({ attente: 0, erreur: null, refus: [] });
+  useEffect(() => {
+    auditeursEnvois.add(setEtat);
+    publierEnvois();
+    return () => { auditeursEnvois.delete(setEtat); };
+  }, []);
+  return etat;
+}
+
+/** Relance tout de suite tous les envois en attente. */
+export function relancerEnvois() {
+  relanceurs.forEach((f) => f());
+}
+
+// Jeton de connexion renouvelé s'il arrive à échéance (veille de l'appareil).
+async function jetonFrais() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const s = data?.session;
+    if (s?.expires_at && s.expires_at * 1000 - Date.now() < 2 * 60 * 1000) await supabase.auth.refreshSession();
+  } catch (_e) { /* on tente l'écriture quand même */ }
+}
+
+const erreurDeJeton = (res) =>
+  res.status === 401 || /jwt/i.test(res.error?.message || "") || res.error?.code === "PGRST301" || res.error?.code === "PGRST303";
+// Erreurs passagères (réseau, délai dépassé, serveur occupé) : on réessaiera.
+// Les autres (droits refusés, envoi trop gros…) sont signalées telles quelles.
+const erreurPassagere = (res) =>
+  !res.status || res.status === 408 || res.status === 429 || res.status >= 500 || erreurDeJeton(res);
+
+function messageEnvoi(res) {
+  if (erreurDeJeton(res)) return "Connexion à renouveler : si cela dure, déconnecte-toi puis reconnecte-toi.";
+  if (!res.status) return "Pas de réseau ou serveur injoignable : nouvel essai automatique.";
+  return res.error?.message || "Erreur inconnue";
+}
+
+async function executerEnvoi(table, op) {
+  const lancer = () =>
+    op.type === "delete"
+      ? supabase.from(table).delete().eq("id", op.id)
+      : supabase.from(table).upsert({ id: op.id, data: op.item }).select("updated_at");
+  await jetonFrais();
+  let res = await lancer();
+  if (res.error && erreurDeJeton(res)) {
+    try { await supabase.auth.refreshSession(); } catch (_e) { /* ignoré */ }
+    res = await lancer();
+  }
+  return res;
+}
+
+const DELAI_RELANCE_MS = 20 * 1000;
+
 // Retour au premier plan : on ne resynchronise pas plus d'une fois par minute
 // (le retour déclenche souvent deux événements, « focus » et « visibilité »).
 const DELAI_MIN_RESYNCHRO_MS = 60 * 1000;
@@ -130,6 +211,12 @@ export function useSyncedCollection(table, seed) {
   const derniereLectureComplete = useRef(0);
   const sansVersions = useRef(false);
   const minuterieCache = useRef(null);
+  // Envois en attente de cette table : id → { type: "upsert" | "delete", id, item }.
+  const fileEnvois = useRef(new Map());
+  const envoiEnCours = useRef(false);
+  const fileChargee = useRef(null);
+  const aRelancer = useRef(false);
+  const cachePret = useRef(null);
 
   // Toute modification de la liste passe par ici : état, référence et cache.
   const setItems = useCallback((maj) => {
@@ -182,7 +269,7 @@ export function useSyncedCollection(table, seed) {
 
     // Démarrage : le cache de l'appareil est lu AVANT toute synchronisation
     // (sinon un événement de connexion très rapide relisait toute la table).
-    const cacheRestaure = (async () => {
+    const cacheRestaure = cachePret.current = (async () => {
       const cle = await cleCache(table);
       const cache = cle ? await lireCache(cle) : null;
       if (!active) return;
@@ -205,6 +292,7 @@ export function useSyncedCollection(table, seed) {
 
       try {
         await cacheRestaure;
+        await fileChargee.current;
         const session = await sessionPrete();
         if (!active) return;
 
@@ -241,8 +329,11 @@ export function useSyncedCollection(table, seed) {
           if (r.lues.length > 0 || r.supprimees.length > 0) {
             r.lues.forEach((row) => versions.current.set(String(row.id), row.updated_at || ""));
             r.supprimees.forEach((id) => versions.current.delete(id));
-            const parId = new Map(r.lues.map((row) => [String(row.id), elementValide(row)]));
-            const retirer = new Set(r.supprimees);
+            // Un élément qui attend d'être envoyé garde sa version locale : la
+            // base n'a pas encore reçu la modification.
+            const enAttente = fileEnvois.current;
+            const parId = new Map(r.lues.filter((row) => !enAttente.has(String(row.id))).map((row) => [String(row.id), elementValide(row)]));
+            const retirer = new Set(r.supprimees.filter((id) => !enAttente.has(String(id))));
             setItems((prev) => {
               const liste = sansVides(prev)
                 .filter((it) => !retirer.has(String(it.id)))
@@ -274,7 +365,14 @@ export function useSyncedCollection(table, seed) {
           if (insertError) setError(insertError.message);
           setItems(sansVides(seed));
         } else {
-          setItems((data || []).map(elementValide).filter(Boolean));
+          const lus = (data || []).map(elementValide).filter(Boolean);
+          const enAttente = fileEnvois.current;
+          if (enAttente.size) {
+            // Les modifications pas encore envoyées l'emportent sur la base.
+            const liste = lus.filter((it) => !enAttente.has(String(it.id)));
+            enAttente.forEach((op) => { if (op.type === "upsert") liste.push(op.item); });
+            setItems(liste);
+          } else setItems(lus);
           setError(null);
         }
         setLoading(false);
@@ -314,6 +412,7 @@ export function useSyncedCollection(table, seed) {
           if (payload.eventType === "DELETE") {
             const id = payload.old && payload.old.id;
             if (id !== undefined && id !== null) {
+              if (fileEnvois.current.has(String(id))) return;
               versions.current.delete(String(id));
               setItems((prev) => sansVides(prev).filter((it) => String(it.id) !== String(id)));
             } else load();
@@ -324,6 +423,7 @@ export function useSyncedCollection(table, seed) {
           // différentielle va alors chercher cette seule ligne.
           const incoming = elementValide(payload.new);
           if (!incoming) { load(); return; }
+          if (fileEnvois.current.has(String(incoming.id))) return;
           if (payload.new?.updated_at) versions.current.set(String(incoming.id), payload.new.updated_at);
           setItems((prev) => {
             const liste = sansVides(prev);
@@ -344,6 +444,111 @@ export function useSyncedCollection(table, seed) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [table]);
 
+  // ---- Envois : file d'attente gardée sur l'appareil ----
+  const majEtatEnvois = useCallback((erreur) => {
+    etatEnvois.set(table, { attente: fileEnvois.current.size, erreur: fileEnvois.current.size ? erreur || null : null });
+    publierEnvois();
+  }, [table]);
+
+  const sauverFile = useCallback(async () => {
+    const cle = await cleCache("attente:" + table);
+    if (cle) ecrireCache(cle, [...fileEnvois.current.values()]);
+  }, [table]);
+
+  // Envoie une opération, puis tout ce qui attend encore. Une seule boucle
+  // d'envoi à la fois par table, dans l'ordre des modifications.
+  const viderFile = useCallback(async () => {
+    if (envoiEnCours.current) return;
+    envoiEnCours.current = true;
+    let derniereErreur = null;
+    try {
+      await fileChargee.current;
+      for (const [id, op] of [...fileEnvois.current]) {
+        const res = await executerEnvoi(table, op);
+        // L'élément a pu être modifié de nouveau pendant l'envoi : on ne retire
+        // de la file que l'opération réellement envoyée.
+        if (!res.error) {
+          if (fileEnvois.current.get(id) === op) fileEnvois.current.delete(id);
+          if (op.type === "upsert" && res.data && res.data[0]?.updated_at) versions.current.set(id, res.data[0].updated_at);
+          continue;
+        }
+        derniereErreur = messageEnvoi(res);
+        setError(res.error.message);
+        if (!erreurPassagere(res)) {
+          // Refus définitif (droits, taille…) : inutile d'insister en boucle.
+          fileEnvois.current.delete(id);
+          refusEnvois = [...refusEnvois, res.error.message].slice(-3);
+          continue;
+        }
+        break; // réseau absent : on garde la suite pour le prochain essai
+      }
+      if (!derniereErreur) setError(null);
+    } finally {
+      envoiEnCours.current = false;
+      majEtatEnvois(derniereErreur);
+      sauverFile();
+      // Une modification arrivée pendant cet envoi part tout de suite après.
+      if (aRelancer.current) {
+        aRelancer.current = false;
+        if (!derniereErreur && fileEnvois.current.size) setTimeout(() => viderFileRef.current(), 0);
+      }
+    }
+  }, [table, majEtatEnvois, sauverFile]);
+  const viderFileRef = useRef(viderFile);
+  viderFileRef.current = viderFile;
+
+  const envoyer = useCallback(async (op) => {
+    await fileChargee.current;
+    fileEnvois.current.delete(op.id); // la plus récente passe en dernier
+    fileEnvois.current.set(op.id, op);
+    majEtatEnvois(null);
+    sauverFile();
+    if (envoiEnCours.current) { aRelancer.current = true; return; }
+    await viderFile();
+  }, [majEtatEnvois, sauverFile, viderFile]);
+
+  // Reprise des envois laissés en attente (même après fermeture de l'appli),
+  // puis relances : retour du réseau, retour dans l'appli, toutes les 20 s.
+  useEffect(() => {
+    let actif = true;
+    fileChargee.current = (async () => {
+      await cachePret.current;
+      const cle = await cleCache("attente:" + table);
+      const enregistres = cle ? await lireCache(cle) : null;
+      if (!actif || !Array.isArray(enregistres)) return;
+      enregistres.forEach((op) => {
+        if (op && op.id && !fileEnvois.current.has(op.id)) fileEnvois.current.set(op.id, op);
+      });
+      if (enregistres.length) {
+        // Les modifications en attente réapparaissent dans la liste.
+        setItems((prev) => {
+          let liste = sansVides(prev);
+          enregistres.forEach((op) => {
+            if (!op || !op.id) return;
+            liste = liste.filter((it) => String(it.id) !== op.id);
+            if (op.type === "upsert" && op.item) liste.push(op.item);
+          });
+          return liste;
+        });
+      }
+      majEtatEnvois(null);
+    })();
+    const relancer = () => { if (fileEnvois.current.size) viderFile(); };
+    fileChargee.current.then(relancer);
+    const auRetour = () => { if (document.visibilityState === "visible") relancer(); };
+    relanceurs.add(relancer);
+    window.addEventListener("online", relancer);
+    document.addEventListener("visibilitychange", auRetour);
+    const minuterie = setInterval(relancer, DELAI_RELANCE_MS);
+    return () => {
+      actif = false;
+      relanceurs.delete(relancer);
+      window.removeEventListener("online", relancer);
+      document.removeEventListener("visibilitychange", auRetour);
+      clearInterval(minuterie);
+    };
+  }, [table, setItems, majEtatEnvois, viderFile]);
+
   const upsert = useCallback(
     async (item) => {
       if (!item || item.id === undefined || item.id === null) return;
@@ -352,23 +557,18 @@ export function useSyncedCollection(table, seed) {
         const exists = liste.some((it) => it.id === item.id);
         return exists ? liste.map((it) => (it.id === item.id ? item : it)) : [...liste, item];
       });
-      // On récupère la nouvelle version (quelques octets) pour ne pas
-      // retélécharger cette ligne à la prochaine synchronisation.
-      const { data, error: upsertError } = await supabase.from(table).upsert({ id: item.id, data: item }).select("updated_at");
-      if (upsertError) setError(upsertError.message);
-      else if (data && data[0]?.updated_at) versions.current.set(String(item.id), data[0].updated_at);
+      await envoyer({ type: "upsert", id: String(item.id), item });
     },
-    [table, setItems]
+    [table, setItems, envoyer]
   );
 
   const remove = useCallback(
     async (id) => {
       versions.current.delete(String(id));
       setItems((prev) => sansVides(prev).filter((it) => it.id !== id));
-      const { error: deleteError } = await supabase.from(table).delete().eq("id", id);
-      if (deleteError) setError(deleteError.message);
+      await envoyer({ type: "delete", id: String(id) });
     },
-    [table, setItems]
+    [table, setItems, envoyer]
   );
 
   return { items, upsert, remove, loading, error };
@@ -514,7 +714,7 @@ export function useSyncedSettings(defaultValue) {
 
   const saveSettings = useCallback(async (next) => {
     setSettingsState(next);
-    const { data, error: upsertError } = await supabase.from("settings").upsert({ id: 1, data: next }).select("updated_at");
+    const { data, error: upsertError } = await executerEnvoi("settings", { type: "upsert", id: 1, item: next });
     if (upsertError) setError(upsertError.message);
     else {
       version.current = (data && data[0]?.updated_at) || "";
