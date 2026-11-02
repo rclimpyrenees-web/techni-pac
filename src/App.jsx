@@ -5937,16 +5937,16 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
               )}
               <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
               {r.descriptionLibre && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.descriptionLibre }} /></div>}
-              {r.conclusion && (
+              {htmlOuVide(r.conclusion) && (
                 <>
                   <div className="section-title">Conclusion</div>
-                  <p className="remarque texte-libre">{r.conclusion}</p>
+                  <div className="remarque texte-libre rte-render" dangerouslySetInnerHTML={{ __html: texteEnHtml(r.conclusion) }} />
                 </>
               )}
-              {r.remarques && (
+              {htmlOuVide(r.remarques) && (
                 <>
                   <div className="section-title">Remarques</div>
-                  <p className="remarque texte-libre">{r.remarques}</p>
+                  <div className="remarque texte-libre rte-render" dangerouslySetInnerHTML={{ __html: texteEnHtml(r.remarques) }} />
                 </>
               )}
               <DevisNote text={r.devisAEffectuer} />
@@ -5963,16 +5963,16 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
               )}
               <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
               {r.descriptionLibre && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.descriptionLibre }} /></div>}
-              {r.conclusion && (
+              {htmlOuVide(r.conclusion) && (
                 <>
                   <div className="section-title">Conclusion</div>
-                  <p className="remarque texte-libre">{r.conclusion}</p>
+                  <div className="remarque texte-libre rte-render" dangerouslySetInnerHTML={{ __html: texteEnHtml(r.conclusion) }} />
                 </>
               )}
-              {r.remarques && (
+              {htmlOuVide(r.remarques) && (
                 <>
                   <div className="section-title">Remarques</div>
-                  <p className="remarque texte-libre">{r.remarques}</p>
+                  <div className="remarque texte-libre rte-render" dangerouslySetInnerHTML={{ __html: texteEnHtml(r.remarques) }} />
                 </>
               )}
               <DevisNote text={r.devisAEffectuer} />
@@ -5989,16 +5989,16 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
               )}
               <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
               {r.description && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.description }} /></div>}
-              {r.conclusion && (
+              {htmlOuVide(r.conclusion) && (
                 <>
                   <div className="section-title">Conclusion</div>
-                  <p className="remarque texte-libre">{r.conclusion}</p>
+                  <div className="remarque texte-libre rte-render" dangerouslySetInnerHTML={{ __html: texteEnHtml(r.conclusion) }} />
                 </>
               )}
-              {r.remarques && (
+              {htmlOuVide(r.remarques) && (
                 <>
                   <div className="section-title">Remarques</div>
-                  <p className="remarque texte-libre">{r.remarques}</p>
+                  <div className="remarque texte-libre rte-render" dangerouslySetInnerHTML={{ __html: texteEnHtml(r.remarques) }} />
                 </>
               )}
               {r.pieces && <p><strong>Pièces utilisées :</strong> {r.pieces}</p>}
@@ -6146,6 +6146,15 @@ function ChecklistsSection({ checklists, setChecklists, settings, reportType }) 
 
   const updateNom = (clId, nom) => setChecklists((list) => list.map((cl) => (cl.id === clId ? { ...cl, nom } : cl)));
   const removeChecklist = (clId) => setChecklists((list) => list.filter((cl) => cl.id !== clId));
+  // Échange une checklist avec sa voisine (sens -1 : monter, +1 : descendre).
+  // Les tableaux placés « après » une de ses lignes la suivent.
+  const deplacer = (idx, sens) => setChecklists((list) => {
+    const cible = idx + sens;
+    if (cible < 0 || cible >= list.length) return list;
+    const suivant = [...list];
+    [suivant[idx], suivant[cible]] = [suivant[cible], suivant[idx]];
+    return suivant;
+  });
 
   const uid = () => Date.now() + "_" + Math.random().toString(16).slice(2, 8);
 
@@ -6175,6 +6184,19 @@ function ChecklistsSection({ checklists, setChecklists, settings, reportType }) 
       <label className="block">Checklists</label>
       {checklists.map((cl, idx) => (
         <div key={cl.id} className="checklist-block">
+          {checklists.length > 1 && (
+            <div className="table-ordre">
+              <span className="hint">Checklist {idx + 1}/{checklists.length}</span>
+              <span className="table-ordre-boutons">
+                <button type="button" className="btn-ghost small" onClick={() => deplacer(idx, -1)} disabled={idx === 0} title="Échanger avec la checklist du dessus">
+                  <Icon name="chevronUp" size={14} /> Monter
+                </button>
+                <button type="button" className="btn-ghost small" onClick={() => deplacer(idx, 1)} disabled={idx === checklists.length - 1} title="Échanger avec la checklist du dessous">
+                  <Icon name="chevronDown" size={14} /> Descendre
+                </button>
+              </span>
+            </div>
+          )}
           <div className="checklist-block-head">
             <input
               className="checklist-block-title"
@@ -7282,8 +7304,10 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   // Adresse du lieu d'intervention, laissée vide quand elle est identique à
   // celle de la fiche client.
   const [adresseSite, setAdresseSite] = useState(editingReport?.adresseSite || prefillAdresseSite || "");
-  const [remarques, setRemarques] = useState(editingReport?.remarques || "");
-  const [conclusion, setConclusion] = useState(editingReport?.conclusion || "");
+  // Conclusion et remarques mises en forme : gardées dans des refs, comme
+  // l'objet et la description (l'éditeur ne doit pas être redessiné à chaque frappe).
+  const remarquesRef = useRef(editingReport?.remarques || "");
+  const conclusionRef = useRef(editingReport?.conclusion || "");
   const introRef = useRef(editingReport?.intro || "");
   const descriptionLibreRef = useRef(editingReport?.descriptionLibre || "");
   const [showDescriptionLibre, setShowDescriptionLibre] = useState(!!editingReport?.descriptionLibre); // conservé pour compat (non utilisé)
@@ -7443,11 +7467,11 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
       fluides: fluides.filter((o) => o.bouteille && nombreFr(o.kg) > 0).map((o) => ({ ...o, kg: Math.round(nombreFr(o.kg) * 1000) / 1000 })),
     };
     if (reportType === "mise_en_service") {
-      return { ...base, adresseSite, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
+      return { ...base, adresseSite, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion: htmlOuVide(conclusionRef.current), remarques: htmlOuVide(remarquesRef.current), montant, tva, devisAEffectuer };
     } else if (reportType === "entretien") {
-      return { ...base, adresseSite, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion, remarques, montant, tva, devisAEffectuer };
+      return { ...base, adresseSite, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion: htmlOuVide(conclusionRef.current), remarques: htmlOuVide(remarquesRef.current), montant, tva, devisAEffectuer };
     } else {
-      return { ...base, adresseSite, intro: introRef.current, machines: cleanMachines(), description: descriptionRef.current, checklists: cleanChecklists(), tables, pieces, facturable, conclusion, remarques, montant, tva, devisAEffectuer };
+      return { ...base, adresseSite, intro: introRef.current, machines: cleanMachines(), description: descriptionRef.current, checklists: cleanChecklists(), tables, pieces, facturable, conclusion: htmlOuVide(conclusionRef.current), remarques: htmlOuVide(remarquesRef.current), montant, tva, devisAEffectuer };
     }
   };
 
@@ -7566,15 +7590,17 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} echangerTables={echangerTables} addTable={addTable} insertTemplateTable={insertTemplateTable} />
 
-          <label className="block mt">Conclusion
-            <textarea rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} placeholder="Ex : bon fonctionnement général de l'installation, intervention terminée." />
+          <div className="block mt field-block">
+            <div className="field-caption">Conclusion</div>
+            <RichTextEditor initialValue={texteEnHtml(editingReport?.conclusion)} onChange={(html) => { conclusionRef.current = html; }} minHeight={80} />
             <span className="hint">Le titre « Conclusion » n'apparaît dans le rapport que si ce champ est rempli.</span>
-          </label>
+          </div>
 
-          <label className="block mt">Remarques
-            <textarea rows={3} value={remarques} onChange={(e) => setRemarques(e.target.value)} placeholder="Observations, recommandations au client..." />
+          <div className="block mt field-block">
+            <div className="field-caption">Remarques</div>
+            <RichTextEditor initialValue={texteEnHtml(editingReport?.remarques)} onChange={(html) => { remarquesRef.current = html; }} minHeight={80} />
             <span className="hint">Le titre « Remarques » n'apparaît dans le rapport que si ce champ est rempli.</span>
-          </label>
+          </div>
 
           <div className="form-grid">
             <label>Montant HT de l'intervention (€, facultatif)
@@ -7640,15 +7666,17 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} echangerTables={echangerTables} addTable={addTable} insertTemplateTable={insertTemplateTable} />
 
-          <label className="block mt">Conclusion
-            <textarea rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} placeholder="Ex : bon fonctionnement général de l'installation, intervention terminée." />
+          <div className="block mt field-block">
+            <div className="field-caption">Conclusion</div>
+            <RichTextEditor initialValue={texteEnHtml(editingReport?.conclusion)} onChange={(html) => { conclusionRef.current = html; }} minHeight={80} />
             <span className="hint">Le titre « Conclusion » n'apparaît dans le rapport que si ce champ est rempli.</span>
-          </label>
+          </div>
 
-          <label className="block mt">Remarques
-            <textarea rows={3} value={remarques} onChange={(e) => setRemarques(e.target.value)} placeholder="Observations, recommandations au client..." />
+          <div className="block mt field-block">
+            <div className="field-caption">Remarques</div>
+            <RichTextEditor initialValue={texteEnHtml(editingReport?.remarques)} onChange={(html) => { remarquesRef.current = html; }} minHeight={80} />
             <span className="hint">Le titre « Remarques » n'apparaît dans le rapport que si ce champ est rempli.</span>
-          </label>
+          </div>
           <div className="form-grid">
             <label>Montant HT de l'intervention (€, facultatif)
               <input type="number" step="0.01" min="0" value={montant} onChange={(e) => setMontant(e.target.value)} placeholder="Ex : 120" />
@@ -7711,15 +7739,17 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} echangerTables={echangerTables} addTable={addTable} insertTemplateTable={insertTemplateTable} />
 
-          <label className="block mt">Conclusion
-            <textarea rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} placeholder="Ex : panne résolue, installation remise en service." />
+          <div className="block mt field-block">
+            <div className="field-caption">Conclusion</div>
+            <RichTextEditor initialValue={texteEnHtml(editingReport?.conclusion)} onChange={(html) => { conclusionRef.current = html; }} minHeight={80} />
             <span className="hint">Le titre « Conclusion » n'apparaît dans le rapport que si ce champ est rempli.</span>
-          </label>
+          </div>
 
-          <label className="block mt">Remarques
-            <textarea rows={3} value={remarques} onChange={(e) => setRemarques(e.target.value)} placeholder="Observations, recommandations au client..." />
+          <div className="block mt field-block">
+            <div className="field-caption">Remarques</div>
+            <RichTextEditor initialValue={texteEnHtml(editingReport?.remarques)} onChange={(html) => { remarquesRef.current = html; }} minHeight={80} />
             <span className="hint">Le titre « Remarques » n'apparaît dans le rapport que si ce champ est rempli.</span>
-          </label>
+          </div>
 
           <label className="block">Pièces utilisées
             <input value={pieces} onChange={(e) => setPieces(e.target.value)} placeholder="Ex : raccord flare 1/4 pouce" />
@@ -11089,6 +11119,19 @@ function nl2br(str) {
   return escapeHtml(str).replace(/\n/g, "<br/>");
 }
 
+// Conclusion et remarques : autrefois du texte simple, désormais mis en forme
+// (gras, italique, souligné). Un ancien texte est converti à l'affichage.
+const BALISES_MISE_EN_FORME = /<\/?(b|strong|i|em|u|s|p|div|br|ul|ol|li|span)\b/i;
+function texteEnHtml(valeur) {
+  const v = String(valeur || "");
+  return BALISES_MISE_EN_FORME.test(v) ? v : nl2br(v);
+}
+// Champ mis en forme resté vide (« <br> » laissé par l'éditeur) : vide.
+function htmlOuVide(html) {
+  const v = String(html || "");
+  return v.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim() ? v : "";
+}
+
 function tableRowsToHtml(t) {
   const titre = t.nom ? `<h3 class="pdf-table-title">${escapeHtml(t.nom)}</h3>` : "";
   // Titre et tableau sont regroupés dans un bloc insécable : à l'impression,
@@ -11325,23 +11368,23 @@ function buildReportHtml(report, settings, clients) {
     body += machinesToHtml(report.machines);
     if (report.descriptionLibre) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
     body += checklistsToHtml(report);
-    if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
-    if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
+    if (htmlOuVide(report.conclusion)) body += `<h3 class="pdf-section-title">Conclusion</h3><div class="pdf-texte-libre pdf-description">${texteEnHtml(report.conclusion)}</div>`;
+    if (htmlOuVide(report.remarques)) body += `<h3 class="pdf-section-title">Remarques</h3><div class="pdf-texte-libre pdf-description">${texteEnHtml(report.remarques)}</div>`;
   } else if (report.type === "entretien") {
     if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
     body += machinesToHtml(report.machines);
     if (report.descriptionLibre) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.descriptionLibre}</div>`;
     body += checklistsToHtml(report);
-    if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
-    if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
+    if (htmlOuVide(report.conclusion)) body += `<h3 class="pdf-section-title">Conclusion</h3><div class="pdf-texte-libre pdf-description">${texteEnHtml(report.conclusion)}</div>`;
+    if (htmlOuVide(report.remarques)) body += `<h3 class="pdf-section-title">Remarques</h3><div class="pdf-texte-libre pdf-description">${texteEnHtml(report.remarques)}</div>`;
   } else {
     // Le contenu vient de l'éditeur riche interne (gras/italique/souligné), déjà en HTML de confiance.
     if (report.intro) body += `<p class="pdf-field-label"><strong>Objet :</strong></p><div class="pdf-description">${report.intro}</div>`;
     body += machinesToHtml(report.machines);
     if (report.description) body += `<p class="pdf-field-label"><strong>Description :</strong></p><div class="pdf-description">${report.description}</div>`;
     body += checklistsToHtml(report);
-    if (report.conclusion) body += `<h3 class="pdf-section-title">Conclusion</h3><p class="pdf-texte-libre">${nl2br(report.conclusion)}</p>`;
-    if (report.remarques) body += `<h3 class="pdf-section-title">Remarques</h3><p class="pdf-texte-libre">${nl2br(report.remarques)}</p>`;
+    if (htmlOuVide(report.conclusion)) body += `<h3 class="pdf-section-title">Conclusion</h3><div class="pdf-texte-libre pdf-description">${texteEnHtml(report.conclusion)}</div>`;
+    if (htmlOuVide(report.remarques)) body += `<h3 class="pdf-section-title">Remarques</h3><div class="pdf-texte-libre pdf-description">${texteEnHtml(report.remarques)}</div>`;
     if (report.pieces) body += `<p><strong>Pièces utilisées :</strong> ${escapeHtml(report.pieces)}</p>`;
   }
 
@@ -11404,6 +11447,7 @@ function buildReportHtml(report, settings, clients) {
   .pdf-machine-type { font-size: 13.5px; margin: 12px 0 -6px; }
   .pdf-section-title { font-family: 'Inter', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 18px 0 4px; text-decoration: underline; text-underline-offset: 3px; }
   .pdf-texte-libre { font-size: 16px; line-height: 1.55; white-space: pre-wrap; }
+  .pdf-texte-libre.pdf-description { white-space: normal; }
   .pdf-table-title { font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; color: #1B2733; margin: 16px 0 -4px; text-decoration: underline; text-underline-offset: 3px; }
   /* Rien ne doit être coupé au milieu par un changement de page : un tableau,
      un matériel ou une ligne de checklist bascule entier sur la page suivante,
@@ -12268,6 +12312,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 
 .section-title { font-size: 13.5px; font-weight: 700; color: var(--encre); margin: 14px 0 4px; text-decoration: underline; text-underline-offset: 3px; }
 .texte-libre { white-space: pre-wrap; }
+.texte-libre.rte-render { white-space: normal; }
 .mini-table-block { margin-bottom: 12px; }
 .mini-table-title { font-family: var(--police-titre); font-size: 15px; font-weight: 600; color: var(--bleu); margin-bottom: 3px; text-decoration: underline; text-underline-offset: 3px; }
 .mini-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 12px; }
