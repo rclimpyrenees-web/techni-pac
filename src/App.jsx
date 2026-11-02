@@ -342,6 +342,7 @@ const Icon = ({ name, size = 18 }) => {
     chevronLeft: "M15 18l-6-6 6-6",
     chevronRight: "M9 18l6-6-6-6",
     chevronDown: "M6 9l6 6 6-6",
+    chevronUp: "M18 15l-6-6-6 6",
     menu: "M3 12h18M3 6h18M3 18h18",
     navigation: "M3 11l19-9-9 19-2-8-8-2z",
     pin: "M12 21s7-6.5 7-11a7 7 0 10-14 0c0 4.5 7 11 7 11zM12 11.5a2 2 0 100-4 2 2 0 000 4z",
@@ -6250,7 +6251,7 @@ function ChecklistEditor({ items, setItems }) {
 }
 
 /* ---------- Éditeur de tableau libre ---------- */
-function TableEditor({ table, checklist, onChange, onRemove }) {
+function TableEditor({ table, checklist, onChange, onRemove, numero, onMonter, onDescendre }) {
   const updateCell = (r, c, val) => {
     const rows = table.rows.map((row, ri) => (ri === r ? row.map((cell, ci) => (ci === c ? val : cell)) : row));
     onChange({ ...table, rows });
@@ -6264,6 +6265,19 @@ function TableEditor({ table, checklist, onChange, onRemove }) {
 
   return (
     <div className="table-editor">
+      {(onMonter || onDescendre) && (
+        <div className="table-ordre">
+          <span className="hint">Tableau {numero}</span>
+          <span className="table-ordre-boutons">
+            <button type="button" className="btn-ghost small" onClick={onMonter || undefined} disabled={!onMonter} title="Échanger avec le tableau du dessus">
+              <Icon name="chevronUp" size={14} /> Monter
+            </button>
+            <button type="button" className="btn-ghost small" onClick={onDescendre || undefined} disabled={!onDescendre} title="Échanger avec le tableau du dessous">
+              <Icon name="chevronDown" size={14} /> Descendre
+            </button>
+          </span>
+        </div>
+      )}
       <label className="table-position">
         Titre du tableau (facultatif)
         <input value={table.nom || ""} onChange={(e) => onChange({ ...table, nom: e.target.value })} placeholder="Ex : Relevés électriques" />
@@ -6361,12 +6375,30 @@ function ChecklistTemplateEditor({ template, onChange, onRemove }) {
 }
 
 
-function TablesSection({ tables, checklist, settings, updateTable, removeTable, addTable, insertTemplateTable }) {
+function TablesSection({ tables, checklist, settings, updateTable, removeTable, echangerTables, addTable, insertTemplateTable }) {
+  // Tableaux affichés dans l'ordre où ils apparaîtront dans le rapport :
+  // « Monter » et « Descendre » font alors exactement ce qu'on voit.
+  const rangLigne = new Map((checklist || []).map((it, i) => [it.id, i]));
+  const rang = (t) => {
+    const a = t.afterItemId || "__end__";
+    if (a === "__start__") return -1;
+    return rangLigne.has(a) ? rangLigne.get(a) : Number.MAX_SAFE_INTEGER;
+  };
+  const ordre = tables.map((t, i) => ({ t, i })).sort((x, y) => rang(x.t) - rang(y.t) || x.i - y.i).map((x) => x.t);
   return (
     <div className="block mt">
       <label className="block">Tableaux</label>
-      {tables.map((t) => (
-        <TableEditor key={t.id} table={t} checklist={checklist} onChange={(next) => updateTable(t.id, next)} onRemove={() => removeTable(t.id)} />
+      {ordre.map((t, i) => (
+        <TableEditor
+          key={t.id}
+          table={t}
+          checklist={checklist}
+          numero={ordre.length > 1 ? `${i + 1}/${ordre.length}` : ""}
+          onMonter={i > 0 && echangerTables ? () => echangerTables(t.id, ordre[i - 1].id) : null}
+          onDescendre={i < ordre.length - 1 && echangerTables ? () => echangerTables(t.id, ordre[i + 1].id) : null}
+          onChange={(next) => updateTable(t.id, next)}
+          onRemove={() => removeTable(t.id)}
+        />
       ))}
       <div className="table-insert-row">
         <button type="button" className="btn-ghost small" onClick={addTable}><Icon name="plus" size={14} /> Ajouter un tableau vide</button>
@@ -7377,6 +7409,18 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   const addTable = () => setTables((t) => [...t, { id: "tbl" + Date.now(), nom: "", rows: [["", ""], ["", ""]], afterItemId: "__end__" }]);
   const updateTable = (id, next) => setTables((list) => list.map((t) => (t.id === id ? next : t)));
   const removeTable = (id) => setTables((list) => list.filter((t) => t.id !== id));
+  // Deux tableaux échangent leur place : leur rang dans la liste ET leur
+  // position dans le rapport (« après telle ligne de la checklist »).
+  const echangerTables = (idA, idB) => setTables((list) => {
+    const ia = list.findIndex((t) => t.id === idA);
+    const ib = list.findIndex((t) => t.id === idB);
+    if (ia < 0 || ib < 0) return list;
+    const a = list[ia], b = list[ib];
+    const suivant = [...list];
+    suivant[ia] = { ...b, afterItemId: a.afterItemId || "__end__" };
+    suivant[ib] = { ...a, afterItemId: b.afterItemId || "__end__" };
+    return suivant;
+  });
   const insertTemplateTable = (templateId) => {
     const tpl = (settings.tableaux || []).find((t) => t.id === templateId);
     if (!tpl) return;
@@ -7520,7 +7564,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <ChecklistsSection checklists={checklists} setChecklists={setChecklists} settings={settings} reportType="mise_en_service" />
 
-          <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
+          <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} echangerTables={echangerTables} addTable={addTable} insertTemplateTable={insertTemplateTable} />
 
           <label className="block mt">Conclusion
             <textarea rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} placeholder="Ex : bon fonctionnement général de l'installation, intervention terminée." />
@@ -7594,7 +7638,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <ChecklistsSection checklists={checklists} setChecklists={setChecklists} settings={settings} reportType="entretien" />
 
-          <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
+          <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} echangerTables={echangerTables} addTable={addTable} insertTemplateTable={insertTemplateTable} />
 
           <label className="block mt">Conclusion
             <textarea rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} placeholder="Ex : bon fonctionnement général de l'installation, intervention terminée." />
@@ -7665,7 +7709,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
           </div>
           <ChecklistsSection checklists={checklists} setChecklists={setChecklists} settings={settings} reportType="diagnostic" />
 
-          <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} addTable={addTable} insertTemplateTable={insertTemplateTable} />
+          <TablesSection tables={tables} checklist={allChecklistItems(checklists)} settings={settings} updateTable={updateTable} removeTable={removeTable} echangerTables={echangerTables} addTable={addTable} insertTemplateTable={insertTemplateTable} />
 
           <label className="block mt">Conclusion
             <textarea rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} placeholder="Ex : panne résolue, installation remise en service." />
@@ -12383,6 +12427,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .checklist-label-input { font-weight: 600; line-height: 1.4; min-height: 46px; }
 
 .table-editor { margin-bottom: 14px; padding: 12px; background: var(--fond-doux); border-radius: 8px; }
+.table-ordre { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.table-ordre-boutons { display: inline-flex; gap: 6px; }
+.table-ordre-boutons .btn-ghost.small { display: inline-flex; align-items: center; gap: 4px; }
+.table-ordre-boutons button:disabled { opacity: 0.35; }
 .table-insert-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .table-template-select { width: auto; min-width: 220px; }
 .checklist-header-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
