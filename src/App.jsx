@@ -3257,6 +3257,15 @@ function assemblerDictee(resultats) {
   return texte;
 }
 
+// Micro « sourd » : ouvert (pastille orange) mais ne recevant rien. Arrive
+// surtout en voiture : juste après la voix de l'assistant, l'iPhone fait
+// basculer le Bluetooth du mode musique au mode kit mains libres, et une
+// écoute ouverte pendant ce basculement peut rester sourde. Si aucune parole
+// n'est détectée au bout de DELAI_SURDITE_MS, l'écoute est refermée puis
+// rouverte (le basculement est fini entre-temps), jusqu'à RELANCES_SURDITE fois.
+const DELAI_SURDITE_MS = 6000;
+const RELANCES_SURDITE = 2;
+
 function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, patience = 8000 }) {
   const debutEcoute = Date.now();
   let relances = 0;
@@ -3267,6 +3276,10 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
   let fini = false;
   let annule = false;
   let entendu = false;
+  let paroleDetectee = false;
+  let relancesSurdite = 0;
+  let relanceVolontaire = false;
+  let minuterieSurdite = null;
 
   const texteComplet = () => [dejaDicte, enCours].filter(Boolean).join(" ").trim();
 
@@ -3274,8 +3287,24 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
     if (fini) return;
     fini = true;
     clearTimeout(minuterie);
+    clearTimeout(minuterieSurdite);
     try { rec?.stop(); } catch (_e) { /* déjà arrêtée */ }
     onFin(annule ? "" : texteComplet(), erreur);
+  };
+
+  // Rien détecté depuis l'ouverture : on referme et on rouvre le micro.
+  const armerSurdite = () => {
+    clearTimeout(minuterieSurdite);
+    minuterieSurdite = setTimeout(() => {
+      if (fini || entendu || paroleDetectee) return;
+      if (relancesSurdite >= RELANCES_SURDITE) { terminer("sourd"); return; }
+      relancesSurdite++;
+      relanceVolontaire = true;
+      const ancienne = rec;
+      try { rec?.abort(); } catch (_e) { /* déjà fermée */ }
+      // Si le micro bloqué ne signale même pas sa fermeture, on rouvre quand même.
+      setTimeout(() => { if (relanceVolontaire && rec === ancienne && !fini) ancienne.onend?.(); }, 1500);
+    }, DELAI_SURDITE_MS);
   };
 
   const armerSilence = () => {
@@ -3289,6 +3318,9 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
     rec.interimResults = true;
     rec.continuous = true;
     enCours = "";
+    // Parole, ou au moins du son (bruit de la route…) : le micro reçoit bien.
+    rec.onspeechstart = () => { paroleDetectee = true; };
+    rec.onsoundstart = () => { paroleDetectee = true; };
     rec.onresult = (ev) => {
       entendu = true;
       enCours = assemblerDictee(ev.results);
@@ -3304,6 +3336,16 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
     };
     rec.onend = () => {
       if (fini) return;
+      if (relanceVolontaire) {
+        // Réouverture après un micro resté sourd, le temps que le son se libère.
+        relanceVolontaire = false;
+        libererAudio();
+        setTimeout(() => {
+          if (fini) return;
+          try { demarrer(); armerSurdite(); } catch (_e) { terminer("sourd"); }
+        }, 400);
+        return;
+      }
       // Coupure par le navigateur pendant une pause : on reprend l'écoute,
       // la minuterie de silence décidera de la fin.
       if (entendu) {
@@ -3325,6 +3367,7 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
 
   demarrer(); // peut lever une erreur : à l'appelant de la gérer
   onDebut?.();
+  armerSurdite();
   // Filet : si l'iPhone n'entend rien du tout (micro pas vraiment ouvert après
   // la voix de l'assistant), on ne reste pas bloqué sur « Je t'écoute… ».
   minuterie = setTimeout(() => { if (!entendu) terminer(); }, patience);
@@ -3371,6 +3414,7 @@ function BoutonMicroFlottant({ onTexte, onOuvrir }) {
           setTranscription("");
           texteRef.current = "";
           if (texte) onTexte(texte);
+          else if (erreur === "sourd") setInfo("Je ne t'entends pas : réappuie sur le micro. En voiture, le Bluetooth met parfois un moment à donner le micro.");
           else if (!erreur) setInfo("Je n'ai rien entendu.");
         },
       });
@@ -3437,9 +3481,23 @@ function modeTexteEnregistre() {
    propositions se valident ici, ou à la voix avec Siri (« fais-moi le point »). */
 const LIBELLES_STATUT_DEBRIEF = { a_valider: "À valider", fait: "Fait", ignore: "Ignoré", erreur: "Erreur" };
 
+// Erreur réseau passagère (délai dépassé, connexion coupée).
+const erreurReseau = (m) => /AbortError|aborted|Failed to fetch|NetworkError|Load failed|FetchError|Failed to send a request/i.test(String(m || ""));
+
 async function lireDernierDebrief() {
-  const { data, error } = await supabase.from("debriefs").select("data").order("id", { ascending: false }).limit(1);
-  if (error) throw new Error(/debriefs/.test(error.message) ? "La table du débrief n'existe pas encore : lance le script SQL du débrief dans Supabase." : error.message);
+  let res = null;
+  // Un second essai si le serveur a tardé ou si la connexion a sauté
+  // (retour de veille, serveur occupé par une validation en cours).
+  for (let essai = 0; essai < 2; essai++) {
+    res = await supabase.from("debriefs").select("data").order("id", { ascending: false }).limit(1);
+    if (!res.error || !erreurReseau(res.error.message)) break;
+  }
+  const { data, error } = res;
+  if (error) {
+    if (/debriefs/.test(error.message)) throw new Error("La table du débrief n'existe pas encore : lance le script SQL du débrief dans Supabase.");
+    if (erreurReseau(error.message)) throw new Error("Le serveur met trop de temps à répondre. Réessaie dans un instant avec « Refaire »… ou recharge la page.");
+    throw new Error(error.message);
+  }
   return data && data[0] ? data[0].data : null;
 }
 
@@ -3448,6 +3506,7 @@ function CarteDebrief() {
   // Toujours fermée à l'ouverture : on la déplie si besoin.
   const [ouvert, setOuvert] = useState(false);
   const [enCours, setEnCours] = useState(false);
+  const [progression, setProgression] = useState(null); // { faites, total } pendant « Tout valider »
   const [preparation, setPreparation] = useState(false);
   const [message, setMessage] = useState(null);
 
@@ -3457,7 +3516,9 @@ function CarteDebrief() {
       setDebrief(d);
       return d;
     } catch (e) {
-      setDebrief(null);
+      // On garde le débrief déjà affiché : une lecture ratée ne doit pas le
+      // faire disparaître (« Pas encore de débrief »).
+      setDebrief((avant) => (avant === undefined ? null : avant));
       setMessage({ type: "erreur", texte: String(e.message || e) });
       return null;
     }
@@ -3485,16 +3546,40 @@ function CarteDebrief() {
     setPreparation(false);
   };
 
+  // Validation par petits paquets : chaque rangement (OneDrive) ou envoi
+  // (Pennylane) prend plusieurs secondes côté serveur. Tout valider d'un coup
+  // (28 propositions) dépassait le temps maximum d'une fonction Supabase : la
+  // demande était coupée et le bouton restait sur « En cours… ».
+  const TAILLE_PAQUET = 2;
   const traiter = async (ids, ignorer = false) => {
     setEnCours(true);
     setMessage(null);
-    try {
-      const r = await appelerAssistantCorps({ debrief_valider: { date: debrief.date, ids, ignorer } });
-      if (!ignorer) setMessage({ type: r.erreurs?.length ? "erreur" : "ok", texte: r.erreurs?.length ? `Fait : ${r.faites}. Problème : ${r.erreurs.join(" | ")}` : `C'est fait (${r.faites}).` });
-    } catch (e) {
-      setMessage({ type: "erreur", texte: String(e.message || e) });
+    const paquets = [];
+    for (let i = 0; i < ids.length; i += ignorer ? ids.length : TAILLE_PAQUET) paquets.push(ids.slice(i, i + (ignorer ? ids.length : TAILLE_PAQUET)));
+    let faites = 0;
+    const erreurs = [];
+    let echecsDeSuite = 0;
+    if (paquets.length > 1) setProgression({ faites: 0, total: ids.length });
+    for (let n = 0; n < paquets.length; n++) {
+      try {
+        const r = await appelerAssistantCorps({ debrief_valider: { date: debrief.date, ids: paquets[n], ignorer } });
+        faites += r.faites || 0;
+        if (r.erreurs?.length) erreurs.push(...r.erreurs);
+        echecsDeSuite = 0;
+      } catch (e) {
+        const texte = String(e.message || e);
+        erreurs.push(erreurReseau(texte) ? "connexion coupée pendant l'envoi (ce paquet est peut-être quand même passé : vérifie les statuts)" : texte);
+        echecsDeSuite++;
+      }
+      if (paquets.length > 1) {
+        setProgression({ faites: Math.min(ids.length, (n + 1) * TAILLE_PAQUET), total: ids.length });
+        await charger(); // les statuts « Fait » apparaissent au fur et à mesure
+      }
+      if (echecsDeSuite >= 2) { erreurs.push("arrêté après deux échecs de suite : réessaie « Tout valider » pour la suite"); break; }
     }
+    if (!ignorer) setMessage({ type: erreurs.length ? "erreur" : "ok", texte: erreurs.length ? `Fait : ${faites}. Problème : ${erreurs.join(" | ")}` : `C'est fait (${faites}).` });
     await charger();
+    setProgression(null);
     setEnCours(false);
   };
 
@@ -3559,7 +3644,7 @@ function CarteDebrief() {
               )}
               {enAttente.length > 1 && (
                 <button type="button" className="btn-primary assistant-tout-valider" onClick={() => traiter(enAttente.map((a) => a.id))} disabled={enCours}>
-                  {enCours ? "En cours…" : `Tout valider (${enAttente.length})`}
+                  {enCours ? (progression ? `En cours… ${progression.faites}/${progression.total}` : "En cours…") : `Tout valider (${enAttente.length})`}
                 </button>
               )}
               <p className="hint">Préparé le {new Date(debrief.genere_le).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })} · {debrief.nb_mails || 0} mail(s) analysé(s). En voiture, dis à Siri : « fais-moi le point ».</p>
@@ -3634,8 +3719,9 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     const reprendre = () => {
       setParle(false);
       if (relancer && conversationRef.current) {
-        // Petit temps pour que l'iPhone libère le haut-parleur avant le micro.
-        setTimeout(() => ecouterRef.current?.({ auto: true }), 600);
+        // Petit temps pour que l'iPhone libère le haut-parleur avant le micro
+        // (et, en voiture, que le Bluetooth passe en mode kit mains libres).
+        setTimeout(() => ecouterRef.current?.({ auto: true }), 1000);
       }
     };
     if (!voixActive || !syntheseDispo) {
@@ -3918,6 +4004,12 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
           if (texte) {
             envoyerRef.current?.(texte);
           } else if (refusee) {
+            setAttenteAppui(true);
+          } else if (erreur === "sourd") {
+            // Micro ouvert mais rien reçu, même après l'avoir rouvert : un
+            // appui sur le bouton démarre une écoute neuve, qui passe mieux.
+            setInfoMicro("Je ne t'entends pas : appuie sur le micro pour répondre. En voiture, le Bluetooth met parfois un moment à donner le micro.");
+            changerConversation(false);
             setAttenteAppui(true);
           } else {
             if (!auto && !erreur) setInfoMicro("Je n'ai rien entendu, réessaie.");
