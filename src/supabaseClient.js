@@ -79,7 +79,9 @@ const dynamicStorage = {
    Le délai grandit avec la taille de l'envoi (rapport avec photos) pour ne
    pas couper un envoi lent mais réel. Les fonctions (assistant…) et les
    photos rangées à part ne sont pas concernées. */
-const DELAI_BASE_MS = 30 * 1000;
+// Une minute avant d'abandonner : le serveur peut être lent un moment (débrief
+// en cours de validation, base qui se réveille) sans être bloqué.
+const DELAI_BASE_MS = 60 * 1000;
 const DELAI_CONNEXION_MS = 20 * 1000;
 const OCTETS_PAR_MS = 25; // ≈ 25 Ko/s : débit d'un mauvais réseau mobile
 
