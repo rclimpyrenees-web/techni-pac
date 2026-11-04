@@ -955,11 +955,19 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
   const programme = pret ? programmeDuJour(planning, jourCible(moment)) : null;
   // Le matin, le débrief du jour est lu juste après le mini-point.
   const debriefRef = useRef("");
+  // Lecture du débrief en cours (à l'ouverture, toutes les données se
+  // chargent en même temps : elle peut finir APRÈS le mini-point, qui est
+  // court). On l'attend alors au lieu de sauter le débrief.
+  const debriefAttente = useRef(null);
   const [litDebrief, setLitDebrief] = useState(false);
+  const [attendDebrief, setAttendDebrief] = useState(false);
   useEffect(() => {
     if (!voixDemandee || moment !== "matin" || !debriefAccueilActif()) return;
-    lireDernierDebrief().then((d) => {
-      if (!d || d.date !== toLocalISODate(new Date()) || !String(d.texte || "").trim()) return;
+    debriefAttente.current = lireDernierDebrief().then((d) => {
+      if (!d || d.date !== toLocalISODate(new Date()) || !String(d.texte || "").trim()) {
+        console.log("accueil : pas de débrief du jour à lire", d ? d.date : "aucun");
+        return;
+      }
       // Le débrief commence souvent par « Bonjour Adrian » : déjà dit.
       const corps = String(d.texte).trim().replace(/^(bonjour|salut|hello|coucou)\b[^.!?\n]{0,40}[.!?,]?\s*/i, "");
       if (!corps) return;
@@ -971,7 +979,7 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
         const propre = textepourVoix(texte).trim();
         if (propre.length <= 3000) premierePhrase(propre).filter(Boolean).forEach((morceau) => syntheseGoogle(morceau, voixG).catch(() => {}));
       }
-    }).catch(() => {});
+    }).catch((e) => { console.log("accueil : débrief illisible", String(e?.message || e)); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const meteoRef = useRef(null);
@@ -1020,8 +1028,8 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
         ecrireLocal(CLE_ACCUEIL_VOIX_JOUR, toLocalISODate(new Date()));
       },
       onFin: () => {
-        // Puis le débrief du jour, s'il est prêt.
-        if (demarree && debriefRef.current && !etat.current.debriefLu && !etat.current.termine) {
+        // Puis le débrief du jour.
+        const lireLeDebrief = () => {
           etat.current.debriefLu = true;
           setLitDebrief(true);
           lireAVoixHaute(debriefRef.current, () => {
@@ -1030,7 +1038,23 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
             setLitDebrief(false);
             programmerSortie(1200);
           });
-          return;
+        };
+        if (demarree && !etat.current.debriefLu && !etat.current.termine) {
+          if (debriefRef.current) { lireLeDebrief(); return; }
+          if (debriefAttente.current && !etat.current.attenteDebriefFaite) {
+            // Pas encore arrivé : on l'attend (12 s au plus), l'écran reste affiché.
+            etat.current.attenteDebriefFaite = true;
+            setAttendDebrief(true);
+            Promise.race([debriefAttente.current, new Promise((ok) => setTimeout(ok, 12000))]).then(() => {
+              setAttendDebrief(false);
+              if (etat.current.termine) return;
+              if (debriefRef.current) { lireLeDebrief(); return; }
+              etat.current.parle = false;
+              setParle(false);
+              programmerSortie(600);
+            });
+            return;
+          }
         }
         etat.current.parle = false;
         setParle(false);
@@ -1157,6 +1181,7 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
         )}
         {boutonVoix && <div className="bienvenue-puce ecouter" style={{ animationDelay: "0s" }}>🔊 Touche pour m'écouter</div>}
         {litDebrief && <div className="bienvenue-puce debrief" style={{ animationDelay: "0s" }}>📋 Débrief du jour · <b>touche pour passer</b></div>}
+        {attendDebrief && !litDebrief && <div className="bienvenue-puce debrief" style={{ animationDelay: "0s" }}>📋 Je récupère ton débrief…</div>}
         {parle && <div className="bienvenue-onde" aria-hidden="true"><i /><i /><i /></div>}
       </div>
     </div>
@@ -3297,8 +3322,17 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
   const armerSurdite = () => {
     clearTimeout(minuterieSurdite);
     minuterieSurdite = setTimeout(() => {
-      if (fini || entendu || paroleDetectee) return;
-      if (relancesSurdite >= RELANCES_SURDITE) { terminer("sourd"); return; }
+      // Aucun mot reconnu. Le bruit (route, moteur) ne prouve pas que la dictée
+      // marche : en voiture, le micro reçoit du son mais rien n'était jamais
+      // reconnu, et l'appli attendait sans rien dire. On rouvre donc aussi
+      // dans ce cas.
+      if (fini || entendu) return;
+      if (relancesSurdite >= RELANCES_SURDITE) {
+        // Vraiment rien reçu : inutile d'attendre. Du son mais aucun mot :
+        // on laisse le temps de répondre, la fin le signalera.
+        if (!paroleDetectee) terminer("sourd");
+        return;
+      }
       relancesSurdite++;
       relanceVolontaire = true;
       const ancienne = rec;
@@ -3361,7 +3395,7 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
         relances++;
         try { demarrer(); return; } catch (_e) { /* relance refusée */ }
       }
-      terminer();
+      terminer(!entendu && relancesSurdite > 0 ? "sourd" : undefined);
     };
     rec.start();
   };
@@ -3371,7 +3405,7 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
   armerSurdite();
   // Filet : si l'iPhone n'entend rien du tout (micro pas vraiment ouvert après
   // la voix de l'assistant), on ne reste pas bloqué sur « Je t'écoute… ».
-  minuterie = setTimeout(() => { if (!entendu) terminer(); }, patience);
+  minuterie = setTimeout(() => { if (!entendu) terminer(relancesSurdite > 0 ? "sourd" : undefined); }, patience);
   return {
     envoyer: () => terminer(),
     annuler: () => { annule = true; terminer(); try { rec?.abort(); } catch (_e) { /* rien */ } },
@@ -3480,6 +3514,17 @@ function modeTexteEnregistre() {
    Notifications, 6h30 par défaut) : factures fournisseurs reçues par mail
    (rangement proposé, ou fait en mode automatique) et mails à traiter. Les
    propositions se valident ici, ou à la voix avec Siri (« fais-moi le point »). */
+// Barre de progression (validation de plusieurs propositions).
+function BarreProgression({ faites, total, libelle, collante = false }) {
+  const pct = total ? Math.round((faites / total) * 100) : 0;
+  return (
+    <div className={"barre-progression" + (collante ? " collante" : "")} role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={faites}>
+      <div className="barre-progression-texte"><span>{libelle || "Validation en cours…"}</span><strong>{faites}/{total}</strong></div>
+      <div className="barre-progression-piste"><span style={{ width: Math.max(4, pct) + "%" }} /></div>
+    </div>
+  );
+}
+
 const LIBELLES_STATUT_DEBRIEF = { a_valider: "À valider", fait: "Fait", ignore: "Ignoré", erreur: "Erreur" };
 
 // Erreur réseau passagère (délai dépassé, connexion coupée).
@@ -3560,7 +3605,7 @@ function CarteDebrief() {
     let faites = 0;
     const erreurs = [];
     let echecsDeSuite = 0;
-    if (paquets.length > 1) setProgression({ faites: 0, total: ids.length });
+    if (ids.length > 1) setProgression({ faites: 0, total: ids.length });
     for (let n = 0; n < paquets.length; n++) {
       try {
         const r = await appelerAssistantCorps({ debrief_valider: { date: debrief.date, ids: paquets[n], ignorer } });
@@ -3572,7 +3617,7 @@ function CarteDebrief() {
         erreurs.push(erreurReseau(texte) ? "connexion coupée pendant l'envoi (ce paquet est peut-être quand même passé : vérifie les statuts)" : texte);
         echecsDeSuite++;
       }
-      if (paquets.length > 1) {
+      if (ids.length > 1) {
         setProgression({ faites: Math.min(ids.length, (n + 1) * TAILLE_PAQUET), total: ids.length });
         await charger(); // les statuts « Fait » apparaissent au fur et à mesure
       }
@@ -3623,6 +3668,7 @@ function CarteDebrief() {
           {debrief ? (
             <>
               <p className="carte-debrief-texte">{debrief.texte}</p>
+              {progression && <BarreProgression collante faites={progression.faites} total={progression.total} />}
               {actions.length > 0 && (
                 <ul className="carte-debrief-actions">
                   {actions.map((a) => (
@@ -3643,7 +3689,7 @@ function CarteDebrief() {
                   ))}
                 </ul>
               )}
-              {enAttente.length > 1 && (
+              {enAttente.length > 1 && !progression && (
                 <button type="button" className="btn-primary assistant-tout-valider" onClick={() => traiter(enAttente.map((a) => a.id))} disabled={enCours}>
                   {enCours ? (progression ? `En cours… ${progression.faites}/${progression.total}` : "En cours…") : `Tout valider (${enAttente.length})`}
                 </button>
@@ -3773,6 +3819,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
   };
 
   const [actionsEnCours, setActionsEnCours] = useState(false);
+  const [progressionActions, setProgressionActions] = useState(null); // { faites, total, enCours: id }
 
   const validerAction = async (action) => {
     setActionsEnCours(true);
@@ -3803,7 +3850,16 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     const aFaire = actions.filter((a, i) => !actions.slice(i + 1).some((b) => memeCreneau(a, b)));
     setActionsEnCours(true);
     let nb = 0;
-    for (const a of aFaire) if (await executerAction(a)) nb++;
+    for (let i = 0; i < aFaire.length; i++) {
+      const a = aFaire[i];
+      setProgressionActions({ faites: i, total: aFaire.length, enCours: a.id });
+      if (await executerAction(a)) {
+        nb++;
+        // La carte faite disparaît tout de suite : on voit avancer la liste.
+        setActions((liste) => liste.filter((x) => x.id !== a.id));
+      }
+    }
+    setProgressionActions(null);
     setActionsEnCours(false);
     setActions([]);
     const avecEmail = aFaire.some((a) => a.type === "email");
@@ -4017,7 +4073,10 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
             // Silence : la conversation se met en veille. Si une réponse
             // était attendue, le bouton invite à reprendre là où on en était.
             changerConversation(false);
-            if (auto && reponseAttendue) setAttenteAppui(true);
+            if (auto && reponseAttendue) {
+              setAttenteAppui(true);
+              if (!erreur) setInfoMicro("Je n'ai rien compris : appuie sur le micro pour répondre, ou valide avec les boutons.");
+            }
           }
         },
       });
@@ -4087,12 +4146,14 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
   const carteActions = actions.length > 0 && (
     <div className="assistant-actions-liste">
       <div className="assistant-actions-titre">À valider{actions.length > 1 ? ` · ${actions.length}` : ""}</div>
+      {/* En haut de la liste et collée en haut de l'écran : visible pendant tout l'envoi. */}
+      {progressionActions && <BarreProgression collante faites={progressionActions.faites} total={progressionActions.total} />}
       {actions.map((a) => {
         const mail = a.type === "email" ? detailsEmail(a) : null;
         const ouvert = !!apercusOuverts[a.id];
         const long = String(a.apercu || "").split("\n").length > 7 || String(a.apercu || "").length > 360;
         return (
-        <div key={a.id} className={"card assistant-action-carte" + (a.type === "suppression" ? " danger" : "")}>
+        <div key={a.id} className={"card assistant-action-carte" + (a.type === "suppression" ? " danger" : "") + (progressionActions?.enCours === a.id ? " en-cours" : "")}>
           <div className="assistant-action-tete">
             <span className="assistant-action-type"><Icon name={ICONES_ACTION[a.type] || "check"} size={13} /> {LIBELLES_ACTION[a.type] || "Proposition"}</span>
           </div>
@@ -4128,8 +4189,8 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
         </div>
         );
       })}
-      {actions.length > 1 && (
-        <button className="btn-primary assistant-tout-valider" onClick={validerTout} disabled={actionsEnCours}>Tout valider</button>
+      {!progressionActions && actions.length > 1 && (
+        <button className="btn-primary assistant-tout-valider" onClick={validerTout} disabled={actionsEnCours}>Tout valider ({actions.length})</button>
       )}
     </div>
   );
@@ -12472,6 +12533,14 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .checklist-label-input { font-weight: 600; line-height: 1.4; min-height: 46px; }
 
 .table-editor { margin-bottom: 14px; padding: 12px; background: var(--fond-doux); border-radius: 8px; }
+.barre-progression { margin: 12px 0 4px; padding: 12px 14px; border-radius: 14px; background: var(--fond-doux); border: 1px solid var(--trait); }
+.barre-progression.collante { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); z-index: 6; background: var(--carte); box-shadow: 0 6px 18px rgba(0,0,0,0.25); }
+@media (max-width: 780px) { .barre-progression.collante { top: calc(env(safe-area-inset-top, 0px) + 84px); } }
+.barre-progression-texte { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 14px; color: var(--encre-2); margin-bottom: 8px; }
+.barre-progression-texte strong { color: var(--encre); font-size: 15px; }
+.barre-progression-piste { height: 8px; border-radius: 6px; background: var(--carte); overflow: hidden; }
+.barre-progression-piste span { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--acc-1, var(--bleu)), var(--acc-2, var(--bleu))); transition: width .35s ease; }
+.assistant-action-carte.en-cours { outline: 2px solid var(--acc-1, var(--bleu)); outline-offset: -2px; opacity: .85; }
 .table-ordre { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .table-ordre-boutons { display: inline-flex; gap: 6px; }
 .table-ordre-boutons .btn-ghost.small { display: inline-flex; align-items: center; gap: 4px; }
