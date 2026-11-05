@@ -4296,7 +4296,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
 
           <div className="assistant-saisie">
             {infoMicro && <div className="hint assistant-info-micro">{infoMicro}</div>}
-            <div className="assistant-saisie-ligne">
+            <div className={"assistant-saisie-ligne" + (ecoute ? " en-ecoute" : "") + (saisie.trim() ? " a-texte" : "")}>
               <textarea
                 rows={1}
                 value={saisie}
@@ -13366,4 +13366,39 @@ input, select, textarea { border-radius: 10px; }
 .fl-rapport-ajout { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .fl-replier { display: flex; align-items: center; gap: 6px; background: none; border: none; padding: 0; color: var(--encre); font: inherit; font-weight: 700; cursor: pointer; }
 .hint.alerte { color: var(--orange, #E8873A); }
+
+/* ---------- Barre de saisie de l'assistant ----------
+   Une seule « pilule » : le texte, le micro et l'envoi dans le même cadre,
+   posée sur un fondu (plus de bande sombre ni de trait). */
+.assistant-saisie {
+  background: linear-gradient(to bottom, transparent, var(--fond) 38%);
+  border-top: 0; padding: 18px 0 calc(12px + env(safe-area-inset-bottom));
+}
+.assistant-saisie-ligne {
+  align-items: center; gap: 6px; padding: 5px 5px 5px 16px;
+  border-radius: 28px; border: 1px solid var(--verre-bord, var(--trait));
+  background: var(--verre-fort, var(--carte));
+  -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.22);
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+.assistant-saisie-ligne:focus-within { border-color: var(--acc-mi, var(--bleu)); box-shadow: 0 8px 28px rgba(0,0,0,0.22), 0 0 0 3px var(--acc-doux, rgba(80,120,255,0.18)); }
+.assistant-saisie-ligne.en-ecoute { border-color: var(--rouge); box-shadow: 0 8px 28px rgba(0,0,0,0.22), 0 0 0 3px rgba(224,90,90,0.18); }
+.assistant-saisie-ligne textarea {
+  min-height: 0; height: auto; max-height: 140px; padding: 11px 0; line-height: 1.4;
+  border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none;
+}
+.assistant-saisie-ligne textarea:focus, .assistant-saisie-ligne textarea:focus-visible { outline: none; box-shadow: none; }
+.assistant-saisie-ligne textarea::placeholder { color: var(--encre-3); }
+.assistant-micro, .assistant-envoyer { width: 42px; height: 42px; transition: background .2s ease, color .2s ease, opacity .2s ease, transform .1s ease; }
+.assistant-micro:active:not(:disabled), .assistant-envoyer:active:not(:disabled) { transform: scale(0.94); }
+.assistant-micro { background: linear-gradient(135deg, var(--acc-1, var(--bleu)), var(--acc-2, var(--bleu))); color: #fff; box-shadow: 0 4px 14px var(--acc-ombre, rgba(0,0,0,0.25)); }
+.assistant-micro.en-ecoute { background: var(--rouge); box-shadow: none; }
+/* Envoi : discret tant qu'il n'y a rien à envoyer, plein dès qu'on écrit
+   (le micro passe alors en second plan). */
+.assistant-envoyer { background: transparent; border: 0; color: var(--encre-3); }
+.assistant-envoyer:disabled { opacity: 0.5; }
+.assistant-saisie-ligne.a-texte .assistant-envoyer { background: linear-gradient(135deg, var(--acc-1, var(--bleu)), var(--acc-2, var(--bleu))); color: #fff; box-shadow: 0 4px 14px var(--acc-ombre, rgba(0,0,0,0.25)); opacity: 1; }
+.assistant-saisie-ligne.a-texte .assistant-micro:not(.en-ecoute) { background: transparent; color: var(--encre-2); box-shadow: none; }
+.assistant-info-micro { margin: 0 6px 8px; }
 `;
