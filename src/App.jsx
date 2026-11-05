@@ -1561,7 +1561,8 @@ function AppContenu() {
       })();
     }
     if (["email", "classer_pj", "regle", "dossier", "pennylane_fournisseur", "debrief_valider"].includes(action.type) && action.item) {
-      return appelerAssistantExecution(action).then(() => true);
+      // « deja » : la facture était déjà dans Pennylane (rien à refaire).
+      return appelerAssistantExecution(action).then((r) => (r?.deja_present ? "deja" : true));
     }
     return false;
   };
@@ -3810,7 +3811,8 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
   // serveur (e-mail) : on attend le résultat dans les deux cas.
   const executerAction = async (action) => {
     try {
-      return !!(await onAppliquerAction(action));
+      const r = await onAppliquerAction(action);
+      return r === "deja" ? "deja" : !!r;
     } catch (e) {
       const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : action.type === "dossier" ? "Le dossier n'a pas pu être créé" : action.type === "pennylane_fournisseur" ? "La facture n'a pas pu être envoyée dans Pennylane" : action.type === "suppression" ? "Suppression impossible" : "Enregistrement impossible";
       ajouterMessage("assistant", `${quoi} : ${e?.message || e}`, { erreur: true });
@@ -3833,7 +3835,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     if (ok && action.type === "suppression") ajouterMessage("assistant", "Supprimé.", note);
     if (ok && action.type === "classer_pj") ajouterMessage("assistant", "Fichier rangé dans OneDrive.", note);
     if (ok && action.type === "regle") ajouterMessage("assistant", "Règle de classement ajoutée.", note);
-    if (ok && action.type === "pennylane_fournisseur") ajouterMessage("assistant", "Facture envoyée dans Pennylane.", note);
+    if (ok && action.type === "pennylane_fournisseur") ajouterMessage("assistant", ok === "deja" ? "Cette facture était déjà dans Pennylane : rien à refaire." : "Facture envoyée dans Pennylane.", note);
     if (ok && action.type === "debrief_valider") ajouterMessage("assistant", "Propositions du débrief validées.", note);
     if (ok && action.type === "dossier") ajouterMessage("assistant", (action.item?.chemins?.length || 0) > 1 ? "Dossiers créés dans OneDrive." : "Dossier créé dans OneDrive.", note);
     if (ok && !["email", "suppression", "classer_pj", "regle", "pennylane_fournisseur", "debrief_valider", "dossier"].includes(action.type)) ajouterMessage("assistant", "C'est enregistré.", note);
@@ -3850,10 +3852,13 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     const aFaire = actions.filter((a, i) => !actions.slice(i + 1).some((b) => memeCreneau(a, b)));
     setActionsEnCours(true);
     let nb = 0;
+    let deja = 0; // factures déjà présentes dans Pennylane
     for (let i = 0; i < aFaire.length; i++) {
       const a = aFaire[i];
       setProgressionActions({ faites: i, total: aFaire.length, enCours: a.id });
-      if (await executerAction(a)) {
+      const r = await executerAction(a);
+      if (r === "deja") deja++;
+      if (r) {
         nb++;
         // La carte faite disparaît tout de suite : on voit avancer la liste.
         setActions((liste) => liste.filter((x) => x.id !== a.id));
@@ -3868,9 +3873,10 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       : nb < aFaire.length
         ? `C'est fait pour ${nb} sur ${aFaire.length}. Le détail du problème est affiché.`
         : avecEmail && aFaire.length === 1 ? "C'est envoyé." : nb > 1 ? `C'est fait, ${nb} éléments traités.` : aFaire.every((a) => a.type === "suppression") ? "C'est supprimé." : "C'est enregistré.";
-    ajouterMessage("assistant", texte);
-    if (!silencieux) parler(texte);
-    return texte;
+    const texteFinal = deja ? `${texte} ${deja > 1 ? `${deja} factures étaient déjà dans Pennylane` : "Une facture était déjà dans Pennylane"} : rien à refaire pour ${deja > 1 ? "elles" : "elle"}.` : texte;
+    ajouterMessage("assistant", texteFinal);
+    if (!silencieux) parler(texteFinal);
+    return texteFinal;
   };
 
   const annulerTout = ({ silencieux = false } = {}) => {
