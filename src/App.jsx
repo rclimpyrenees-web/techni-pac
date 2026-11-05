@@ -2762,6 +2762,23 @@ function voixActiveEnregistree() {
 
 // Texte prêt à être lu : sans symboles de mise en forme, et avec des heures
 // prononcées naturellement (« 14h30 » plutôt que « 14 h 30 min »).
+// Texte d'une bulle de l'assistant : « **mot** » en gras, « - » en puces
+// propres (au lieu des astérisques bruts).
+function TexteBulle({ texte }) {
+  const lignes = String(texte || "").split("\n");
+  const enLigne = (l, k) => l.split(/(\*\*[^*]+\*\*)/g).map((m, i) => (/^\*\*[^*]+\*\*$/.test(m) ? <strong key={k + "-" + i}>{m.slice(2, -2)}</strong> : m));
+  return lignes.map((l, i) => {
+    const puce = /^\s*[-•]\s+/.test(l);
+    const contenu = enLigne(puce ? l.replace(/^\s*[-•]\s+/, "") : l, i);
+    return (
+      <React.Fragment key={i}>
+        {puce ? <span className="bulle-puce">• {contenu}</span> : contenu}
+        {i < lignes.length - 1 && !puce && "\n"}
+      </React.Fragment>
+    );
+  });
+}
+
 function textepourVoix(texte) {
   return String(texte || "")
     .replace(/[*_#`>]/g, "")
@@ -4280,7 +4297,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
 
             {messages.map((m) => (
               <div key={m.id} className={"assistant-bulle " + (m.role === "user" ? "bulle-moi" : "bulle-assistant") + (m.erreur ? " bulle-erreur" : "")}>
-                {m.erreur && <span className="bulle-icone"><Icon name="alert" size={14} /></span>}{m.content}
+                {m.erreur && <span className="bulle-icone"><Icon name="alert" size={14} /></span>}<TexteBulle texte={m.content} />
                 {m.appel && (
                   <a className="bulle-appeler" href={"tel:" + m.appel.numero}>
                     <Icon name="phone" size={15} /> Appeler {m.appel.nom || numeroLisibleApp(m.appel.numero)}
@@ -12740,6 +12757,7 @@ textarea { resize: vertical; }
 .assistant-suggestion:hover, .assistant-suggestion:active { filter: brightness(1.12); }
 .assistant-bulle { max-width: 82%; padding: 11px 14px; border-radius: 14px; font-size: 14.5px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
 .bulle-moi { align-self: flex-end; background: var(--bleu); color: #fff; border-bottom-right-radius: 4px; }
+.bulle-puce { display: block; padding-left: 14px; text-indent: -10px; }
 .bulle-assistant { align-self: flex-start; background: var(--carte); color: var(--encre); border: 1px solid var(--trait); border-bottom-left-radius: 4px; }
 .bulle-erreur { background: var(--rouge-clair); color: var(--rouge-fonce); border-color: var(--rouge-clair-2); }
 .tache-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
