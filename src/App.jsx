@@ -1560,7 +1560,7 @@ function AppContenu() {
         return true;
       })();
     }
-    if (["email", "classer_pj", "regle", "dossier", "pennylane_fournisseur", "debrief_valider"].includes(action.type) && action.item) {
+    if (["email", "classer_pj", "regle", "dossier", "pennylane_fournisseur", "debrief_valider", "suppression_onedrive"].includes(action.type) && action.item) {
       // « deja » : la facture était déjà dans Pennylane (rien à refaire).
       return appelerAssistantExecution(action).then((r) => (r?.deja_present ? "deja" : true));
     }
@@ -3831,7 +3831,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       const r = await onAppliquerAction(action);
       return r === "deja" ? "deja" : !!r;
     } catch (e) {
-      const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : action.type === "dossier" ? "Le dossier n'a pas pu être créé" : action.type === "pennylane_fournisseur" ? "La facture n'a pas pu être envoyée dans Pennylane" : action.type === "suppression" ? "Suppression impossible" : "Enregistrement impossible";
+      const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : action.type === "dossier" ? "Le dossier n'a pas pu être créé" : action.type === "pennylane_fournisseur" ? "La facture n'a pas pu être envoyée dans Pennylane" : action.type === "suppression_onedrive" ? "Les fichiers n'ont pas pu être supprimés" : action.type === "suppression" ? "Suppression impossible" : "Enregistrement impossible";
       ajouterMessage("assistant", `${quoi} : ${e?.message || e}`, { erreur: true });
       return false;
     }
@@ -3854,8 +3854,9 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     if (ok && action.type === "regle") ajouterMessage("assistant", "Règle de classement ajoutée.", note);
     if (ok && action.type === "pennylane_fournisseur") ajouterMessage("assistant", ok === "deja" ? "Cette facture était déjà dans Pennylane : rien à refaire." : "Facture envoyée dans Pennylane.", note);
     if (ok && action.type === "debrief_valider") ajouterMessage("assistant", "Propositions du débrief validées.", note);
+    if (ok && action.type === "suppression_onedrive") ajouterMessage("assistant", "Fichiers supprimés de OneDrive (ils sont dans la corbeille du OneDrive si besoin).", note);
     if (ok && action.type === "dossier") ajouterMessage("assistant", (action.item?.chemins?.length || 0) > 1 ? "Dossiers créés dans OneDrive." : "Dossier créé dans OneDrive.", note);
-    if (ok && !["email", "suppression", "classer_pj", "regle", "pennylane_fournisseur", "debrief_valider", "dossier"].includes(action.type)) ajouterMessage("assistant", "C'est enregistré.", note);
+    if (ok && !["email", "suppression", "suppression_onedrive", "classer_pj", "regle", "pennylane_fournisseur", "debrief_valider", "dossier"].includes(action.type)) ajouterMessage("assistant", "C'est enregistré.", note);
     return ok;
   };
 
@@ -3910,9 +3911,13 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     if (!modeTexteRef.current) parler("Désolé, je n'ai pas pu te répondre. Le détail est affiché à l'écran.", { relancer: false });
   };
 
-  const envoyer = async (texteBrut) => {
+  // Relances automatiques (« continue ») quand l'assistant n'a pas eu le
+  // temps de finir une grosse demande : 3 au plus, puis la main revient.
+  const suitesAuto = useRef(0);
+  const envoyer = async (texteBrut, { auto = false } = {}) => {
     const texte = String(texteBrut ?? saisie).trim();
     if (!texte || chargement) return;
+    if (!auto) suitesAuto.current = 0;
     debloquerSyntheseVocale();
     setSaisie("");
     setDerniereQuestion(texte);
@@ -3922,7 +3927,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     // éventuelle de la phrase part ensuite à l'assistant comme nouvelle demande.
     let prefixe = "";
     let historique = [...messages.filter((m) => !m.erreur), { role: "user", content: texte }];
-    let avantReponse = () => ajouterMessage("user", texte);
+    let avantReponse = () => ajouterMessage("user", texte, auto ? { auto: true } : {});
     // « Oui » alors que la proposition vient d'être validée au bouton : rien
     // à refaire, inutile d'interroger l'assistant (il pourrait s'y perdre).
     if (actions.length === 0) {
@@ -3973,7 +3978,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     avantReponse();
     setChargement(true);
     try {
-      const { reply, actions: recues } = await appelerAssistant(historique);
+      const { reply, actions: recues, suite } = await appelerAssistant(historique);
       // Un appel n'est pas une proposition à valider : bouton « Appeler »
       // dans la réponse, et l'iPhone demande lui-même confirmation.
       // L'assistant a reconnu une confirmation dite autrement (« ok tu peux
@@ -3991,6 +3996,14 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       ajouterMessage("assistant", reply, appel ? { appel: appel.item } : {});
       if (nouvelles.length > 0) setActions((liste) => [...liste.filter((a) => !nouvelles.some((n) => memeCreneau(a, n))), ...nouvelles]);
       setChargement(false);
+      // Demande pas finie faute de temps : on relance tout seul, sans parler
+      // entre deux (le point d'étape reste écrit dans la conversation).
+      if (suite && !appel && suitesAuto.current < 3) {
+        suitesAuto.current += 1;
+        setTimeout(() => envoyerRef.current?.("Continue", { auto: true }), 400);
+        return;
+      }
+      if (suite && !appel) ajouterMessage("assistant", "Je m'arrête là pour l'instant (ça fait déjà plusieurs minutes de recherche). Dis-moi « continue » si tu veux que je poursuive.");
       if (appel) {
         // La conversation à la voix s'arrête : on passe au téléphone.
         changerConversation(false);
@@ -4149,10 +4162,10 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
   const LIBELLES_ACTION = {
     email: "E-mail", planning: "Planning", planning_fait: "Intervention faite", devis_a_faire: "Devis à faire",
     devis_a_faire_maj: "Prix fournisseur", classer_pj: "Rangement OneDrive", regle: "Règle de classement",
-    dossier: "Dossier OneDrive", pennylane_fournisseur: "Pennylane", debrief_valider: "Débrief", suppression: "Suppression",
+    dossier: "Dossier OneDrive", pennylane_fournisseur: "Pennylane", debrief_valider: "Débrief", suppression: "Suppression", suppression_onedrive: "Suppression OneDrive",
     fluide: "Fluide frigorigène",
   };
-  const ICONES_ACTION = { email: "mail", suppression: "trash", planning: "calendar", planning_fait: "check", devis_a_faire: "quote", devis_a_faire_maj: "quote", classer_pj: "folder", dossier: "folder", pennylane_fournisseur: "invoice", fluide: "bouteille" };
+  const ICONES_ACTION = { email: "mail", suppression: "trash", suppression_onedrive: "trash", planning: "calendar", planning_fait: "check", devis_a_faire: "quote", devis_a_faire_maj: "quote", classer_pj: "folder", dossier: "folder", pennylane_fournisseur: "invoice", fluide: "bouteille" };
   const detailsEmail = (a) => {
     const it = a.item || {};
     const pj = [
@@ -4176,7 +4189,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
         const ouvert = !!apercusOuverts[a.id];
         const long = String(a.apercu || "").split("\n").length > 7 || String(a.apercu || "").length > 360;
         return (
-        <div key={a.id} className={"card assistant-action-carte" + (a.type === "suppression" ? " danger" : "") + (progressionActions?.enCours === a.id ? " en-cours" : "")}>
+        <div key={a.id} className={"card assistant-action-carte" + (a.type === "suppression" || a.type === "suppression_onedrive" ? " danger" : "") + (progressionActions?.enCours === a.id ? " en-cours" : "")}>
           <div className="assistant-action-tete">
             <span className="assistant-action-type"><Icon name={ICONES_ACTION[a.type] || "check"} size={13} /> {LIBELLES_ACTION[a.type] || "Proposition"}</span>
           </div>
@@ -4296,7 +4309,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
             )}
 
             {messages.map((m) => (
-              <div key={m.id} className={"assistant-bulle " + (m.role === "user" ? "bulle-moi" : "bulle-assistant") + (m.erreur ? " bulle-erreur" : "")}>
+              <div key={m.id} className={"assistant-bulle " + (m.role === "user" ? "bulle-moi" : "bulle-assistant") + (m.erreur ? " bulle-erreur" : "") + (m.auto ? " bulle-auto" : "")}>
                 {m.erreur && <span className="bulle-icone"><Icon name="alert" size={14} /></span>}<TexteBulle texte={m.content} />
                 {m.appel && (
                   <a className="bulle-appeler" href={"tel:" + m.appel.numero}>
@@ -12757,6 +12770,7 @@ textarea { resize: vertical; }
 .assistant-suggestion:hover, .assistant-suggestion:active { filter: brightness(1.12); }
 .assistant-bulle { max-width: 82%; padding: 11px 14px; border-radius: 14px; font-size: 14.5px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
 .bulle-moi { align-self: flex-end; background: var(--bleu); color: #fff; border-bottom-right-radius: 4px; }
+.assistant-bulle.bulle-auto { padding: 4px 12px; font-size: 12.5px; font-style: italic; opacity: 0.7; background: transparent; border: 1px dashed var(--trait); color: var(--encre-2); }
 .bulle-puce { display: block; padding-left: 14px; text-indent: -10px; }
 .bulle-assistant { align-self: flex-start; background: var(--carte); color: var(--encre); border: 1px solid var(--trait); border-bottom-left-radius: 4px; }
 .bulle-erreur { background: var(--rouge-clair); color: var(--rouge-fonce); border-color: var(--rouge-clair-2); }
