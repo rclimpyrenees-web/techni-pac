@@ -1492,16 +1492,26 @@ function AppContenu() {
   // tout se synchronise comme une saisie à la main.
   // Mémoire de l'assistant : consignes durables (« mets mon numéro dans la
   // signature »), enregistrées tout de suite dans les Paramètres.
+  // Dernière mémoire connue : plusieurs habitudes validées d'affilée
+  // (« Tout valider ») s'ajoutent les unes aux autres au lieu de s'écraser.
+  const memoireCourante = useRef(null);
+  useEffect(() => { memoireCourante.current = Array.isArray(settings.memoireAssistant) ? settings.memoireAssistant : []; }, [settings.memoireAssistant]);
   const appliquerMemoireAssistant = (actionsMemoire) => {
-    let memoire = Array.isArray(settings.memoireAssistant) ? settings.memoireAssistant : [];
+    let memoire = memoireCourante.current || (Array.isArray(settings.memoireAssistant) ? settings.memoireAssistant : []);
     for (const a of actionsMemoire) {
       if (a.item?.ajouter) memoire = [...memoire, a.item.ajouter].slice(-40);
       if (a.item?.retirer) memoire = memoire.filter((m) => m.id !== a.item.retirer);
     }
+    memoireCourante.current = memoire;
     saveSettings({ ...settings, memoireAssistant: memoire });
   };
 
   const appliquerActionAssistant = (action) => {
+    // Habitude apprise par l'assistant, validée : rejoint sa mémoire.
+    if (action.type === "habitude" && action.item?.ajouter) {
+      appliquerMemoireAssistant([action]);
+      return true;
+    }
     if (action.type === "planning" && action.item) {
       upsertPlanning(action.item);
       return true;
@@ -2152,6 +2162,7 @@ function AppContenu() {
             onMemoire={appliquerMemoireAssistant}
             texteAEnvoyer={assistantTexteAEnvoyer}
             onTexteEnvoye={() => setAssistantTexteAEnvoyer(null)}
+            fournisseurs={fournisseurs}
           />
         )}
 
@@ -2169,6 +2180,15 @@ function AppContenu() {
             onValidate={handleValidateReport}
             onDelete={handleDeleteReport}
             onPrint={handlePrint}
+            onDemandePrix={(r) => {
+              // L'assistant reçoit la consigne et prépare le mail : tout le
+              // contenu de « Devis à effectuer » + la machine du rapport.
+              setAssistantTexteAEnvoyer({
+                id: Date.now(),
+                texte: `Prépare une demande de prix fournisseur à partir de mon rapport ${labelType(r.type).toLowerCase()} du ${r.date} chez ${nomAffiche(r.client, clients)} (rapport id ${r.id}). Reprends tout ce que j'ai écrit dans « Devis à effectuer » et les références de la machine.`,
+              });
+              allerAOnglet("assistant");
+            }}
             focusReport={focusReport}
             reportPrefill={reportPrefill}
             onPrefillConsomme={() => setReportPrefill(null)}
@@ -2866,7 +2886,9 @@ function memeCreneau(a, b) {
   if (b.remplace && b.remplace === a.id) return true;
   // Un nouveau brouillon d'e-mail au même destinataire remplace l'ancien
   // (sinon un « oui » enverrait les deux).
-  if (a.type === "email" && b.type === "email") return String(a.item?.a || "").toLowerCase() === String(b.item?.a || "").toLowerCase();
+  // Deux mails au même destinataire ; un mail fournisseur sans destinataire
+  // encore choisi n'en remplace pas un autre.
+  if (a.type === "email" && b.type === "email") return !!a.item?.a && String(a.item.a).toLowerCase() === String(b.item?.a || "").toLowerCase();
   // Même suppression, même rangement de pièce jointe : pas de doublon.
   if (a.type === "suppression" && b.type === "suppression") return a.item?.table === b.item?.table && a.item?.id === b.item?.id;
   if (a.type === "classer_pj" && b.type === "classer_pj") return a.item?.email_id === b.item?.email_id && a.item?.piece_jointe_id === b.item?.piece_jointe_id;
@@ -3543,6 +3565,8 @@ function BarreProgression({ faites, total, libelle, collante = false }) {
   );
 }
 
+const ADRESSE_MAIL_VALIDE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const LIBELLES_STATUT_DEBRIEF = { a_valider: "À valider", fait: "Fait", ignore: "Ignoré", erreur: "Erreur" };
 
 // Erreur réseau passagère (délai dépassé, connexion coupée).
@@ -3724,7 +3748,7 @@ function CarteDebrief() {
   );
 }
 
-function Assistant({ messages, setMessages, actions, setActions, onAppliquerAction, onMemoire, texteAEnvoyer, onTexteEnvoye }) {
+function Assistant({ messages, setMessages, actions, setActions, onAppliquerAction, onMemoire, texteAEnvoyer, onTexteEnvoye, fournisseurs = [] }) {
   const [saisie, setSaisie] = useState("");
   const [chargement, setChargement] = useState(false);
   const [ecoute, setEcoute] = useState(false);
@@ -3827,6 +3851,11 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
   // Une action peut être immédiate (planning, devis) ou passer par le
   // serveur (e-mail) : on attend le résultat dans les deux cas.
   const executerAction = async (action) => {
+    // Mail fournisseur dont le destinataire n'a pas encore été choisi.
+    if (action.type === "email" && !ADRESSE_MAIL_VALIDE.test(String(action.item?.a || "").trim())) {
+      ajouterMessage("assistant", "Choisis d'abord le fournisseur (ou l'adresse) dans la liste de la carte du mail, puis renvoie.", { erreur: true });
+      return false;
+    }
     try {
       const r = await onAppliquerAction(action);
       return r === "deja" ? "deja" : !!r;
@@ -3854,9 +3883,10 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     if (ok && action.type === "regle") ajouterMessage("assistant", "Règle de classement ajoutée.", note);
     if (ok && action.type === "pennylane_fournisseur") ajouterMessage("assistant", ok === "deja" ? "Cette facture était déjà dans Pennylane : rien à refaire." : "Facture envoyée dans Pennylane.", note);
     if (ok && action.type === "debrief_valider") ajouterMessage("assistant", "Propositions du débrief validées.", note);
+    if (ok && action.type === "habitude") ajouterMessage("assistant", "C'est retenu, je ferai comme ça la prochaine fois.", note);
     if (ok && action.type === "suppression_onedrive") ajouterMessage("assistant", "Fichiers supprimés de OneDrive (ils sont dans la corbeille du OneDrive si besoin).", note);
     if (ok && action.type === "dossier") ajouterMessage("assistant", (action.item?.chemins?.length || 0) > 1 ? "Dossiers créés dans OneDrive." : "Dossier créé dans OneDrive.", note);
-    if (ok && !["email", "suppression", "suppression_onedrive", "classer_pj", "regle", "pennylane_fournisseur", "debrief_valider", "dossier"].includes(action.type)) ajouterMessage("assistant", "C'est enregistré.", note);
+    if (ok && !["email", "suppression", "suppression_onedrive", "classer_pj", "regle", "pennylane_fournisseur", "debrief_valider", "dossier", "habitude"].includes(action.type)) ajouterMessage("assistant", "C'est enregistré.", note);
     return ok;
   };
 
@@ -4162,10 +4192,10 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
   const LIBELLES_ACTION = {
     email: "E-mail", planning: "Planning", planning_fait: "Intervention faite", devis_a_faire: "Devis à faire",
     devis_a_faire_maj: "Prix fournisseur", classer_pj: "Rangement OneDrive", regle: "Règle de classement",
-    dossier: "Dossier OneDrive", pennylane_fournisseur: "Pennylane", debrief_valider: "Débrief", suppression: "Suppression", suppression_onedrive: "Suppression OneDrive",
+    dossier: "Dossier OneDrive", pennylane_fournisseur: "Pennylane", debrief_valider: "Débrief", suppression: "Suppression", suppression_onedrive: "Suppression OneDrive", habitude: "À retenir",
     fluide: "Fluide frigorigène",
   };
-  const ICONES_ACTION = { email: "mail", suppression: "trash", suppression_onedrive: "trash", planning: "calendar", planning_fait: "check", devis_a_faire: "quote", devis_a_faire_maj: "quote", classer_pj: "folder", dossier: "folder", pennylane_fournisseur: "invoice", fluide: "bouteille" };
+  const ICONES_ACTION = { habitude: "assistant", email: "mail", suppression: "trash", suppression_onedrive: "trash", planning: "calendar", planning_fait: "check", devis_a_faire: "quote", devis_a_faire_maj: "quote", classer_pj: "folder", dossier: "folder", pennylane_fournisseur: "invoice", fluide: "bouteille" };
   const detailsEmail = (a) => {
     const it = a.item || {};
     const pj = [
@@ -4178,6 +4208,19 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     let dest = it.a || "";
     if (!dest) { const m = String(a.resume || "").match(/E-mail à (\S+@\S+?|[^—]+?) —/); if (m) dest = m[1].trim(); }
     return { dest, objet, pj };
+  };
+  // Destinataire d'un mail fournisseur choisi dans la liste (ou saisi).
+  const fournisseursAvecMail = [...fournisseurs].filter((f) => ADRESSE_MAIL_VALIDE.test(String(f.email || "").trim()))
+    .sort((x, y) => String(x.nom || "").localeCompare(String(y.nom || ""), "fr"));
+  const [adresseLibre, setAdresseLibre] = useState({}); // id action → saisie en cours
+  const changerDestinataire = (id, adresse) => {
+    const f = fournisseursAvecMail.find((x) => x.email.trim().toLowerCase() === String(adresse).trim().toLowerCase());
+    setActions((liste) => liste.map((a) => {
+      if (a.id !== id) return a;
+      const objet = a.item?.objet || "";
+      const resume = `E-mail à ${f ? `${f.nom} (${adresse})` : adresse || "un fournisseur à choisir"} — « ${objet || "sans objet"} »`;
+      return { ...a, item: { ...a.item, a: String(adresse).trim() }, resume };
+    }));
   };
   const carteActions = actions.length > 0 && (
     <div className="assistant-actions-liste">
@@ -4193,7 +4236,44 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
           <div className="assistant-action-tete">
             <span className="assistant-action-type"><Icon name={ICONES_ACTION[a.type] || "check"} size={13} /> {LIBELLES_ACTION[a.type] || "Proposition"}</span>
           </div>
-          {mail && mail.dest ? (
+          {mail && a.item?.fournisseur ? (
+            <div className="assistant-action-mail">
+              <label className="assistant-choix-fournisseur">
+                <span>Fournisseur</span>
+                <select
+                  value={adresseLibre[a.id] !== undefined ? "__autre__" : (a.item?.a || "")}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "__autre__") { setAdresseLibre((o) => ({ ...o, [a.id]: a.item?.a || "" })); return; }
+                    setAdresseLibre((o) => { const n = { ...o }; delete n[a.id]; return n; });
+                    changerDestinataire(a.id, v);
+                  }}
+                  disabled={actionsEnCours}
+                >
+                  <option value="">— Choisir le fournisseur —</option>
+                  {fournisseursAvecMail.map((f) => <option key={f.id || f.email} value={f.email.trim()}>{f.nom} — {f.email.trim()}</option>)}
+                  {a.item?.a && !fournisseursAvecMail.some((f) => f.email.trim().toLowerCase() === a.item.a.toLowerCase()) && <option value={a.item.a}>{a.item.a}</option>}
+                  <option value="__autre__">Autre adresse…</option>
+                </select>
+              </label>
+              {adresseLibre[a.id] !== undefined && (
+                <input
+                  type="email"
+                  className="assistant-adresse-libre"
+                  placeholder="adresse@fournisseur.fr"
+                  value={adresseLibre[a.id]}
+                  onChange={(e) => { const v = e.target.value; setAdresseLibre((o) => ({ ...o, [a.id]: v })); changerDestinataire(a.id, v); }}
+                />
+              )}
+              {fournisseursAvecMail.length === 0 && <div className="hint">Aucun fournisseur avec une adresse e-mail : ajoute-les dans l'onglet Fournisseurs.</div>}
+              {mail.objet && <div className="assistant-action-sous">{mail.objet}</div>}
+              {mail.pj.length > 0 && (
+                <div className="assistant-action-pj">
+                  {mail.pj.map((n) => <span key={n} className="assistant-pj"><Icon name="report" size={12} /> {n}</span>)}
+                </div>
+              )}
+            </div>
+          ) : mail && mail.dest ? (
             <div className="assistant-action-mail">
               <div className="assistant-action-titre">{mail.dest}</div>
               {mail.objet && <div className="assistant-action-sous">{mail.objet}</div>}
@@ -4218,7 +4298,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
           )}
           <div className="assistant-action-boutons">
             <button className="btn-ghost small" onClick={() => annulerAction(a)} disabled={actionsEnCours}>Annuler</button>
-            <button className={"btn-small " + (a.type === "suppression" ? "btn-supprime" : "btn-valide")} onClick={() => validerAction(a)} disabled={actionsEnCours}>
+            <button className={"btn-small " + (a.type === "suppression" ? "btn-supprime" : "btn-valide")} onClick={() => validerAction(a)} disabled={actionsEnCours || (a.type === "email" && a.item?.fournisseur && !ADRESSE_MAIL_VALIDE.test(String(a.item?.a || "").trim()))}>
               <Icon name={a.type === "email" ? "send" : a.type === "suppression" ? "trash" : "check"} size={13} /> {a.type === "email" ? (actionsEnCours ? "Envoi…" : "Envoyer") : a.type === "suppression" ? "Supprimer" : "Valider"}
             </button>
           </div>
@@ -5788,7 +5868,7 @@ function texteRechercheRapport(r, clients) {
   ].filter(Boolean).join(" "));
 }
 
-function Rapports({ reports, clients, settings, showForm, setShowForm, reportType, setReportType, onAdd, onUpdate, onValidate, onDelete, onPrint, focusReport, reportPrefill, onPrefillConsomme, bouteilles, mouvementsFluide }) {
+function Rapports({ reports, clients, settings, showForm, setShowForm, reportType, setReportType, onAdd, onUpdate, onValidate, onDelete, onPrint, focusReport, reportPrefill, onPrefillConsomme, bouteilles, mouvementsFluide, onDemandePrix }) {
   const [filter, setFilter] = useState("tous");
   const [editingReport, setEditingReport] = useState(null);
   const [activePrefillClient, setActivePrefillClient] = useState(null);
@@ -5912,6 +5992,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
                     onDelete={onDelete}
                     focusReport={focusReport}
                     settings={settings}
+                    onDemandePrix={onDemandePrix}
                   />
                 ))}
               </div>
@@ -5955,7 +6036,7 @@ function Rapports({ reports, clients, settings, showForm, setShowForm, reportTyp
   );
 }
 
-function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, onDelete, focusReport, settings }) {
+function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, onDelete, focusReport, settings, onDemandePrix }) {
   const [viewTab, setViewTab] = useState("details");
   const cardRef = useRef(null);
 
@@ -6004,6 +6085,11 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
             <button className="btn-ghost small" onClick={(e) => { e.stopPropagation(); onPrint(r); }}>
               <Icon name="download" size={14} /> Enregistrer en PDF
             </button>
+            {onDemandePrix && String(r.devisAEffectuer || "").trim() && (
+              <button className="btn-ghost small" onClick={(e) => { e.stopPropagation(); onToggle(); onDemandePrix(r); }} title="L'assistant prépare le mail à partir de « Devis à effectuer » et de la machine du rapport">
+                <Icon name="mail" size={14} /> Demande de prix
+              </button>
+            )}
             <DeleteButton onConfirm={() => onDelete(r)} />
           </div>
           }
@@ -12569,6 +12655,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .checklist-label-input { font-weight: 600; line-height: 1.4; min-height: 46px; }
 
 .table-editor { margin-bottom: 14px; padding: 12px; background: var(--fond-doux); border-radius: 8px; }
+.assistant-choix-fournisseur { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+.assistant-choix-fournisseur > span { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--encre-3); }
+.assistant-choix-fournisseur select, .assistant-adresse-libre { width: 100%; box-sizing: border-box; }
+.assistant-adresse-libre { margin-bottom: 6px; }
 .barre-progression { margin: 12px 0 4px; padding: 12px 14px; border-radius: 14px; background: var(--fond-doux); border: 1px solid var(--trait); }
 .barre-progression.collante { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); z-index: 6; background: var(--carte); box-shadow: 0 6px 18px rgba(0,0,0,0.25); }
 @media (max-width: 780px) { .barre-progression.collante { top: calc(env(safe-area-inset-top, 0px) + 84px); } }
