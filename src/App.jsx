@@ -987,6 +987,17 @@ function AccueilBienvenue({ prenom, planning, pret, domicile, voixDemandee, onFi
   meteoRef.current = meteo;
   programmeRef.current = programme;
 
+  // Pendant l'accueil, l'appli en dessous est masquée : sur iPad, ses cartes
+  // en verre dépoli (backdrop-filter) passaient par-dessus l'écran d'accueil
+  // et l'affichage se mélangeait. Elle réapparaît pour le fondu de sortie.
+  useEffect(() => {
+    document.documentElement.classList.add("accueil-ouvert");
+    return () => document.documentElement.classList.remove("accueil-ouvert");
+  }, []);
+  useEffect(() => {
+    if (sortie) document.documentElement.classList.remove("accueil-ouvert");
+  }, [sortie]);
+
   const terminer = (vite) => {
     if (etat.current.termine) return;
     etat.current.termine = true;
@@ -5116,7 +5127,7 @@ async function genererPdfBase64(html) {
         // Sur téléphone, rendu un peu moins fin : beaucoup moins de mémoire.
         html2canvas: { scale: ESTIME_TELEPHONE ? 1.15 : 1.6, useCORS: true, backgroundColor: "#ffffff", logging: false },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-        pagebreak: { mode: ["css", "legacy"], avoid: [".pdf-bloc-insecable", ".pdf-checklist li", ".pdf-table tr", ".pdf-photo-item", ".pdf-signatures"] },
+        pagebreak: { mode: ["css", "legacy"], avoid: [".pdf-bloc-insecable", ".pdf-checklist li", ".pdf-table tr", ".pdf-photo-item", ".pdf-signatures", "img[data-photo]"] },
       })
       .from(conteneur)
       .outputPdf("datauristring");
@@ -6111,7 +6122,7 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
             <>
               {r.type === "mise_en_service" && (
             <>
-              {r.intro && <div className="remarque description-view"><strong>Objet</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.intro }} /></div>}
+              {r.intro && <div className="remarque description-view"><strong>Objet</strong><HtmlAvecPhotos className="rte-render" html={r.intro} photos={r.photosTexte} /></div>}
               {r.machines && r.machines.length > 0 && (
                 <>
                   <div className="section-title">Matériel installé</div>
@@ -6119,17 +6130,17 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
                 </>
               )}
               <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
-              {r.descriptionLibre && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.descriptionLibre }} /></div>}
+              {r.descriptionLibre && <div className="remarque description-view"><strong>Description</strong><HtmlAvecPhotos className="rte-render" html={r.descriptionLibre} photos={r.photosTexte} /></div>}
               {htmlOuVide(r.conclusion) && (
                 <>
                   <div className="section-title">Conclusion</div>
-                  <div className="remarque texte-libre rte-render" dangerouslySetInnerHTML={{ __html: texteEnHtml(r.conclusion) }} />
+                  <HtmlAvecPhotos className="remarque texte-libre rte-render" html={texteEnHtml(r.conclusion)} photos={r.photosTexte} />
                 </>
               )}
               {htmlOuVide(r.remarques) && (
                 <>
                   <div className="section-title">Remarques</div>
-                  <div className="remarque texte-libre rte-render" dangerouslySetInnerHTML={{ __html: texteEnHtml(r.remarques) }} />
+                  <HtmlAvecPhotos className="remarque texte-libre rte-render" html={texteEnHtml(r.remarques)} photos={r.photosTexte} />
                 </>
               )}
               <DevisNote text={r.devisAEffectuer} />
@@ -6137,7 +6148,7 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
           )}
           {r.type === "entretien" && (
             <>
-              {r.intro && <div className="remarque description-view"><strong>Objet</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.intro }} /></div>}
+              {r.intro && <div className="remarque description-view"><strong>Objet</strong><HtmlAvecPhotos className="rte-render" html={r.intro} photos={r.photosTexte} /></div>}
               {r.machines && r.machines.length > 0 && (
                 <>
                   <div className="section-title">Matériel installé</div>
@@ -6145,17 +6156,17 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
                 </>
               )}
               <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
-              {r.descriptionLibre && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.descriptionLibre }} /></div>}
+              {r.descriptionLibre && <div className="remarque description-view"><strong>Description</strong><HtmlAvecPhotos className="rte-render" html={r.descriptionLibre} photos={r.photosTexte} /></div>}
               {htmlOuVide(r.conclusion) && (
                 <>
                   <div className="section-title">Conclusion</div>
-                  <div className="remarque texte-libre rte-render" dangerouslySetInnerHTML={{ __html: texteEnHtml(r.conclusion) }} />
+                  <HtmlAvecPhotos className="remarque texte-libre rte-render" html={texteEnHtml(r.conclusion)} photos={r.photosTexte} />
                 </>
               )}
               {htmlOuVide(r.remarques) && (
                 <>
                   <div className="section-title">Remarques</div>
-                  <div className="remarque texte-libre rte-render" dangerouslySetInnerHTML={{ __html: texteEnHtml(r.remarques) }} />
+                  <HtmlAvecPhotos className="remarque texte-libre rte-render" html={texteEnHtml(r.remarques)} photos={r.photosTexte} />
                 </>
               )}
               <DevisNote text={r.devisAEffectuer} />
@@ -6163,7 +6174,7 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
           )}
           {r.type === "diagnostic" && (
             <>
-              {r.intro && <div className="remarque description-view"><strong>Objet</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.intro }} /></div>}
+              {r.intro && <div className="remarque description-view"><strong>Objet</strong><HtmlAvecPhotos className="rte-render" html={r.intro} photos={r.photosTexte} /></div>}
               {r.machines && r.machines.length > 0 && (
                 <>
                   <div className="section-title">Matériel installé</div>
@@ -6171,17 +6182,17 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
                 </>
               )}
               <ChecklistsView checklists={normalizeChecklists(r)} tables={r.tables} />
-              {r.description && <div className="remarque description-view"><strong>Description</strong><div className="rte-render" dangerouslySetInnerHTML={{ __html: r.description }} /></div>}
+              {r.description && <div className="remarque description-view"><strong>Description</strong><HtmlAvecPhotos className="rte-render" html={r.description} photos={r.photosTexte} /></div>}
               {htmlOuVide(r.conclusion) && (
                 <>
                   <div className="section-title">Conclusion</div>
-                  <div className="remarque texte-libre rte-render" dangerouslySetInnerHTML={{ __html: texteEnHtml(r.conclusion) }} />
+                  <HtmlAvecPhotos className="remarque texte-libre rte-render" html={texteEnHtml(r.conclusion)} photos={r.photosTexte} />
                 </>
               )}
               {htmlOuVide(r.remarques) && (
                 <>
                   <div className="section-title">Remarques</div>
-                  <div className="remarque texte-libre rte-render" dangerouslySetInnerHTML={{ __html: texteEnHtml(r.remarques) }} />
+                  <HtmlAvecPhotos className="remarque texte-libre rte-render" html={texteEnHtml(r.remarques)} photos={r.photosTexte} />
                 </>
               )}
               {r.pieces && <p><strong>Pièces utilisées :</strong> {r.pieces}</p>}
@@ -6625,8 +6636,54 @@ function TablesSection({ tables, checklist, settings, updateTable, removeTable, 
 }
 
 /* ---------- Éditeur de texte enrichi (gras / italique / souligné) ---------- */
-function RichTextEditor({ initialValue, onChange, minHeight }) {
+function RichTextEditor({ initialValue, onChange, minHeight, photos, onPhoto }) {
   const ref = useRef(null);
+  // Photos placées dans le texte : affichées dès l'ouverture.
+  const photosRef = useRef(photos);
+  photosRef.current = photos;
+  useEffect(() => { remplirPhotosTexte(ref.current, photosRef.current, false); }, []);
+  // Endroit du curseur, gardé pendant que l'iPad ouvre l'appareil photo.
+  const plageRef = useRef(null);
+  const photoRef = useRef(null);
+  const [photoEnCours, setPhotoEnCours] = useState(false);
+  const memoriserCurseur = () => {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && ref.current && ref.current.contains(sel.getRangeAt(0).commonAncestorContainer)) plageRef.current = sel.getRangeAt(0).cloneRange();
+  };
+  const ajouterPhoto = async (e) => {
+    const fichiers = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!fichiers.length || !ref.current) return;
+    setPhotoEnCours(true);
+    let html = "";
+    for (const fichier of fichiers) {
+      try {
+        const image = await preparerImage(fichier);
+        const cle = nouvelleClePhoto();
+        onPhoto(cle, image);
+        html += `<img class="photo-texte" data-photo="${cle}" src="${image}" alt="Photo"><br>`;
+      } catch (_e) { /* photo illisible : ignorée */ }
+    }
+    setPhotoEnCours(false);
+    if (!html) return;
+    const zone = ref.current;
+    zone.focus();
+    const sel = window.getSelection();
+    let plage = plageRef.current;
+    if (!plage || !zone.contains(plage.commonAncestorContainer)) {
+      plage = document.createRange();
+      plage.selectNodeContents(zone);
+      plage.collapse(false);
+    }
+    sel.removeAllRanges();
+    sel.addRange(plage);
+    if (!document.execCommand("insertHTML", false, html)) {
+      // Repli : à la fin du texte.
+      zone.insertAdjacentHTML("beforeend", html);
+    }
+    plageRef.current = null;
+    handleInput();
+  };
   const [active, setActive] = useState({ bold: false, italic: false, underline: false, list: false });
 
   const updateActiveState = () => {
@@ -6658,7 +6715,7 @@ function RichTextEditor({ initialValue, onChange, minHeight }) {
   };
   const preventFocusLoss = (e) => e.preventDefault();
   const handleInput = () => {
-    if (ref.current) onChange(ref.current.innerHTML);
+    if (ref.current) onChange(htmlSansSrcPhotos(ref.current.innerHTML));
   };
   // Un tiret suivi d'un espace en début de ligne démarre une liste à puces,
   // comme dans un traitement de texte. Le tiret lui-même est effacé.
@@ -6710,6 +6767,15 @@ function RichTextEditor({ initialValue, onChange, minHeight }) {
         <button type="button" className={active.underline ? "active" : ""} onMouseDown={preventFocusLoss} onClick={() => exec("underline")} title="Souligné"><u>S</u></button>
         <span className="rte-sep" />
         <button type="button" className={active.list ? "active" : ""} onMouseDown={preventFocusLoss} onClick={() => exec("insertUnorderedList")} title="Liste à puces (Tab pour imbriquer un niveau)">•≡</button>
+        {onPhoto && (
+          <>
+            <span className="rte-sep" />
+            <button type="button" className="rte-photo" onMouseDown={(e) => { e.preventDefault(); memoriserCurseur(); }} onClick={() => { memoriserCurseur(); photoRef.current && photoRef.current.click(); }} disabled={photoEnCours} title="Placer une photo ici, à l'endroit du curseur">
+              <Icon name="photo" size={15} /> {photoEnCours ? "…" : "Photo"}
+            </button>
+            <input ref={photoRef} type="file" accept="image/*" multiple hidden onChange={ajouterPhoto} />
+          </>
+        )}
       </div>
       <div
         ref={ref}
@@ -6723,6 +6789,7 @@ function RichTextEditor({ initialValue, onChange, minHeight }) {
         onMouseUp={updateActiveState}
         onClick={updateActiveState}
         onFocus={updateActiveState}
+        onBlur={memoriserCurseur}
         dangerouslySetInnerHTML={{ __html: initialValue || "" }}
       />
     </div>
@@ -7001,6 +7068,47 @@ function ImageStockee({ src, alt, className }) {
   if (erreur) return <span className={"photo-indisponible " + (className || "")} title="Photo indisponible (hors ligne ?)"><Icon name="photo" size={18} /></span>;
   if (!url) return <span className={"photo-chargement " + (className || "")} aria-label="Photo en cours de chargement" />;
   return <img src={url} alt={alt} className={className} />;
+}
+
+/* ---------- Photos dans le texte du rapport ----------
+   Le texte (Objet, Description, Conclusion, Remarques) ne garde qu'une
+   référence : <img data-photo="clé">. Les images elles-mêmes sont dans
+   rapport.photosTexte { clé: photo } : rangées à part comme les autres photos,
+   et remises à leur place pour l'affichage et le PDF. */
+const nouvelleClePhoto = () => "pt" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const IMG_PHOTO_TEXTE = /<img\b[^>]*\sdata-photo="([^"]+)"[^>]*>/g;
+// HTML enregistré : sans les images (src retirés).
+function htmlSansSrcPhotos(html) {
+  return String(html || "").replace(IMG_PHOTO_TEXTE, (m) => m.replace(/\ssrc="[^"]*"/g, ""));
+}
+// HTML du PDF : images remises en place (photos déjà « en ligne »).
+function htmlAvecSrcPhotos(html, photos) {
+  if (!html || !String(html).includes("data-photo")) return html || "";
+  return String(html).replace(IMG_PHOTO_TEXTE, (m, cle) => {
+    const src = photos && photos[cle];
+    if (!src || estPhotoStockee(src)) return "";
+    return m.replace(/\ssrc="[^"]*"/g, "").replace(/^<img\b/, `<img src="${src}"`);
+  });
+}
+function clesPhotosTexte(...htmls) {
+  const cles = new Set();
+  htmls.forEach((h) => String(h || "").replace(/data-photo="([^"]+)"/g, (_m, k) => { cles.add(k); return ""; }));
+  return cles;
+}
+// Remplit les images d'un bloc déjà affiché (fiche du rapport, éditeur).
+function remplirPhotosTexte(racine, photos, retirerManquantes) {
+  if (!racine) return;
+  racine.querySelectorAll("img[data-photo]").forEach((img) => {
+    const src = photos && photos[img.getAttribute("data-photo")];
+    if (!src) { if (retirerManquantes) img.remove(); return; }
+    if (estPhotoStockee(src)) urlPhoto(src).then((u) => { if (img.getAttribute("src") !== u) img.setAttribute("src", u); }).catch(() => {});
+    else if (img.getAttribute("src") !== src) img.setAttribute("src", src);
+  });
+}
+function HtmlAvecPhotos({ html, photos, className }) {
+  const ref = useRef(null);
+  useEffect(() => { remplirPhotosTexte(ref.current, photos, true); }, [html, photos]);
+  return <div ref={ref} className={className} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 // Copie d'un objet (rapport…) dont les photos rangées sont remises en ligne :
@@ -7574,6 +7682,9 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
   const [photosEnCours, setPhotosEnCours] = useState(false);
   const [photosErreur, setPhotosErreur] = useState(null);
+  // Photos placées dans le texte (Objet, Description, Conclusion, Remarques).
+  const [photosTexte, setPhotosTexte] = useState(() => editingReport?.photosTexte || {});
+  const ajouterPhotoTexte = (cle, image) => setPhotosTexte((p) => ({ ...p, [cle]: image }));
 
   const handlePhotos = async (e) => {
     const fichiers = Array.from(e.target.files || []);
@@ -7649,6 +7760,10 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
       // Charges / récupérations complètes seulement (bouteille et quantité).
       fluides: fluides.filter((o) => o.bouteille && nombreFr(o.kg) > 0).map((o) => ({ ...o, kg: Math.round(nombreFr(o.kg) * 1000) / 1000 })),
     };
+    // Seules les photos encore présentes dans le texte sont gardées.
+    const cles = clesPhotosTexte(introRef.current, reportType === "mise_en_service" || reportType === "entretien" ? descriptionLibreRef.current : descriptionRef.current, conclusionRef.current, remarquesRef.current);
+    const gardees = Object.fromEntries(Object.entries(photosTexte).filter(([k]) => cles.has(k)));
+    if (Object.keys(gardees).length) base.photosTexte = gardees;
     if (reportType === "mise_en_service") {
       return { ...base, adresseSite, intro: introRef.current, machines: cleanMachines(), checklists: cleanChecklists(), tables, descriptionLibre: descriptionLibreRef.current, conclusion: htmlOuVide(conclusionRef.current), remarques: htmlOuVide(remarquesRef.current), montant, tva, devisAEffectuer };
     } else if (reportType === "entretien") {
@@ -7735,7 +7850,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
         <>
           <div className="block field-block mb-lg">
             <div className="field-caption">Objet</div>
-            <RichTextEditor initialValue={editingReport?.intro || ""} onChange={(html) => { introRef.current = html; }} minHeight={100} />
+            <RichTextEditor initialValue={editingReport?.intro || ""} photos={photosTexte} onPhoto={ajouterPhotoTexte} onChange={(html) => { introRef.current = html; }} minHeight={100} />
           </div>
 
           <div className="block mt">
@@ -7766,7 +7881,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <div className="block field-block">
             <div className="field-caption">Description</div>
-            <RichTextEditor initialValue={editingReport?.descriptionLibre || ""} onChange={(html) => { descriptionLibreRef.current = html; }} minHeight={160} />
+            <RichTextEditor initialValue={editingReport?.descriptionLibre || ""} photos={photosTexte} onPhoto={ajouterPhotoTexte} onChange={(html) => { descriptionLibreRef.current = html; }} minHeight={160} />
           </div>
 
           <ChecklistsSection checklists={checklists} setChecklists={setChecklists} settings={settings} reportType="mise_en_service" />
@@ -7775,13 +7890,13 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <div className="block mt field-block">
             <div className="field-caption">Conclusion</div>
-            <RichTextEditor initialValue={texteEnHtml(editingReport?.conclusion)} onChange={(html) => { conclusionRef.current = html; }} minHeight={80} />
+            <RichTextEditor initialValue={texteEnHtml(editingReport?.conclusion)} photos={photosTexte} onPhoto={ajouterPhotoTexte} onChange={(html) => { conclusionRef.current = html; }} minHeight={80} />
             <span className="hint">Le titre « Conclusion » n'apparaît dans le rapport que si ce champ est rempli.</span>
           </div>
 
           <div className="block mt field-block">
             <div className="field-caption">Remarques</div>
-            <RichTextEditor initialValue={texteEnHtml(editingReport?.remarques)} onChange={(html) => { remarquesRef.current = html; }} minHeight={80} />
+            <RichTextEditor initialValue={texteEnHtml(editingReport?.remarques)} photos={photosTexte} onPhoto={ajouterPhotoTexte} onChange={(html) => { remarquesRef.current = html; }} minHeight={80} />
             <span className="hint">Le titre « Remarques » n'apparaît dans le rapport que si ce champ est rempli.</span>
           </div>
 
@@ -7811,7 +7926,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
         <>
           <div className="block field-block mb-lg">
             <div className="field-caption">Objet</div>
-            <RichTextEditor initialValue={editingReport?.intro || ""} onChange={(html) => { introRef.current = html; }} minHeight={100} />
+            <RichTextEditor initialValue={editingReport?.intro || ""} photos={photosTexte} onPhoto={ajouterPhotoTexte} onChange={(html) => { introRef.current = html; }} minHeight={100} />
           </div>
 
           <div className="block mt">
@@ -7842,7 +7957,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <div className="block field-block">
             <div className="field-caption">Description</div>
-            <RichTextEditor initialValue={editingReport?.descriptionLibre || ""} onChange={(html) => { descriptionLibreRef.current = html; }} minHeight={160} />
+            <RichTextEditor initialValue={editingReport?.descriptionLibre || ""} photos={photosTexte} onPhoto={ajouterPhotoTexte} onChange={(html) => { descriptionLibreRef.current = html; }} minHeight={160} />
           </div>
 
           <ChecklistsSection checklists={checklists} setChecklists={setChecklists} settings={settings} reportType="entretien" />
@@ -7851,13 +7966,13 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <div className="block mt field-block">
             <div className="field-caption">Conclusion</div>
-            <RichTextEditor initialValue={texteEnHtml(editingReport?.conclusion)} onChange={(html) => { conclusionRef.current = html; }} minHeight={80} />
+            <RichTextEditor initialValue={texteEnHtml(editingReport?.conclusion)} photos={photosTexte} onPhoto={ajouterPhotoTexte} onChange={(html) => { conclusionRef.current = html; }} minHeight={80} />
             <span className="hint">Le titre « Conclusion » n'apparaît dans le rapport que si ce champ est rempli.</span>
           </div>
 
           <div className="block mt field-block">
             <div className="field-caption">Remarques</div>
-            <RichTextEditor initialValue={texteEnHtml(editingReport?.remarques)} onChange={(html) => { remarquesRef.current = html; }} minHeight={80} />
+            <RichTextEditor initialValue={texteEnHtml(editingReport?.remarques)} photos={photosTexte} onPhoto={ajouterPhotoTexte} onChange={(html) => { remarquesRef.current = html; }} minHeight={80} />
             <span className="hint">Le titre « Remarques » n'apparaît dans le rapport que si ce champ est rempli.</span>
           </div>
           <div className="form-grid">
@@ -7885,7 +8000,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
         <>
           <div className="block field-block">
             <div className="field-caption">Objet</div>
-            <RichTextEditor initialValue={editingReport?.intro || ""} onChange={(html) => { introRef.current = html; }} minHeight={100} />
+            <RichTextEditor initialValue={editingReport?.intro || ""} photos={photosTexte} onPhoto={ajouterPhotoTexte} onChange={(html) => { introRef.current = html; }} minHeight={100} />
           </div>
 
           <div className="block mt">
@@ -7916,7 +8031,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <div className="block field-block">
             <div className="field-caption">Description</div>
-            <RichTextEditor initialValue={editingReport?.description || ""} onChange={(html) => { descriptionRef.current = html; }} minHeight={200} />
+            <RichTextEditor initialValue={editingReport?.description || ""} photos={photosTexte} onPhoto={ajouterPhotoTexte} onChange={(html) => { descriptionRef.current = html; }} minHeight={200} />
           </div>
           <ChecklistsSection checklists={checklists} setChecklists={setChecklists} settings={settings} reportType="diagnostic" />
 
@@ -7924,13 +8039,13 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
 
           <div className="block mt field-block">
             <div className="field-caption">Conclusion</div>
-            <RichTextEditor initialValue={texteEnHtml(editingReport?.conclusion)} onChange={(html) => { conclusionRef.current = html; }} minHeight={80} />
+            <RichTextEditor initialValue={texteEnHtml(editingReport?.conclusion)} photos={photosTexte} onPhoto={ajouterPhotoTexte} onChange={(html) => { conclusionRef.current = html; }} minHeight={80} />
             <span className="hint">Le titre « Conclusion » n'apparaît dans le rapport que si ce champ est rempli.</span>
           </div>
 
           <div className="block mt field-block">
             <div className="field-caption">Remarques</div>
-            <RichTextEditor initialValue={texteEnHtml(editingReport?.remarques)} onChange={(html) => { remarquesRef.current = html; }} minHeight={80} />
+            <RichTextEditor initialValue={texteEnHtml(editingReport?.remarques)} photos={photosTexte} onPhoto={ajouterPhotoTexte} onChange={(html) => { remarquesRef.current = html; }} minHeight={80} />
             <span className="hint">Le titre « Remarques » n'apparaît dans le rapport que si ce champ est rempli.</span>
           </div>
 
@@ -11304,7 +11419,7 @@ function nl2br(str) {
 
 // Conclusion et remarques : autrefois du texte simple, désormais mis en forme
 // (gras, italique, souligné). Un ancien texte est converti à l'affichage.
-const BALISES_MISE_EN_FORME = /<\/?(b|strong|i|em|u|s|p|div|br|ul|ol|li|span)\b/i;
+const BALISES_MISE_EN_FORME = /<\/?(b|strong|i|em|u|s|p|div|br|ul|ol|li|span|img)\b/i;
 function texteEnHtml(valeur) {
   const v = String(valeur || "");
   return BALISES_MISE_EN_FORME.test(v) ? v : nl2br(v);
@@ -11312,7 +11427,7 @@ function texteEnHtml(valeur) {
 // Champ mis en forme resté vide (« <br> » laissé par l'éditeur) : vide.
 function htmlOuVide(html) {
   const v = String(html || "");
-  return v.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim() ? v : "";
+  return /<img\b/i.test(v) || v.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim() ? v : "";
 }
 
 function tableRowsToHtml(t) {
@@ -11517,7 +11632,17 @@ function PdfPreviewModal({ html, onClose }) {
   , document.body);
 }
 
-function buildReportHtml(report, settings, clients) {
+function buildReportHtml(rapportBrut, settings, clients) {
+  // Photos placées dans le texte : remises à leur place.
+  const pt = rapportBrut?.photosTexte;
+  const report = pt ? {
+    ...rapportBrut,
+    intro: htmlAvecSrcPhotos(rapportBrut.intro, pt),
+    description: htmlAvecSrcPhotos(rapportBrut.description, pt),
+    descriptionLibre: htmlAvecSrcPhotos(rapportBrut.descriptionLibre, pt),
+    conclusion: htmlAvecSrcPhotos(rapportBrut.conclusion, pt),
+    remarques: htmlAvecSrcPhotos(rapportBrut.remarques, pt),
+  } : rapportBrut;
   const entreprise = settings?.entreprise || {};
   const hasLetterhead = entreprise.nom || entreprise.adresse || entreprise.codePostalVille || entreprise.telephone || entreprise.email || entreprise.siret || entreprise.logo;
 
@@ -11646,6 +11771,9 @@ function buildReportHtml(report, settings, clients) {
   .pdf-description strong { font-weight: 700; }
   .pdf-description u { text-decoration: underline; }
   .pdf-description em { font-style: italic; }
+  /* Photo placée dans le texte : toute la largeur au plus, jamais plus haute
+     qu'une demi-page, proportions gardées, jamais coupée entre deux pages. */
+  .pdf-description img[data-photo] { display: block; width: auto; height: auto; max-width: 100%; max-height: 430px; margin: 10px auto; border-radius: 6px; border: 1px solid #D7DEDD; page-break-inside: avoid; break-inside: avoid; }
   .pdf-photo-annex { page-break-before: always; padding-top: 8px; }
   .pdf-annex-title { font-family: 'Barlow Condensed', sans-serif; font-size: 22px; font-weight: 700; color: #1B2733; margin-bottom: 18px; }
   .pdf-photos-grid { display: block; }
@@ -12273,12 +12401,12 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .logout-link:hover { color: var(--sur-couleur); }
 
 /* --- Écran d'accueil (toujours sur fond de ciel sombre, quel que soit le thème) --- */
-.bienvenue { position: fixed; inset: 0; z-index: 3000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; text-align: center; padding: calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom)); overflow: hidden; color: #E7ECEB; font-family: var(--police); cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none;
+.bienvenue { position: fixed; inset: 0; z-index: 3000; -webkit-transform: translateZ(0); transform: translateZ(0); isolation: isolate; will-change: opacity; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; text-align: center; padding: calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom)); overflow: hidden; color: #E7ECEB; font-family: var(--police); cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none;
   background: radial-gradient(120% 70% at 50% 108%, var(--b-lueur) 0%, transparent 62%), linear-gradient(180deg, #16212B 0%, #1B2733 55%, #22303D 100%); }
 .bienvenue.matin { --b-lueur: rgba(232,135,58,0.55); --b-astre: #F4B15F; --b-halo: rgba(244,177,95,0.45); }
 .bienvenue.journee { --b-lueur: rgba(92,155,209,0.45); --b-astre: #F7D27A; --b-halo: rgba(247,210,122,0.4); }
 .bienvenue.soir { --b-lueur: rgba(126,87,168,0.45); --b-astre: #DCE3EA; --b-halo: rgba(220,227,234,0.25); }
-.bienvenue-astre { position: absolute; left: 50%; bottom: -90px; width: 80px; height: 80px; margin-left: -40px; border-radius: 50%; background: var(--b-astre); box-shadow: 0 0 50px 18px var(--b-halo), 0 0 140px 50px var(--b-halo); opacity: 0.95; animation: b-leve 3.6s cubic-bezier(.25,.6,.25,1) forwards; }
+.bienvenue-astre { position: absolute; left: 50%; width: 80px; height: 80px; margin-left: -40px; border-radius: 50%; background: var(--b-astre); box-shadow: 0 0 50px 18px var(--b-halo), 0 0 140px 50px var(--b-halo); opacity: 0.95; bottom: calc(40px + env(safe-area-inset-bottom)); transform: translateY(calc(130px + env(safe-area-inset-bottom))); animation: b-leve 3.6s cubic-bezier(.25,.6,.25,1) forwards; }
 .bienvenue-mark { width: 88px; height: 88px; border-radius: 20px; background: linear-gradient(135deg, #3B86C4, #E8873A); display: flex; align-items: center; justify-content: center; font-family: var(--police-titre); font-weight: 700; font-size: 36px; letter-spacing: 0.5px; color: #fff; box-shadow: 0 6px 30px rgba(232,135,58,0.35); transform: scale(0); animation: b-rebond 1.2s cubic-bezier(.3,1.35,.5,1) 0.35s forwards; }
 .bienvenue-salut { font-family: var(--police-titre); font-weight: 700; font-size: 46px; line-height: 1.1; letter-spacing: 0.4px; min-height: 1.15em; max-width: 12ch; margin-top: 4px; }
 .bienvenue-mot { white-space: nowrap; }
@@ -12296,7 +12424,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .bienvenue.sortie-rapide { opacity: 0; transition: opacity 0.25s ease-in; }
 .bienvenue.immobile *, .bienvenue.immobile { animation-duration: 0.01s !important; animation-delay: 0s !important; }
 @media (prefers-reduced-motion: reduce) { .bienvenue *, .bienvenue { animation-duration: 0.01s !important; animation-delay: 0s !important; } }
-@keyframes b-leve { from { bottom: -90px; } to { bottom: calc(40px + env(safe-area-inset-bottom)); } }
+@keyframes b-leve { to { transform: translateY(0); } }
+html.accueil-ouvert .app, html.accueil-ouvert .fond-degrade, html.accueil-ouvert .micro-flottant, html.accueil-ouvert .app-loading { visibility: hidden; }
 @keyframes b-rebond { to { transform: scale(1); } }
 @keyframes b-monte { to { opacity: 1; transform: translateY(0); } }
 @keyframes b-clignote { 50% { opacity: 0; } }
@@ -12690,6 +12819,9 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .rte-toolbar button.active { border-color: var(--bleu); background: var(--bleu-clair); color: var(--bleu); box-shadow: inset 0 0 0 1px var(--bleu); }
 .rte-sep { width: 1px; height: 20px; background: var(--trait); margin: 0 4px; }
 .rte-content { padding: 10px 12px; font-size: 14px; line-height: 1.5; outline: none; }
+.rte-toolbar button.rte-photo { width: auto; padding: 0 9px; display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; }
+.rte-content img[data-photo], .rte-render img[data-photo] { display: block; max-width: 100%; max-height: 280px; width: auto; height: auto; margin: 8px 0; border-radius: 8px; border: 1px solid var(--trait); background: var(--fond-doux); }
+.rte-content img[data-photo]:not([src]) { width: 160px; height: 110px; }
 .rte-content:empty:before { content: attr(data-placeholder); color: var(--encre-5); }
 .rte-content ul, .rte-render ul, .pdf-description ul { margin: 4px 0 4px 20px; padding: 0; }
 .rte-content ul ul, .rte-render ul ul, .pdf-description ul ul { list-style-type: circle; }
