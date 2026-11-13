@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { useSyncedCollection, useSyncedSettings, useEtatEnvois, relancerEnvois, effacerRefusEnvois } from "./useSyncedCollection.js";
 import { supabase } from "./supabaseClient.js";
@@ -1574,8 +1574,10 @@ function AppContenu() {
         }
         if (action.item.contrat?.client_id) {
           const c = clients.find((x) => String(x.id) === String(action.item.contrat.client_id));
-          if (!c?.contrat?.data) throw new Error("plus de contrat sur la fiche de ce client");
-          pieces.push({ nom: action.item.contrat.nom || c.contrat.nom || "Contrat.pdf", contenu: c.contrat.data });
+          const ks = contratsDe(c).filter((k) => k.data);
+          const k = ks.find((x) => String(x.id) === String(action.item.contrat.contrat_id || "")) || ks[ks.length - 1];
+          if (!k) throw new Error("plus de contrat sur la fiche de ce client");
+          pieces.push({ nom: action.item.contrat.nom || k.nom || "Contrat.pdf", contenu: k.data });
         }
         await appelerAssistantExecution({ ...action, item: { ...action.item, pieces_jointes_contenu: pieces } });
         return true;
@@ -3318,6 +3320,8 @@ function ongletDepuisAdresse() {
 // la demande partait 3 secondes trop tard). Un appui sur le micro envoie
 // tout de suite.
 const SILENCE_FIN_MS = 2000;
+// Durée maximale d'une demande dictée : au-delà, on envoie ce qui a été dit.
+const DICTEE_MAX_MS = 60000;
 
 // Assemble les morceaux dictés. Selon le navigateur, chaque résultat contient
 // soit un nouveau morceau, soit toute la phrase depuis le début (Safari en
@@ -3357,6 +3361,7 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
   let relancesSurdite = 0;
   let relanceVolontaire = false;
   let minuterieSurdite = null;
+  let minuterieMax = null;
 
   const texteComplet = () => [dejaDicte, enCours].filter(Boolean).join(" ").trim();
 
@@ -3365,6 +3370,7 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
     fini = true;
     clearTimeout(minuterie);
     clearTimeout(minuterieSurdite);
+    clearTimeout(minuterieMax);
     try { rec?.stop(); } catch (_e) { /* déjà arrêtée */ }
     onFin(annule ? "" : texteComplet(), erreur);
   };
@@ -3408,9 +3414,21 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
     rec.onspeechstart = () => { paroleDetectee = true; };
     rec.onsoundstart = () => { paroleDetectee = true; };
     rec.onresult = (ev) => {
-      entendu = true;
+      const avant = texteComplet();
       enCours = assemblerDictee(ev.results);
-      onPartiel(texteComplet());
+      const texte = texteComplet();
+      // Safari renvoie parfois le même texte en boucle (bruit de fond) : seul
+      // un texte qui change compte comme de la parole. Sinon la minuterie de
+      // silence était relancée sans fin, le micro restait rouge et la phrase
+      // dictée restait dans la zone de saisie sans partir.
+      if (texte === avant && entendu) return;
+      if (!texte) return;
+      if (!entendu) {
+        entendu = true;
+        clearTimeout(minuterieMax);
+        minuterieMax = setTimeout(() => terminer(), DICTEE_MAX_MS);
+      }
+      onPartiel(texte);
       armerSilence();
     };
     rec.onerror = (ev) => {
@@ -3437,6 +3455,7 @@ function ecoutePatiente(Reconnaissance, { onDebut, onPartiel, onErreur, onFin, p
       if (entendu) {
         dejaDicte = texteComplet();
         enCours = "";
+        armerSilence();
         try { demarrer(); return; } catch (_e) { /* relance refusée */ }
       }
       // L'iPhone coupe parfois l'écoute au bout de quelques secondes sans
@@ -3761,6 +3780,15 @@ function CarteDebrief() {
 
 function Assistant({ messages, setMessages, actions, setActions, onAppliquerAction, onMemoire, texteAEnvoyer, onTexteEnvoye, fournisseurs = [] }) {
   const [saisie, setSaisie] = useState("");
+  // Zone de saisie : s'agrandit avec le texte (retour à la ligne visible).
+  const saisieRef = useRef(null);
+  useLayoutEffect(() => {
+    const z = saisieRef.current;
+    if (!z) return;
+    z.style.height = "auto";
+    z.style.height = Math.min(z.scrollHeight, 140) + "px";
+    z.style.overflowY = z.scrollHeight > 140 ? "auto" : "hidden";
+  }, [saisie]);
   const [chargement, setChargement] = useState(false);
   const [ecoute, setEcoute] = useState(false);
   const [parle, setParle] = useState(false);
@@ -4425,6 +4453,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
             {infoMicro && <div className="hint assistant-info-micro">{infoMicro}</div>}
             <div className={"assistant-saisie-ligne" + (ecoute ? " en-ecoute" : "") + (saisie.trim() ? " a-texte" : "")}>
               <textarea
+                ref={saisieRef}
                 rows={1}
                 value={saisie}
                 onChange={(e) => setSaisie(e.target.value)}
@@ -5064,6 +5093,28 @@ function empreinteRapport(r) {
   return empreinte(reste);
 }
 
+/* ---------- Contrats d'un client ----------
+   Un client peut avoir plusieurs contrats (client.contrats). Les fiches d'avant
+   n'en avaient qu'un (client.contrat + client.onedriveContrat) : il est repris
+   ici comme premier contrat, sans rien changer à la fiche tant qu'elle n'est
+   pas modifiée. */
+function contratsDe(client) {
+  if (Array.isArray(client?.contrats)) return client.contrats;
+  if (!client?.contrat) return [];
+  return [{ id: "k0", rang: 1, ...client.contrat, ...(client.onedriveContrat ? { onedrive: client.onedriveContrat } : {}) }];
+}
+const aUnContrat = (client) => contratsDe(client).length > 0;
+// Fiche enregistrée avec la liste des contrats (l'ancien champ unique disparaît).
+function ficheAvecContrats(client, contrats) {
+  const { contrat: _ancien, onedriveContrat: _ancienOd, ...reste } = client;
+  return { ...reste, contrats };
+}
+const LIBELLE_TYPE_CONTRAT = { air_air: "PAC air/air", air_eau: "PAC air/eau" };
+function libelleContrat(k) {
+  const type = LIBELLE_TYPE_CONTRAT[k?.details?.typeContrat] || "";
+  return [k?.nom || "Contrat", type && !String(k?.nom || "").toLowerCase().includes(type.toLowerCase()) ? type : "", k?.dateAjout ? "du " + k.dateAjout : ""].filter(Boolean).join(" · ");
+}
+
 function empreinteContrat(contrat) {
   return empreinte([contrat?.nom, contrat?.dateAjout, contrat?.ajouteLe, String(contrat?.data || "").length, String(contrat?.data || "").slice(-64)]);
 }
@@ -5178,11 +5229,12 @@ function useRangementOneDrive({ reports, clients, settings, upsertReport, upsert
       if (r.onedrive?.signature === empreinteRapport(r)) return false;
       return !reserveAilleurs(r.onedrive) && disponible(r.id);
     });
-    const contrats = clients.filter((c) =>
-      c.contrat?.data && (c.contrat.ajouteLe || 0) >= depuis &&
-      c.onedriveContrat?.signature !== empreinteContrat(c.contrat) &&
-      !reserveAilleurs(c.onedriveContrat) && disponible("contrat-" + c.id)
-    );
+    const contrats = [];
+    clients.forEach((c) => contratsDe(c).forEach((k) => {
+      if (k.data && (k.ajouteLe || 0) >= depuis &&
+        k.onedrive?.signature !== empreinteContrat(k) &&
+        !reserveAilleurs(k.onedrive) && disponible("contrat-" + c.id + "-" + k.id)) contrats.push({ c, k });
+    }));
     if (rapports.length === 0 && contrats.length === 0) return;
 
     enCours.current = true;
@@ -5214,25 +5266,36 @@ function useRangementOneDrive({ reports, clients, settings, upsertReport, upsert
           upsertReport({ ...r, onedrive: { ...(r.onedrive || {}), parAppareil: null, erreur: String(e?.message || e) } });
         }
       }
-      for (const c of contrats) {
-        const signature = empreinteContrat(c.contrat);
-        upsertClient({ ...c, onedriveContrat: { ...(c.onedriveContrat || {}), parAppareil: ID_APPAREIL, reserveLe: Date.now() } });
+      // Fiches à jour au fil des envois (un client peut avoir plusieurs contrats).
+      const fiches = {};
+      const majContrat = (c, kid, onedrive) => {
+        const fiche = fiches[c.id] || c;
+        const suivante = ficheAvecContrats(fiche, contratsDe(fiche).map((x) => (x.id === kid ? { ...x, onedrive } : x)));
+        fiches[c.id] = suivante;
+        upsertClient(suivante);
+      };
+      for (const { c, k } of contrats) {
+        const cle = "contrat-" + c.id + "-" + k.id;
+        const signature = empreinteContrat(k);
+        majContrat(c, k.id, { ...(k.onedrive || {}), parAppareil: ID_APPAREIL, reserveLe: Date.now() });
         try {
-          const extension = (String(c.contrat.nom || "").match(/\.([a-z0-9]{2,5})$/i) || [, "pdf"])[1].toLowerCase();
+          const extension = (String(k.nom || "").match(/\.([a-z0-9]{2,5})$/i) || [, "pdf"])[1].toLowerCase();
+          const rang = Number(k.rang) || 1;
           const res = await appelerOneDrive("ranger", {
             client: [c.nom, c.raisonSociale, libelleClient(c)].filter(Boolean),
             sous_dossier: "CONTRAT",
-            // Même nom que le contrat généré : « Contrat maintenance - AGULLO Maxime.pdf ».
-            nom_fichier: `Contrat maintenance - ${String(c.raisonSociale || c.nom || "client").replace(/[\\/:*?"<>|]/g, "-").trim()}.${extension}`,
-            contenu: c.contrat.data,
-            item_id: c.onedriveContrat?.itemId || undefined,
+            // Même nom que le contrat généré : « Contrat maintenance - AGULLO Maxime.pdf »,
+            // puis « … (2).pdf » pour le deuxième contrat du client, etc.
+            nom_fichier: `Contrat maintenance - ${String(c.raisonSociale || c.nom || "client").replace(/[\\/:*?"<>|]/g, "-").trim()}${rang > 1 ? ` (${rang})` : ""}.${extension}`,
+            contenu: k.data,
+            item_id: k.onedrive?.itemId || undefined,
           });
-          upsertClient({ ...c, onedriveContrat: { itemId: res.item_id, chemin: res.chemin, signature, envoyeLe: new Date().toISOString() } });
-          delete echecs.current["contrat-" + c.id];
+          majContrat(c, k.id, { itemId: res.item_id, chemin: res.chemin, signature, envoyeLe: new Date().toISOString() });
+          delete echecs.current[cle];
         } catch (e) {
-          const nb = (echecs.current["contrat-" + c.id]?.nb || 0) + 1;
-          echecs.current["contrat-" + c.id] = { nb, prochain: Date.now() + nb * 2 * 60000 };
-          upsertClient({ ...c, onedriveContrat: { ...(c.onedriveContrat || {}), parAppareil: null, erreur: String(e?.message || e) } });
+          const nb = (echecs.current[cle]?.nb || 0) + 1;
+          echecs.current[cle] = { nb, prochain: Date.now() + nb * 2 * 60000 };
+          majContrat(c, k.id, { ...(k.onedrive || {}), parAppareil: null, erreur: String(e?.message || e) });
         }
       }
       enCours.current = false;
@@ -8245,7 +8308,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
   // enregistré (SOCH) s'affichait d'office, même pendant une recherche.
   const [selected, setSelected] = useState(null);
   const [editingClient, setEditingClient] = useState(null);
-  const [showContract, setShowContract] = useState(false);
+  const [showContract, setShowContract] = useState(null); // contrat affiché
   const [showMap, setShowMap] = useState(false);
   const [showMachines, setShowMachines] = useState(false);
   // La fiche est repliée par défaut : sur téléphone, l'historique reste ainsi
@@ -8267,7 +8330,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
   const closeForm = () => { setShowForm(false); setEditingClient(null); };
 
   useEffect(() => {
-    setShowContract(false);
+    setShowContract(null);
     setFicheOuverte(false);
     setShowMachines(false);
   }, [selected]);
@@ -8380,7 +8443,7 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
             setShowMachines={setShowMachines}
             onEdit={() => { setFicheOuverte(false); openEdit(client); }}
             onDelete={() => onDelete(client)}
-            onShowContract={() => setShowContract(true)}
+            onShowContract={(k) => setShowContract(k)}
           />
         </div>
       )}
@@ -8406,12 +8469,12 @@ function Clients({ clients, showForm, setShowForm, onAdd, onUpdate, onDelete, re
         </Fenetre>
       )}
 
-      {showContract && client?.contrat && (
+      {showContract?.data && (
         <PdfFileModal
-          base64={client.contrat.data}
-          filename={client.contrat.nom || "contrat.pdf"}
-          title={"Contrat — " + client.nom}
-          onClose={() => setShowContract(false)}
+          base64={showContract.data}
+          filename={showContract.nom || "contrat.pdf"}
+          title={"Contrat — " + (client?.nom || "")}
+          onClose={() => setShowContract(null)}
         />
       )}
     </div>
@@ -8523,9 +8586,14 @@ function ClientFiche({ client, reports, ouverte, onToggle, showMachines, setShow
         onClose={onToggle}
         actions={
           <div className="client-detail-actions">
-            {client.contrat && (
-              <button className="btn-ghost small btn-contrat" onClick={onShowContract}>
+            {contratsDe(client).length === 1 && (
+              <button className="btn-ghost small btn-contrat" onClick={() => onShowContract(contratsDe(client)[0])}>
                 <Icon name="report" size={14} /> Contrat
+              </button>
+            )}
+            {contratsDe(client).length > 1 && (
+              <button className="btn-ghost small btn-contrat" onClick={() => document.getElementById("fiche-contrats-" + client.id)?.scrollIntoView({ behavior: "smooth", block: "center" })}>
+                <Icon name="report" size={14} /> Contrats ({contratsDe(client).length})
               </button>
             )}
             <button className="btn-ghost small" onClick={onEdit}>
@@ -8594,7 +8662,20 @@ function ClientFiche({ client, reports, ouverte, onToggle, showMachines, setShow
             : <div className="fiche-value vide">Non renseigné</div>}
         </div>
         <FicheLigne label="Mois de l'entretien contractuel" value={nomDuMois(client.moisEcheance)} />
-        <FicheLigne label="Contrat de maintenance" value={client.contrat ? (client.contrat.nom || "Contrat enregistré") : ""} />
+        {contratsDe(client).length <= 1 ? (
+          <FicheLigne label="Contrat de maintenance" value={contratsDe(client)[0] ? (contratsDe(client)[0].nom || "Contrat enregistré") : ""} />
+        ) : (
+          <div className="fiche-item fiche-item-large" id={"fiche-contrats-" + client.id}>
+            <div className="fiche-label">Contrats de maintenance ({contratsDe(client).length})</div>
+            <div className="fiche-contrats">
+              {contratsDe(client).map((k) => (
+                <button type="button" key={k.id} className="fiche-contrat" onClick={() => onShowContract(k)}>
+                  <Icon name="report" size={14} /> <span>{libelleContrat(k)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <button type="button" className="machine-section-toggle" onClick={() => setShowMachines(!showMachines)}>
@@ -9154,9 +9235,15 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
     }));
     return existing;
   });
-  const [contrat, setContrat] = useState(editingClient?.contrat || null);
+  // Contrats du client (plusieurs possibles).
+  const [contrats, setContrats] = useState(() => contratsDe(editingClient));
+  const [contratVu, setContratVu] = useState(null);
+  const [contratEdite, setContratEdite] = useState(null); // id du contrat refait, null = nouveau
+  const nouveauContrat = (doc, liste) => {
+    const rang = Math.max(0, ...liste.map((k) => Number(k.rang) || 1)) + 1;
+    return { ...doc, id: "k" + Date.now().toString(36), rang };
+  };
   const [blankContractType, setBlankContractType] = useState(null); // "air_air" | "air_eau" | "air_air_b2b" | "air_eau_b2b" | null
-  const [showOwnContract, setShowOwnContract] = useState(false);
   const [showContratForm, setShowContratForm] = useState(false);
   const [contratAModifier, setContratAModifier] = useState(null);
   const contractFileRef = useRef();
@@ -9171,9 +9258,11 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const base64 = String(ev.target.result).split(",")[1];
-      setContrat({ nom: file.name, data: base64, dateAjout: new Date().toLocaleDateString("fr-FR"), ajouteLe: Date.now() });
+      const doc = { nom: file.name, data: base64, dateAjout: new Date().toLocaleDateString("fr-FR"), ajouteLe: Date.now() };
+      setContrats((liste) => [...liste, nouveauContrat(doc, liste)]);
     };
     reader.readAsDataURL(file);
+    e.target.value = "";
   };
 
   const submit = () => {
@@ -9184,7 +9273,8 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
         m.interieur.some((u) => u.marque.trim() || u.serie.trim())
       )
       .map(({ id, ...m }) => m);
-    onSubmit({
+    onSubmit(ficheAvecContrats({
+      ...(isEditing ? editingClient : {}),
       id: isEditing ? editingClient.id : "c" + Date.now(),
       nom, raisonSociale, siren, tva, adresse, email, tel, moisEcheance,
       // La case « Professionnel » est enregistrée telle quelle : c'est elle qui
@@ -9192,8 +9282,7 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
       // particulier), et non la présence d'une raison sociale.
       professionnel: estProfessionnel,
       machines: cleanedMachines,
-      contrat,
-    });
+    }, contrats));
   };
 
   return (
@@ -9292,14 +9381,31 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
 
       <label className="block mt">Contrat de maintenance</label>
       <div className="contract-box">
+        {contrats.length > 0 && (
+          <div className="contrats-liste">
+            {contrats.map((k) => (
+              <div key={k.id} className="contrat-ligne">
+                <Icon name="check" size={14} />
+                <span className="contrat-ligne-nom">{libelleContrat(k)}</span>
+                <button type="button" className="contract-view-link" onClick={() => setContratVu(k)}>Voir</button>
+                {k.details && (
+                  <button type="button" className="contract-view-link" onClick={() => { setContratEdite(k.id); setContratAModifier(k.details); setShowContratForm(true); }}>Modifier</button>
+                )}
+                <button type="button" className="icon-btn" onClick={() => { if (window.confirm(`Retirer ce contrat de la fiche ?\n${libelleContrat(k)}`)) setContrats((l) => l.filter((x) => x.id !== k.id)); }} title="Retirer ce contrat">
+                  <Icon name="trash" size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="contrat-creer">
-          <button type="button" className="btn-primary small" onClick={() => { setContratAModifier(contrat?.details || null); setShowContratForm(true); }}>
-            <Icon name="report" size={14} /> {contrat?.details ? "Modifier le contrat depuis cette fiche" : "Créer le contrat depuis cette fiche"}
+          <button type="button" className="btn-primary small" onClick={() => { setContratEdite(null); setContratAModifier(null); setShowContratForm(true); }}>
+            <Icon name="plus" size={14} /> {contrats.length ? "Créer un autre contrat depuis cette fiche" : "Créer le contrat depuis cette fiche"}
           </button>
           <span className="hint">
             Le matériel, l'adresse et les coordonnées de la fiche sont repris automatiquement. Montant libre,
             signature à l'écran, PDF enregistré sur la fiche et rangé dans le dossier du client.
-            {contrat?.details ? " Le contrat enregistré est rouvert tel quel : tu modifies ce que tu veux et le PDF est refait." : ""}
+            {contrats.length ? " Un client peut avoir plusieurs contrats (par exemple un pour la clim, un pour la PAC air/eau) : « Modifier » rouvre un contrat tel quel et refait son PDF." : ""}
           </span>
         </div>
 
@@ -9329,18 +9435,9 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
 
         <div className="contract-import mt">
           <button type="button" className="btn-ghost small" onClick={() => contractFileRef.current.click()}>
-            <Icon name="photo" size={14} /> Importer le contrat signé (PDF)
+            <Icon name="photo" size={14} /> {contrats.length ? "Importer un autre contrat signé (PDF)" : "Importer le contrat signé (PDF)"}
           </button>
           <input ref={contractFileRef} type="file" accept="application/pdf" hidden onChange={handleContractUpload} />
-          {contrat && (
-            <span className="contract-status">
-              <Icon name="check" size={14} /> {contrat.nom || "Contrat"}
-              <button type="button" className="contract-view-link" onClick={() => setShowOwnContract(true)}>Voir</button>
-              <button type="button" className="icon-btn" onClick={() => setContrat(null)} title="Retirer le contrat">
-                <Icon name="trash" size={13} />
-              </button>
-            </span>
-          )}
         </div>
       </div>
 
@@ -9376,12 +9473,12 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
           onClose={() => setBlankContractType(null)}
         />
       )}
-      {showOwnContract && contrat && (
+      {contratVu?.data && (
         <PdfFileModal
-          base64={contrat.data}
-          filename={contrat.nom || "contrat.pdf"}
+          base64={contratVu.data}
+          filename={contratVu.nom || "contrat.pdf"}
           title={"Contrat — " + nom}
-          onClose={() => setShowOwnContract(false)}
+          onClose={() => setContratVu(null)}
         />
       )}
 
@@ -9393,10 +9490,15 @@ function ClientForm({ editingClient, settings, onCancel, onSubmit }) {
           initial={contratAModifier}
           onClose={() => setShowContratForm(false)}
           onGenerated={(doc, moisChoisi) => {
-            setContrat(doc);
+            // Contrat refait : il garde sa place (et son fichier OneDrive) ;
+            // sinon il s'ajoute aux contrats du client.
+            const liste = contratEdite && contrats.some((k) => k.id === contratEdite)
+              ? contrats.map((k) => (k.id === contratEdite ? { ...k, ...doc, id: k.id, rang: k.rang, onedrive: k.onedrive } : k))
+              : [...contrats, nouveauContrat(doc, contrats)];
+            setContrats(liste);
             if (moisChoisi && !moisEcheance) setMoisEcheance(moisChoisi);
             setShowContratForm(false);
-            setShowOwnContract(true);
+            setContratVu(liste.find((k) => k.id === contratEdite) || liste[liste.length - 1]);
           }}
         />
       )}
@@ -11189,7 +11291,7 @@ function fluidesValides(r) {
 //   il ne se réinitialise jamais tout seul en l'absence d'action)
 // - isUrgent : on est à moins d'un mois de l'échéance (ou après, en retard) et ce n'est pas encore fait
 function getEntretienStatus(client, reports) {
-  if (!client.contrat) return null;
+  if (!aUnContrat(client)) return null;
   const today = new Date();
   const mois = parseInt(client.moisEcheance, 10);
   const anneeEnCours = today.getFullYear();
@@ -12750,6 +12852,15 @@ html.accueil-ouvert .app, html.accueil-ouvert .fond-degrade, html.accueil-ouvert
 .contract-import { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .contract-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--vert); background: var(--vert-clair); padding: 5px 10px; border-radius: 20px; }
 .contract-view-link { background: none; border: none; color: var(--bleu); text-decoration: underline; font-size: 12.5px; cursor: pointer; padding: 0; margin-left: 4px; }
+.contrats-liste { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.contrat-ligne { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--encre); background: var(--vert-clair); border-radius: 10px; padding: 7px 10px; }
+.contrat-ligne > svg { color: var(--vert); flex-shrink: 0; }
+.contrat-ligne-nom { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.contrat-ligne .contract-view-link { margin-left: 2px; }
+.fiche-item-large { grid-column: 1 / -1; }
+.fiche-contrats { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.fiche-contrat { display: flex; align-items: center; gap: 8px; text-align: left; font: inherit; font-size: 13.5px; color: var(--encre); background: var(--fond-doux, var(--survol)); border: 1px solid var(--trait); border-radius: 10px; padding: 8px 10px; cursor: pointer; }
+.fiche-contrat > svg { color: var(--bleu); flex-shrink: 0; }
 .charge-fluide { font-size: 12.5px; color: var(--encre-2); margin: 6px 0 2px; display: flex; flex-direction: column; gap: 2px; }
 .charge-fluide strong { color: var(--encre); }
 .machine-photos { display: flex; gap: 16px; margin-top: 10px; flex-wrap: wrap; }
@@ -13635,7 +13746,7 @@ input, select, textarea { border-radius: 10px; }
   border-top: 0; padding: 18px 0 calc(12px + env(safe-area-inset-bottom));
 }
 .assistant-saisie-ligne {
-  align-items: center; gap: 6px; padding: 5px 5px 5px 16px;
+  align-items: flex-end; gap: 6px; padding: 5px 5px 5px 16px;
   border-radius: 28px; border: 1px solid var(--verre-bord, var(--trait));
   background: var(--verre-fort, var(--carte));
   -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
@@ -13645,7 +13756,7 @@ input, select, textarea { border-radius: 10px; }
 .assistant-saisie-ligne:focus-within { border-color: var(--acc-mi, var(--bleu)); box-shadow: 0 8px 28px rgba(0,0,0,0.22), 0 0 0 3px var(--acc-doux, rgba(80,120,255,0.18)); }
 .assistant-saisie-ligne.en-ecoute { border-color: var(--rouge); box-shadow: 0 8px 28px rgba(0,0,0,0.22), 0 0 0 3px rgba(224,90,90,0.18); }
 .assistant-saisie-ligne textarea {
-  min-height: 0; height: auto; max-height: 140px; padding: 11px 0; line-height: 1.4;
+  min-height: 0; height: auto; max-height: 140px; padding: 11px 0; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: hidden;
   border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none;
 }
 .assistant-saisie-ligne textarea:focus, .assistant-saisie-ligne textarea:focus-visible { outline: none; box-shadow: none; }
