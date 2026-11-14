@@ -5884,6 +5884,47 @@ function ModeleRepliable({ nom, details, ouvert, onBasculer, children }) {
   );
 }
 
+/* Suppression d'une colonne de tableau : une poubelle au-dessus de chaque
+   colonne (écran large) ou un menu « Supprimer une colonne » (téléphone, où
+   les colonnes s'affichent les unes sous les autres). */
+function retirerColonne(rows, c) {
+  return rows.map((row) => row.filter((_, ci) => ci !== c));
+}
+function confirmerRetraitColonne(rows, c) {
+  const remplie = rows.some((row) => String(row[c] ?? "").trim());
+  return !remplie || window.confirm(`Supprimer la colonne ${c + 1} et ce qu'elle contient ?`);
+}
+function nomColonne(rows, c) {
+  const entete = String(rows[0]?.[c] ?? "").trim();
+  return `Colonne ${c + 1}${entete ? " — " + (entete.length > 28 ? entete.slice(0, 28) + "…" : entete) : ""}`;
+}
+function LigneSupprColonnes({ rows, onRetirer }) {
+  const nb = rows[0]?.length || 0;
+  if (nb < 2) return null;
+  return (
+    <tr className="table-col-actions">
+      {Array.from({ length: nb }, (_, c) => (
+        <td key={c}>
+          <button type="button" className="icon-btn" onClick={() => onRetirer(c)} title={"Supprimer la " + nomColonne(rows, c).toLowerCase()}>
+            <Icon name="trash" size={12} />
+          </button>
+        </td>
+      ))}
+      <td className="table-row-actions" />
+    </tr>
+  );
+}
+function MenuSupprColonne({ rows, onRetirer }) {
+  const nb = rows[0]?.length || 0;
+  if (nb < 2) return null;
+  return (
+    <select className="table-col-menu" value="" onChange={(e) => { if (e.target.value !== "") onRetirer(Number(e.target.value)); }}>
+      <option value="">− Colonne…</option>
+      {Array.from({ length: nb }, (_, c) => <option key={c} value={c}>Supprimer la {nomColonne(rows, c).replace(/^C/, "c")}</option>)}
+    </select>
+  );
+}
+
 function TemplateTableEditor({ template, onChange, onRemove }) {
   const updateCell = (r, c, val) => {
     const rows = template.rows.map((row, ri) => (ri === r ? row.map((cell, ci) => (ci === c ? val : cell)) : row));
@@ -5895,6 +5936,7 @@ function TemplateTableEditor({ template, onChange, onRemove }) {
   };
   const addCol = () => onChange({ ...template, rows: template.rows.map((row) => [...row, ""]) });
   const removeRow = (r) => onChange({ ...template, rows: template.rows.filter((_, ri) => ri !== r) });
+  const removeCol = (c) => { if (confirmerRetraitColonne(template.rows, c)) onChange({ ...template, rows: retirerColonne(template.rows, c) }); };
 
   return (
     <div className="table-editor">
@@ -5903,6 +5945,7 @@ function TemplateTableEditor({ template, onChange, onRemove }) {
       </label>
       <table className="editable-table">
         <tbody>
+          <LigneSupprColonnes rows={template.rows} onRetirer={removeCol} />
           {template.rows.map((row, ri) => (
             <tr key={ri}>
               {row.map((cell, ci) => (
@@ -5918,6 +5961,7 @@ function TemplateTableEditor({ template, onChange, onRemove }) {
       <div className="table-actions">
         <button type="button" className="btn-ghost small" onClick={addRow}>+ Ligne</button>
         <button type="button" className="btn-ghost small" onClick={addCol}>+ Colonne</button>
+        <MenuSupprColonne rows={template.rows} onRetirer={removeCol} />
         <button type="button" className="btn-ghost small" onClick={onRemove}>Supprimer le modèle</button>
       </div>
     </div>
@@ -6268,7 +6312,7 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
               {r.photos.map((src, i) => <ImageStockee key={i} src={src} alt="photo intervention" />)}
             </div>
           )}
-          {(r.signatureTech || r.signatureClient) && (
+          {(r.signatureTech || r.signatureClient || r.clientAbsent) && (
             <div className="signatures-view">
               <div className="sig-col">
                 <div className="sig-title">Signature technicien</div>
@@ -6276,7 +6320,7 @@ function ReportCard({ r, clients, open, onToggle, onPrint, onEdit, onValidate, o
               </div>
               <div className="sig-col">
                 <div className="sig-title">Signature client</div>
-                {r.signatureClient ? <img src={r.signatureClient} className="sig-img" alt="Signature client" /> : <div className="sig-empty">Non signée</div>}
+                {r.clientAbsent ? <div className="sig-absent">CLIENT ABSENT</div> : r.signatureClient ? <img src={r.signatureClient} className="sig-img" alt="Signature client" /> : <div className="sig-empty">Non signée</div>}
               </div>
             </div>
           )}
@@ -6299,13 +6343,13 @@ function DevisNote({ text }) {
   );
 }
 
-function ChecklistItemView({ it }) {
+function ChecklistItemView({ it, sansStatut, sansDetail }) {
   return (
-    <div className={"cl-row" + (it.checked ? " ok" : " ko")}>
-      <span className="check-dot">{it.checked && <Icon name="check" size={12} />}</span>
+    <div className={"cl-row" + (sansStatut ? " sans-statut" : it.checked ? " ok" : " ko")}>
+      {sansStatut ? <span className="cl-puce" /> : <span className="check-dot">{it.checked && <Icon name="check" size={12} />}</span>}
       <div>
         <div className="cl-label">{it.label}</div>
-        {it.detail && <div className="cl-detail">{it.detail}</div>}
+        {it.detail && !sansDetail && <div className="cl-detail">{it.detail}</div>}
       </div>
     </div>
   );
@@ -6348,7 +6392,7 @@ function ChecklistsView({ checklists, tables }) {
           {cl.nom && <div className="checklist-group-title">{cl.nom}</div>}
           {(cl.items || []).map((it) => (
             <React.Fragment key={it.id}>
-              <ChecklistItemView it={it} />
+              <ChecklistItemView it={it} sansStatut={cl.sansStatut} sansDetail={cl.sansDetail} />
               {tablesAt(tables, flatItems, it.id)}
             </React.Fragment>
           ))}
@@ -6402,6 +6446,8 @@ function ChecklistsSection({ checklists, setChecklists, settings, reportType }) 
   };
 
   const updateNom = (clId, nom) => setChecklists((list) => list.map((cl) => (cl.id === clId ? { ...cl, nom } : cl)));
+  // Colonnes facultatives d'une checklist : « Fait / Non fait » et « Détail ».
+  const basculerColonne = (clId, cle) => setChecklists((list) => list.map((cl) => (cl.id === clId ? { ...cl, [cle]: !cl[cle] } : cl)));
   const removeChecklist = (clId) => setChecklists((list) => list.filter((cl) => cl.id !== clId));
   // Échange une checklist avec sa voisine (sens -1 : monter, +1 : descendre).
   // Les tableaux placés « après » une de ses lignes la suivent.
@@ -6429,6 +6475,8 @@ function ChecklistsSection({ checklists, setChecklists, settings, reportType }) 
       {
         id: "cl" + stamp,
         nom: tpl.nom || "",
+        ...(tpl.sansStatut ? { sansStatut: true } : {}),
+        ...(tpl.sansDetail ? { sansDetail: true } : {}),
         items: (tpl.items || [])
           .filter((it) => it.label.trim())
           .map((it, i) => ({ id: "ck" + stamp + "_" + i, label: it.label, checked: true, detail: "" })),
@@ -6465,7 +6513,8 @@ function ChecklistsSection({ checklists, setChecklists, settings, reportType }) 
               <Icon name="trash" size={15} />
             </button>
           </div>
-          <ChecklistEditor items={cl.items || []} setItems={setItemsFor(cl.id)} />
+          <ColonnesChecklist valeur={cl} onBasculer={(cle) => basculerColonne(cl.id, cle)} />
+          <ChecklistEditor items={cl.items || []} setItems={setItemsFor(cl.id)} sansStatut={cl.sansStatut} sansDetail={cl.sansDetail} />
           <div className="table-actions">
             <button type="button" className="btn-ghost small" onClick={() => removeChecklist(cl.id)}>
               Supprimer la checklist
@@ -6497,8 +6546,24 @@ function ChecklistsSection({ checklists, setChecklists, settings, reportType }) 
   );
 }
 
+/* Colonnes d'une checklist : l'intitulé est toujours là ; « Fait / Non fait »
+   et « Détail » peuvent être retirées (elles disparaissent aussi du PDF). */
+function ColonnesChecklist({ valeur, onBasculer }) {
+  return (
+    <div className="cl-colonnes">
+      <span className="hint">Colonnes :</span>
+      <span className="cl-colonne fixe">Intitulé</span>
+      {[["sansStatut", "Fait / Non fait"], ["sansDetail", "Détail"]].map(([cle, libelle]) => (
+        <button key={cle} type="button" className={"cl-colonne" + (valeur[cle] ? " retiree" : "")} onClick={() => onBasculer(cle)} title={valeur[cle] ? `Remettre la colonne « ${libelle} »` : `Supprimer la colonne « ${libelle} »`}>
+          {libelle} {valeur[cle] ? <Icon name="plus" size={11} /> : <Icon name="close" size={11} />}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /* ---------- Éditeur de checklist (formulaire) ---------- */
-function ChecklistEditor({ items, setItems }) {
+function ChecklistEditor({ items, setItems, sansStatut, sansDetail }) {
   const updateItem = (id, patch) => setItems((list) => list.map((it) => (it.id === id ? { ...it, ...patch } : it)));
   const addItem = () => setItems((list) => [...list, { id: "chk" + Date.now(), label: "", checked: true, detail: "" }]);
   const removeItem = (id) => setItems((list) => list.filter((it) => it.id !== id));
@@ -6507,18 +6572,20 @@ function ChecklistEditor({ items, setItems }) {
     <div>
       <div className="checklist-edit">
         {items.map((it) => (
-          <div key={it.id} className="checklist-row">
-            <select
-              className="checklist-status-select"
-              value={it.checked ? "fait" : "non_fait"}
-              onChange={(e) => updateItem(it.id, { checked: e.target.value === "fait" })}
-            >
-              <option value="fait">Fait</option>
-              <option value="non_fait">Non fait</option>
-            </select>
-            <div className="checklist-inputs">
+          <div key={it.id} className={"checklist-row" + (sansStatut ? " sans-statut" : "")}>
+            {!sansStatut && (
+              <select
+                className="checklist-status-select"
+                value={it.checked ? "fait" : "non_fait"}
+                onChange={(e) => updateItem(it.id, { checked: e.target.value === "fait" })}
+              >
+                <option value="fait">Fait</option>
+                <option value="non_fait">Non fait</option>
+              </select>
+            )}
+            <div className={"checklist-inputs" + (sansDetail ? " une-colonne" : "")}>
               <textarea className="checklist-label-input" rows={2} value={it.label} onChange={(e) => updateItem(it.id, { label: e.target.value })} placeholder="Intitulé du contrôle" />
-              <textarea rows={2} value={it.detail} onChange={(e) => updateItem(it.id, { detail: e.target.value })} placeholder="Détail (facultatif) — cliquez-glissez le coin pour agrandir" />
+              {!sansDetail && <textarea rows={2} value={it.detail} onChange={(e) => updateItem(it.id, { detail: e.target.value })} placeholder="Détail (facultatif) — cliquez-glissez le coin pour agrandir" />}
             </div>
             <button type="button" className="icon-btn" onClick={() => removeItem(it.id)}><Icon name="trash" size={15} /></button>
           </div>
@@ -6541,6 +6608,7 @@ function TableEditor({ table, checklist, onChange, onRemove, numero, onMonter, o
   };
   const addCol = () => onChange({ ...table, rows: table.rows.map((row) => [...row, ""]) });
   const removeRow = (r) => onChange({ ...table, rows: table.rows.filter((_, ri) => ri !== r) });
+  const removeCol = (c) => { if (confirmerRetraitColonne(table.rows, c)) onChange({ ...table, rows: retirerColonne(table.rows, c) }); };
 
   return (
     <div className="table-editor">
@@ -6575,6 +6643,7 @@ function TableEditor({ table, checklist, onChange, onRemove, numero, onMonter, o
       )}
       <table className="editable-table">
         <tbody>
+          <LigneSupprColonnes rows={table.rows} onRetirer={removeCol} />
           {table.rows.map((row, ri) => (
             <tr key={ri}>
               {row.map((cell, ci) => (
@@ -6590,6 +6659,7 @@ function TableEditor({ table, checklist, onChange, onRemove, numero, onMonter, o
       <div className="table-actions">
         <button type="button" className="btn-ghost small" onClick={addRow}>+ Ligne</button>
         <button type="button" className="btn-ghost small" onClick={addCol}>+ Colonne</button>
+        <MenuSupprColonne rows={table.rows} onRetirer={removeCol} />
         <button type="button" className="btn-ghost small" onClick={onRemove}>Supprimer le tableau</button>
       </div>
     </div>
@@ -6637,6 +6707,7 @@ function ChecklistTemplateEditor({ template, onChange, onRemove }) {
           </select>
         </label>
       </div>
+      <ColonnesChecklist valeur={template} onBasculer={(cle) => onChange({ ...template, [cle]: !template[cle] })} />
       {template.items.map((it, i) => (
         <div key={i} className="checklist-tpl-row">
           <input value={it.label} onChange={(e) => updateItem(i, e.target.value)} placeholder="Intitulé du point de contrôle" />
@@ -7710,6 +7781,8 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   });
   const [signatureTech, setSignatureTech] = useState(editingReport?.signatureTech || "");
   const [signatureClient, setSignatureClient] = useState(editingReport?.signatureClient || "");
+  // Client absent : la mention « CLIENT ABSENT » remplace sa signature.
+  const [clientAbsent, setClientAbsent] = useState(!!editingReport?.clientAbsent);
   const descriptionRef = useRef(editingReport?.description || "");
   const fileRef = useRef();
 
@@ -7817,7 +7890,9 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
   const buildReport = () => {
     const base = {
       id: isEditing ? editingReport.id : "r" + Date.now(),
-      type: reportType, client, date, installation, photos, signatureTech, signatureClient,
+      type: reportType, client, date, installation, photos, signatureTech,
+      signatureClient: clientAbsent ? "" : signatureClient,
+      clientAbsent: clientAbsent || undefined,
       planningTaskId: isEditing ? editingReport.planningTaskId : (prefillPlanningTaskId || undefined),
       valide: marquerEffectue,
       // Charges / récupérations complètes seulement (bouteille et quantité).
@@ -8182,7 +8257,20 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
         <label>Signatures</label>
         <div className="signatures-edit">
           <SignaturePad label="Signature du technicien" value={signatureTech} onChange={setSignatureTech} />
-          <SignaturePad label="Signature du client" value={signatureClient} onChange={setSignatureClient} />
+          <div className="sig-client-bloc">
+            {clientAbsent ? (
+              <div className="signature-block sig-pad-absent">
+                <div className="signature-label">Signature du client</div>
+                <div className="sig-absent">CLIENT ABSENT</div>
+              </div>
+            ) : (
+              <SignaturePad label="Signature du client" value={signatureClient} onChange={setSignatureClient} />
+            )}
+            <label className="check-inline sig-absent-case">
+              <input type="checkbox" checked={clientAbsent} onChange={(e) => setClientAbsent(e.target.checked)} />
+              Client absent
+            </label>
+          </div>
         </div>
       </div>
 
@@ -11590,10 +11678,10 @@ function checklistsToHtml(report) {
   let html = tablesAtHtml(report.tables, flat, "__start__");
   listes.forEach((cl) => {
     if (cl.nom) html += `<h3 class="pdf-checklist-title">${escapeHtml(cl.nom)}</h3>`;
-    html += `<ul class="pdf-checklist">`;
+    html += `<ul class="pdf-checklist${cl.sansStatut ? " sans-statut" : ""}">`;
     (cl.items || []).forEach((it) => {
-      html += `<li><strong>${escapeHtml(it.label)}</strong> — ${it.checked ? "fait" : "non fait"}`;
-      if (it.detail) html += `<div class="pdf-detail">${nl2br(it.detail)}</div>`;
+      html += `<li><strong>${escapeHtml(it.label)}</strong>${cl.sansStatut ? "" : ` — ${it.checked ? "fait" : "non fait"}`}`;
+      if (it.detail && !cl.sansDetail) html += `<div class="pdf-detail">${nl2br(it.detail)}</div>`;
       html += `</li>`;
       html += tablesAtHtml(report.tables, flat, it.id);
     });
@@ -11808,10 +11896,10 @@ function buildReportHtml(rapportBrut, settings, clients) {
     }).join("") + `</ul>`;
   }
 
-  if (report.signatureTech || report.signatureClient) {
+  if (report.signatureTech || report.signatureClient || report.clientAbsent) {
     body += `<div class="pdf-signatures">
       <div><strong>Signature technicien</strong><br/>${report.signatureTech ? `<img class="pdf-sig" src="${report.signatureTech}" />` : "Non signée"}</div>
-      <div><strong>Signature client</strong><br/>${report.signatureClient ? `<img class="pdf-sig" src="${report.signatureClient}" />` : "Non signée"}</div>
+      <div><strong>Signature client</strong><br/>${report.clientAbsent ? `<div class="pdf-client-absent">CLIENT ABSENT</div>` : report.signatureClient ? `<img class="pdf-sig" src="${report.signatureClient}" />` : "Non signée"}</div>
     </div>`;
   }
 
@@ -11851,6 +11939,7 @@ function buildReportHtml(rapportBrut, settings, clients) {
   .pdf-checklist-title { font-family: 'Barlow Condensed', sans-serif; font-size: 17px; font-weight: 700; color: #1B2733; margin: 18px 0 2px; text-decoration: underline; text-underline-offset: 3px; }
   .pdf-checklist { list-style: none; padding: 0; margin: 14px 0; }
   .pdf-checklist li { margin-bottom: 10px; font-size: 14px; }
+  .pdf-checklist.sans-statut { list-style: disc; padding-left: 20px; }
   .pdf-checklist strong { }
   .pdf-detail { font-size: 12.5px; color: #6D7A80; white-space: pre-wrap; margin-top: 2px; }
   .pdf-charge-fluide { font-size: 13px; margin: 6px 0 2px; }
@@ -11882,6 +11971,7 @@ function buildReportHtml(rapportBrut, settings, clients) {
   .pdf-photo-item { break-inside: avoid; margin-bottom: 20px; }
   .pdf-photo-item:nth-child(2n) { page-break-after: always; margin-bottom: 0; }
   .pdf-photo-item img { width: 100%; height: 430px; object-fit: contain; background: #F4F6F5; border-radius: 8px; border: 1px solid #D7DEDD; display: block; }
+  .pdf-client-absent { display: inline-block; margin-top: 10px; padding: 14px 22px; border: 2px solid #1B2733; border-radius: 4px; font-family: 'Barlow Condensed', sans-serif; font-size: 20px; font-weight: 700; letter-spacing: .08em; color: #1B2733; }
   .pdf-signatures { display: flex; gap: 40px; margin-top: 34px; padding-top: 18px; border-top: 1px solid #EAEDEC; }
   .pdf-sig { max-width: 210px; max-height: 85px; display: block; margin-top: 6px; }
   .pdf-footer-clause { margin-top: 28px; padding-top: 14px; border-top: 1px solid #EAEDEC; font-size: 11px; line-height: 1.5; color: #8A959A; white-space: pre-wrap; }
@@ -12921,6 +13011,16 @@ html.accueil-ouvert .app, html.accueil-ouvert .fond-degrade, html.accueil-ouvert
 .editable-table td { padding: 3px; }
 .editable-table input { width: 100%; font-size: 13px; padding: 6px 8px; }
 .table-row-actions { width: 30px; }
+.editable-table .table-col-actions td { padding: 0 3px 2px; text-align: center; }
+.editable-table .table-col-actions .icon-btn { width: 26px; height: 22px; opacity: .65; }
+.editable-table .table-col-actions .icon-btn:hover { opacity: 1; color: var(--rouge, #c0392b); }
+.table-col-menu { display: none; width: auto; font-size: 12.5px; padding: 5px 8px; }
+.cl-colonnes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 10px; }
+.cl-colonne { display: inline-flex; align-items: center; gap: 4px; font: inherit; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--trait); background: var(--carte); color: var(--encre); cursor: pointer; }
+.cl-colonne.fixe { cursor: default; opacity: .7; }
+.cl-colonne.retiree { text-decoration: line-through; opacity: .55; border-style: dashed; }
+.checklist-inputs.une-colonne { grid-template-columns: 1fr; }
+.cl-row.sans-statut .cl-puce { width: 6px; height: 6px; border-radius: 50%; background: var(--encre-2, #555); margin: 8px 6px 0; flex-shrink: 0; }
 .table-actions { display: flex; gap: 4px; }
 
 .rte { border: 1px solid var(--trait); border-radius: 8px; overflow: hidden; background: var(--carte); }
@@ -12963,6 +13063,10 @@ html.accueil-ouvert .app, html.accueil-ouvert .fond-degrade, html.accueil-ouvert
 .sig-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; color: var(--encre-4); margin-bottom: 6px; }
 .sig-img { max-width: 220px; max-height: 90px; border: 1px solid var(--trait); border-radius: 6px; background: #FFFFFF; }
 .sig-empty { font-size: 12.5px; color: var(--encre-5); font-style: italic; }
+.sig-absent { display: inline-flex; align-items: center; justify-content: center; padding: 10px 18px; border: 2px solid currentColor; border-radius: 6px; font-weight: 800; letter-spacing: .08em; font-size: 15px; color: var(--encre); }
+.sig-client-bloc { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sig-pad-absent .sig-absent { height: 120px; width: 320px; max-width: 100%; box-sizing: border-box; border-style: dashed; border-width: 2px; background: var(--fond-doux, transparent); font-size: 20px; }
+.sig-absent-case { margin-top: 2px; }
 
 .print-signatures { display: flex; gap: 40px; margin-top: 30px; }
 .sig-img-print { max-width: 200px; max-height: 80px; display: block; margin-top: 4px; }
@@ -13317,6 +13421,8 @@ textarea { resize: vertical; }
   .editable-table tr { background: var(--carte); border: 1px solid var(--trait); border-radius: 8px; padding: 6px; margin-bottom: 8px; }
   .editable-table td { padding: 3px; }
   .editable-table .table-row-actions { width: 100%; text-align: right; }
+  .editable-table .table-col-actions { display: none; }
+  .table-col-menu { display: inline-block; }
 
   /* À l'affichage du rapport, le texte des tableaux revient à la ligne au lieu
      d'obliger à faire défiler horizontalement. */
