@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useSyncedCollection, useSyncedSettings, useEtatEnvois, relancerEnvois, effacerRefusEnvois } from "./useSyncedCollection.js";
 import { supabase } from "./supabaseClient.js";
 import { BLANK_CONTRACT_PDF_BASE64, BLANK_CONTRACT_AIR_EAU_PDF_BASE64, BLANK_CONTRACT_B2B_PDF_BASE64, BLANK_CONTRACT_AIR_EAU_B2B_PDF_BASE64 } from "./contractTemplate.js";
-import { pennylaneCreateInvoice, pennylaneUpdateInvoice, pennylaneCheckStatus } from "./pennylane.js";
+import { pennylaneCreateInvoice, pennylaneUpdateInvoice, pennylaneCheckStatus, pennylaneFindOrCreateCustomer } from "./pennylane.js";
 
 /* ---------- Modèles de checklist par défaut (modifiables librement dans chaque rapport) ---------- */
 
@@ -308,6 +308,29 @@ function montantTtcRapport(montant, codeTva) {
   const taux = TAUX_TVA_CODE[codeTva || "FR_200"] ?? 20;
   if (!Number.isFinite(ht)) return "Montant TTC : —";
   return `Montant TTC : ${(Math.round(ht * (1 + taux / 100) * 100) / 100).toFixed(2).replace(".", ",")} €`;
+}
+
+// Informations d'une fiche client transmises à Pennylane.
+function clientPourPennylane(client, nomRapport) {
+  return {
+    // Facture établie au nom de l'entreprise pour un client
+    // professionnel, et au nom du particulier sinon.
+    nom: libelleClient(client) || nomRapport || "",
+    contact: client?.nom || nomRapport || "",
+    email: client?.email || "",
+    adresse: client?.adresse || "",
+    tel: client?.tel || "",
+    siren: client?.siren || "",
+    tva: client?.tva || "",
+    // Nature de la fiche créée dans Pennylane : c'est la case
+    // « Professionnel » de la fiche client qui décide. Pour les fiches
+    // antérieures à cette case, on retombe sur les informations légales.
+    professionnel:
+      typeof client?.professionnel === "boolean"
+        ? client.professionnel
+        : !!(client?.raisonSociale || client?.siren || client?.tva),
+    pennylaneId: client?.pennylaneCustomerId || null,
+  };
 }
 
 function montantLisible(n) {
@@ -1665,30 +1688,30 @@ function AppContenu() {
     return possibles.length === 1 ? possibles[0] : undefined;
   };
 
+  // Fiches clients déjà liées à Pennylane : mise à jour des coordonnées et
+  // ajout du client dans l'onglet « Contacts » de sa fiche Pennylane.
+  const [majFichesPennylane, setMajFichesPennylane] = useState(null);
+  const envoyerFichesPennylane = async () => {
+    const aTraiter = clients.filter((c) => c.pennylaneCustomerId && c.email);
+    let faits = 0; let erreurs = 0;
+    setMajFichesPennylane({ total: aTraiter.length, faits, erreurs, enCours: true });
+    for (const c of aTraiter) {
+      try {
+        await pennylaneFindOrCreateCustomer(clientPourPennylane(c));
+        faits++;
+      } catch (_e) { erreurs++; }
+      setMajFichesPennylane({ total: aTraiter.length, faits, erreurs, enCours: true });
+      await new Promise((ok) => setTimeout(ok, 400)); // Pennylane limite le rythme des appels
+    }
+    setMajFichesPennylane({ total: aTraiter.length, faits, erreurs, enCours: false });
+  };
+
   const syncFactureToPennylane = async (facturationEntry, r, { remplace } = {}) => {
     const client = ficheDuRapport(r.client);
     try {
       const { invoice, pennylaneCustomerId } = await pennylaneCreateInvoice({
         remplace,
-        client: {
-          // Facture établie au nom de l'entreprise pour un client
-          // professionnel, et au nom du particulier sinon.
-          nom: libelleClient(client) || r.client,
-          contact: client?.nom || r.client,
-          email: client?.email || "",
-          adresse: client?.adresse || "",
-          tel: client?.tel || "",
-          siren: client?.siren || "",
-          tva: client?.tva || "",
-          // Nature de la fiche créée dans Pennylane : c'est la case
-          // « Professionnel » de la fiche client qui décide. Pour les fiches
-          // antérieures à cette case, on retombe sur les informations légales.
-          professionnel:
-            typeof client?.professionnel === "boolean"
-              ? client.professionnel
-              : !!(client?.raisonSociale || client?.siren || client?.tva),
-          pennylaneId: client?.pennylaneCustomerId || null,
-        },
+        client: clientPourPennylane(client, r.client),
         montantHT: parseFloat(r.montant),
         // Libellé de la ligne de facture dans Pennylane : formulation commune à
         // tous les types d'intervention, plutôt que "Entretien — 08/09/2026".
@@ -2328,7 +2351,7 @@ function AppContenu() {
           />
         )}
 
-        {tab === "parametres" && <Parametres settings={settings} setSettings={saveSettings} loading={loadingSettings} theme={theme} setTheme={setTheme} accent={accent} setAccent={setAccent} oneDrive={oneDrive} onRevoirAccueil={revoirAccueil} />}
+        {tab === "parametres" && <Parametres settings={settings} setSettings={saveSettings} loading={loadingSettings} theme={theme} setTheme={setTheme} accent={accent} setAccent={setAccent} oneDrive={oneDrive} onRevoirAccueil={revoirAccueil} nbFichesPennylane={clients.filter((c) => c.pennylaneCustomerId && c.email).length} majFichesPennylane={majFichesPennylane} onMajFichesPennylane={envoyerFichesPennylane} />}
       </main>
 
       <BandeauNouvelleVersion />
@@ -5583,7 +5606,7 @@ function ReglesClassement({ liste, onChange, oneDriveConnecte }) {
 }
 
 /* ---------- Paramètres ---------- */
-function Parametres({ settings, setSettings, theme, setTheme, accent, setAccent, oneDrive, onRevoirAccueil }) {
+function Parametres({ settings, setSettings, theme, setTheme, accent, setAccent, oneDrive, onRevoirAccueil, nbFichesPennylane, majFichesPennylane, onMajFichesPennylane }) {
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(false);
   // Une règle ajoutée depuis l'assistant apparaît ici tout de suite, tant
@@ -5811,6 +5834,25 @@ function Parametres({ settings, setSettings, theme, setTheme, accent, setAccent,
             </select>
             <span className="hint">Valeur pré-sélectionnée dans chaque rapport — vous pouvez toujours choisir un autre taux directement sur un rapport si besoin.</span>
           </label>
+        )}
+        {draft.pennylane?.active && onMajFichesPennylane && (
+          <div className="block mt">
+            <button type="button" className="btn-ghost small" disabled={majFichesPennylane?.enCours || !nbFichesPennylane} onClick={onMajFichesPennylane}>
+              <Icon name="sync" size={14} /> Mettre à jour les fiches clients dans Pennylane ({nbFichesPennylane || 0})
+            </button>
+            <span className="hint">
+              Pour chaque client déjà facturé via TECHNI-PAC (et qui a un e-mail) : remet ses coordonnées du logiciel sur sa fiche Pennylane,
+              comme à chaque facture, et l'ajoute dans l'onglet « Contacts » (nom, prénom, e-mail, téléphone) s'il n'y est pas déjà. Les
+              contacts saisis à la main dans Pennylane ne sont pas touchés. Les nouveaux clients reçoivent leur contact à leur première facture.
+            </span>
+            {majFichesPennylane && (
+              <p className="hint montant-ttc">
+                {majFichesPennylane.enCours ? "En cours… " : "Terminé : "}
+                {majFichesPennylane.faits} / {majFichesPennylane.total} fiche{majFichesPennylane.total > 1 ? "s" : ""} à jour
+                {majFichesPennylane.erreurs ? ` · ${majFichesPennylane.erreurs} en échec` : ""}
+              </p>
+            )}
+          </div>
         )}
       </section>
 
