@@ -301,6 +301,15 @@ function nombreDepuisSaisie(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Montant TTC affiché sous le montant HT d'un rapport, selon la TVA choisie.
+const TAUX_TVA_CODE = { FR_200: 20, FR_100: 10, FR_55: 5.5, FR_021: 2.1 };
+function montantTtcRapport(montant, codeTva) {
+  const ht = parseFloat(String(montant ?? "").replace(",", "."));
+  const taux = TAUX_TVA_CODE[codeTva || "FR_200"] ?? 20;
+  if (!Number.isFinite(ht)) return "Montant TTC : —";
+  return `Montant TTC : ${(Math.round(ht * (1 + taux / 100) * 100) / 100).toFixed(2).replace(".", ",")} €`;
+}
+
 function montantLisible(n) {
   if (n === null || n === undefined) return "";
   return n.toFixed(2).replace(".", ",").replace(/,00$/, "");
@@ -8041,6 +8050,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
           <div className="form-grid">
             <label>Montant HT de l'intervention (€, facultatif)
               <input type="number" step="0.01" min="0" value={montant} onChange={(e) => setMontant(e.target.value)} placeholder="Ex : 120" />
+              <span className="hint montant-ttc">{montantTtcRapport(montant, tva)}</span>
             </label>
             <label>TVA applicable
               <select value={tva} onChange={(e) => setTva(e.target.value)}>
@@ -8116,6 +8126,7 @@ function ReportForm({ clients, settings, reportType, setReportType, editingRepor
           <div className="form-grid">
             <label>Montant HT de l'intervention (€, facultatif)
               <input type="number" step="0.01" min="0" value={montant} onChange={(e) => setMontant(e.target.value)} placeholder="Ex : 120" />
+              <span className="hint montant-ttc">{montantTtcRapport(montant, tva)}</span>
             </label>
             <label>TVA applicable
               <select value={tva} onChange={(e) => setTva(e.target.value)}>
@@ -12935,6 +12946,7 @@ html.accueil-ouvert .app, html.accueil-ouvert .fond-degrade, html.accueil-ouvert
 .contrat-machines { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
 .contrat-machine-ligne { margin-bottom: 6px; }
 .contrat-ttc { font-weight: 600; color: var(--bleu); margin: -6px 0 10px; }
+.montant-ttc { display: block; font-weight: 600; color: var(--bleu); margin-top: 6px; }
 .contrat-reference { margin: 2px 0 12px; }
 .contrat-clauses { width: 100%; font-family: inherit; font-size: 13px; line-height: 1.5; padding: 12px; border: 1px solid var(--trait); border-radius: 8px; background: var(--fond); color: var(--encre); margin: 8px 0 4px; }
 .btn-b2b { border-color: var(--orange); color: var(--orange-fonce); }
