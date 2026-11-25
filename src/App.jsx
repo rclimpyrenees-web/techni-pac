@@ -1615,7 +1615,7 @@ function AppContenu() {
         return true;
       })();
     }
-    if (["email", "classer_pj", "regle", "dossier", "pennylane_fournisseur", "debrief_valider", "suppression_onedrive"].includes(action.type) && action.item) {
+    if (["email", "classer_pj", "regle", "dossier", "pennylane_fournisseur", "debrief_valider", "suppression_onedrive", "suppression_email"].includes(action.type) && action.item) {
       // « deja » : la facture était déjà dans Pennylane (rien à refaire).
       return appelerAssistantExecution(action).then((r) => (r?.deja_present ? "deja" : true));
     }
@@ -3931,7 +3931,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       const r = await onAppliquerAction(action);
       return r === "deja" ? "deja" : !!r;
     } catch (e) {
-      const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : action.type === "dossier" ? "Le dossier n'a pas pu être créé" : action.type === "pennylane_fournisseur" ? "La facture n'a pas pu être envoyée dans Pennylane" : action.type === "suppression_onedrive" ? "Les fichiers n'ont pas pu être supprimés" : action.type === "suppression" ? "Suppression impossible" : "Enregistrement impossible";
+      const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : action.type === "dossier" ? "Le dossier n'a pas pu être créé" : action.type === "pennylane_fournisseur" ? "La facture n'a pas pu être envoyée dans Pennylane" : action.type === "suppression_onedrive" ? "Les fichiers n'ont pas pu être supprimés" : action.type === "suppression_email" ? "Les e-mails n'ont pas pu être supprimés" : action.type === "suppression" ? "Suppression impossible" : "Enregistrement impossible";
       ajouterMessage("assistant", `${quoi} : ${e?.message || e}`, { erreur: true });
       return false;
     }
@@ -3955,9 +3955,10 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     if (ok && action.type === "pennylane_fournisseur") ajouterMessage("assistant", ok === "deja" ? "Cette facture était déjà dans Pennylane : rien à refaire." : "Facture envoyée dans Pennylane.", note);
     if (ok && action.type === "debrief_valider") ajouterMessage("assistant", "Propositions du débrief validées.", note);
     if (ok && action.type === "habitude") ajouterMessage("assistant", "C'est retenu, je ferai comme ça la prochaine fois.", note);
+    if (ok && action.type === "suppression_email") ajouterMessage("assistant", "E-mails supprimés (ils sont dans la corbeille de Gmail pendant 30 jours si besoin).", note);
     if (ok && action.type === "suppression_onedrive") ajouterMessage("assistant", "Fichiers supprimés de OneDrive (ils sont dans la corbeille du OneDrive si besoin).", note);
     if (ok && action.type === "dossier") ajouterMessage("assistant", (action.item?.chemins?.length || 0) > 1 ? "Dossiers créés dans OneDrive." : "Dossier créé dans OneDrive.", note);
-    if (ok && !["email", "suppression", "suppression_onedrive", "classer_pj", "regle", "pennylane_fournisseur", "debrief_valider", "dossier", "habitude"].includes(action.type)) ajouterMessage("assistant", "C'est enregistré.", note);
+    if (ok && !["email", "suppression", "suppression_onedrive", "suppression_email", "classer_pj", "regle", "pennylane_fournisseur", "debrief_valider", "dossier", "habitude"].includes(action.type)) ajouterMessage("assistant", "C'est enregistré.", note);
     return ok;
   };
 
@@ -4263,10 +4264,10 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
   const LIBELLES_ACTION = {
     email: "E-mail", planning: "Planning", planning_fait: "Intervention faite", devis_a_faire: "Devis à faire",
     devis_a_faire_maj: "Prix fournisseur", classer_pj: "Rangement OneDrive", regle: "Règle de classement",
-    dossier: "Dossier OneDrive", pennylane_fournisseur: "Pennylane", debrief_valider: "Débrief", suppression: "Suppression", suppression_onedrive: "Suppression OneDrive", habitude: "À retenir",
+    dossier: "Dossier OneDrive", pennylane_fournisseur: "Pennylane", debrief_valider: "Débrief", suppression: "Suppression", suppression_onedrive: "Suppression OneDrive", suppression_email: "Suppression e-mails", habitude: "À retenir",
     fluide: "Fluide frigorigène",
   };
-  const ICONES_ACTION = { habitude: "assistant", email: "mail", suppression: "trash", suppression_onedrive: "trash", planning: "calendar", planning_fait: "check", devis_a_faire: "quote", devis_a_faire_maj: "quote", classer_pj: "folder", dossier: "folder", pennylane_fournisseur: "invoice", fluide: "bouteille" };
+  const ICONES_ACTION = { habitude: "assistant", email: "mail", suppression: "trash", suppression_onedrive: "trash", suppression_email: "trash", planning: "calendar", planning_fait: "check", devis_a_faire: "quote", devis_a_faire_maj: "quote", classer_pj: "folder", dossier: "folder", pennylane_fournisseur: "invoice", fluide: "bouteille" };
   const detailsEmail = (a) => {
     const it = a.item || {};
     const pj = [
@@ -4303,7 +4304,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
         const ouvert = !!apercusOuverts[a.id];
         const long = String(a.apercu || "").split("\n").length > 7 || String(a.apercu || "").length > 360;
         return (
-        <div key={a.id} className={"card assistant-action-carte" + (a.type === "suppression" || a.type === "suppression_onedrive" ? " danger" : "") + (progressionActions?.enCours === a.id ? " en-cours" : "")}>
+        <div key={a.id} className={"card assistant-action-carte" + (a.type === "suppression" || a.type === "suppression_onedrive" || a.type === "suppression_email" ? " danger" : "") + (progressionActions?.enCours === a.id ? " en-cours" : "")}>
           <div className="assistant-action-tete">
             <span className="assistant-action-type"><Icon name={ICONES_ACTION[a.type] || "check"} size={13} /> {LIBELLES_ACTION[a.type] || "Proposition"}</span>
           </div>
