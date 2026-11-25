@@ -3928,9 +3928,35 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
       return false;
     }
     try {
+      // Suppression de plusieurs e-mails ou fichiers : faite par petits
+      // paquets, avec une barre qui avance au fil des suppressions.
+      const cleListe = action.type === "suppression_email" ? "ids" : action.type === "suppression_onedrive" ? "item_ids" : null;
+      const liste = cleListe && Array.isArray(action.item?.[cleListe]) ? action.item[cleListe] : null;
+      if (liste && liste.length > 1) {
+        const quoi = action.type === "suppression_email" ? "e-mail" : "fichier";
+        const taille = Math.max(1, Math.ceil(liste.length / 20));
+        let faits = 0; let echecs = 0; let derniereErreur = null;
+        setProgressionDetail({ faites: 0, total: liste.length, libelle: `Suppression des ${quoi}s…` });
+        for (let i = 0; i < liste.length; i += taille) {
+          const paquet = liste.slice(i, i + taille);
+          try {
+            await onAppliquerAction({ ...action, item: { ...action.item, [cleListe]: paquet } });
+            faits += paquet.length;
+          } catch (e) {
+            echecs += paquet.length;
+            derniereErreur = e;
+          }
+          setProgressionDetail({ faites: faits + echecs, total: liste.length, libelle: `Suppression des ${quoi}s…` });
+        }
+        setProgressionDetail(null);
+        if (!faits) throw derniereErreur || new Error("rien n'a pu être supprimé");
+        if (echecs) ajouterMessage("assistant", `${faits} ${quoi}${faits > 1 ? "s" : ""} supprimé${faits > 1 ? "s" : ""}, ${echecs} n'${echecs > 1 ? "ont" : "a"} pas pu l'être${derniereErreur ? ` (${derniereErreur.message || derniereErreur})` : ""}.`, { erreur: true });
+        return true;
+      }
       const r = await onAppliquerAction(action);
       return r === "deja" ? "deja" : !!r;
     } catch (e) {
+      setProgressionDetail(null);
       const quoi = action.type === "email" ? "L'e-mail n'a pas pu partir" : action.type === "classer_pj" ? "Le fichier n'a pas pu être rangé" : action.type === "dossier" ? "Le dossier n'a pas pu être créé" : action.type === "pennylane_fournisseur" ? "La facture n'a pas pu être envoyée dans Pennylane" : action.type === "suppression_onedrive" ? "Les fichiers n'ont pas pu être supprimés" : action.type === "suppression_email" ? "Les e-mails n'ont pas pu être supprimés" : action.type === "suppression" ? "Suppression impossible" : "Enregistrement impossible";
       ajouterMessage("assistant", `${quoi} : ${e?.message || e}`, { erreur: true });
       return false;
@@ -3939,6 +3965,7 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
 
   const [actionsEnCours, setActionsEnCours] = useState(false);
   const [progressionActions, setProgressionActions] = useState(null); // { faites, total, enCours: id }
+  const [progressionDetail, setProgressionDetail] = useState(null); // suppressions en cours : { faites, total, libelle }
 
   const validerAction = async (action) => {
     setActionsEnCours(true);
@@ -4298,7 +4325,9 @@ function Assistant({ messages, setMessages, actions, setActions, onAppliquerActi
     <div className="assistant-actions-liste">
       <div className="assistant-actions-titre">À valider{actions.length > 1 ? ` · ${actions.length}` : ""}</div>
       {/* En haut de la liste et collée en haut de l'écran : visible pendant tout l'envoi. */}
-      {progressionActions && <BarreProgression collante faites={progressionActions.faites} total={progressionActions.total} />}
+      {progressionDetail
+        ? <BarreProgression collante faites={progressionDetail.faites} total={progressionDetail.total} libelle={progressionDetail.libelle} />
+        : progressionActions && <BarreProgression collante faites={progressionActions.faites} total={progressionActions.total} />}
       {actions.map((a) => {
         const mail = a.type === "email" ? detailsEmail(a) : null;
         const ouvert = !!apercusOuverts[a.id];
